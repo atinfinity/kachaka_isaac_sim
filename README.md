@@ -72,6 +72,8 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 Shelves are listed on `layout/shelves/list` and their homes on
 `layout/locations/list`. Place shelves with `--shelf X Y YAW`. The shelf lands
 where SLAM puts the location, a few centimetres off the world.
+`robot_description` is the robot alone, as on the real Kachaka; RViz draws the
+shelves from `/shelf_markers` (MarkerArray, published by `shelf_markers`).
 
 ## Requirements
 

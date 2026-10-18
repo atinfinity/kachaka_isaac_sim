@@ -80,6 +80,14 @@ Visualization Manager:
       Topic:
         Value: /local_costmap/published_footprint
       Color: 0; 255; 128
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Shelves
+      Enabled: true
+      Topic:
+        Value: /shelf_markers
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Depth: 1
     - Class: rviz_default_plugins/Image
       Name: Front camera
       Enabled: false

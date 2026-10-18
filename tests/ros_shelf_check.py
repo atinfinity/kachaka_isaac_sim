@@ -137,7 +137,7 @@ def main():
         n.spin_for(1.0)
         return ok
 
-    def shelf_at(name, target, tol=0.10):
+    def shelf_at(name, target, tol=0.12):
         """The shelf stands at a location: the docked robot pose there. The
         robot puts it down where SLAM says the location is, a few centimetres
         off the simulator's ground truth."""

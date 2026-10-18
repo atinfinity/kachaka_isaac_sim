@@ -71,6 +71,8 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 シェルフは `layout/shelves/list`、ホームは `layout/locations/list` に載ります。
 `--shelf X Y YAW` でシェルフを置けます。シェルフは SLAM 上の場所に置かれるので、
 ワールド上では数 cm ずれます。
+`robot_description` は実機と同じくロボット単体です。RViz では `shelf_markers` ノードが配信する
+`/shelf_markers`（MarkerArray）でシェルフを表示します。
 
 ## 動作環境
 
