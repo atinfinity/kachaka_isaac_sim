@@ -1,0 +1,20 @@
+kachaka_isaac_sim
+Copyright 2026 kachaka_isaac_sim contributors
+
+This project is licensed under the Apache License, Version 2.0 (see LICENSE).
+It is not affiliated with or endorsed by Preferred Robotics, Inc.
+Kachaka is a product of Preferred Robotics, Inc.
+
+Third-party material (downloaded by scripts/fetch_assets.py, not redistributed
+in this repository):
+
+- kachaka-api (https://github.com/pf-robotics/kachaka-api)
+  Copyright 2023 Preferred Robotics, Inc. Apache License 2.0.
+  The robot URDF and meshes are converted to USD from this repository.
+
+- kachaka_shelf_description (https://github.com/GAI-313/kachaka_shelf_description)
+  Copyright (c) 2026 GAI. MIT License.
+  The Kachaka Shelf mesh is used in the default room.
+
+- NVIDIA Isaac Sim and its scene assets are subject to the NVIDIA Isaac Sim
+  license (https://docs.isaacsim.omniverse.nvidia.com/latest/common/NVIDIA_Omniverse_License_Agreement.html).
