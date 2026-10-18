@@ -10,6 +10,8 @@ dependencies = [
     # Isaac Sim pins this pre-release; naming it here lets uv accept it.
     "tinyobjloader==2.0.0rc13",
     "pyyaml",
+    # gRPC server stubs for the kachaka-api interface (scripts/run_sim.py --api-port).
+    "kachaka-api==3.17.5.0",
 ]
 
 [tool.uv]

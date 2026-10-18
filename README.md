@@ -26,6 +26,8 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
   MOVE_TO_LOCATION, RETURN_HOME, SPEAK (text only) and the Kachaka Shelf commands
   (DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF), built on Nav2. Also
   `goal_pose` and auto homing.
+- The [kachaka-api](https://github.com/pf-robotics/kachaka-api) gRPC API on port 26400,
+  so the official Python client (`KachakaApiClient`) works without a robot.
 
 ### Commands
 
@@ -153,6 +155,7 @@ scripts/run_sim.sh --charger X Y YAW     # place the charger (default: by the we
 scripts/run_sim.sh --no-charger
 scripts/run_sim.sh --shelf X Y YAW       # place a shelf (repeatable; default: one in the room)
 scripts/run_sim.sh --no-shelves
+scripts/run_sim.sh --api-port 26400      # kachaka-api gRPC port (default 26400; 0 turns it off)
 scripts/run_sim.sh --help
 ```
 
@@ -189,6 +192,8 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/shelf_docked` | `std_msgs/String`, id of the towed shelf or empty (simulator only, latched) | |
 | `sim/shelf_dock` | `std_srvs/SetBool` service: raise or lower the pin (simulator only) | |
 | `sim/speech` | `std_msgs/String`, text of SPEAK and `tts_on_success` (simulator only) | |
+| `sim/command/start`, `sim/command/cancel` | `std_msgs/String`, JSON: commands from the kachaka-api server to `command_server` (simulator only) | |
+| `sim/command/state` | `std_msgs/String`, JSON: running command and last result (simulator only, latched) | |
 
 `kachaka_sim_bringup`'s `command_server` provides what the real robot does
 itself: the `kachaka_command/execute` action, `goal_pose`,
@@ -205,6 +210,46 @@ decisions behind them.
 `ros2_ws/src/kachaka_sim_bringup` only depends on the `/kachaka` topics, so it
 should also work with a real robot (`use_sim_time:=false`, `command_server:=false`). This has not been
 tested.
+
+## kachaka-api (gRPC)
+
+The simulator serves the [kachaka-api](https://github.com/pf-robotics/kachaka-api)
+gRPC API on port 26400, like the real robot. Install the official client on
+the host (no ROS needed) and connect to the simulator:
+
+```bash
+pip install kachaka-api
+```
+
+```python
+from kachaka_api import KachakaApiClient
+
+client = KachakaApiClient("127.0.0.1:26400")
+print(client.get_robot_pose())
+client.update_resolver()
+client.speak("hello")
+client.move_to_location("L01")
+client.move_shelf("S01", "L01")
+client.return_shelf("S01")
+client.return_home()
+```
+
+Commands and the locations need the ROS 2 side (`slam.launch.py nav:=true`),
+since `command_server` runs them. The robot pose is in slam_toolbox's map
+frame and `get_png_map` returns its `/map`.
+
+| Area | Supported |
+|---|---|
+| Robot info | serial number, version, `is_ready`, errors and error codes, pose, battery |
+| Sensors | odometry, wheel odometry, IMU, LiDAR, front/back/ToF camera info, images and compressed images, static TF |
+| Map | `get_png_map`, `get_map_list`, `get_current_map_id` (one map, `sim`) |
+| Commands | MOVE_TO_POSE, MOVE_TO_LOCATION, RETURN_HOME, SPEAK, DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF; `cancel_command`, `get_command_state`, `get_last_command_result`, `proceed` |
+| Layout | `get_locations`, `get_default_location_id`, `get_shelves`, `get_moving_shelf_id` |
+| Control | `set_manual_control_enabled`, `set_robot_velocity`, `set_robot_stop`, auto homing, speaker volume |
+| No-ops | torches, `activate_laser_scan`; `get_object_detection` is always empty |
+
+The other RPCs return `UNIMPLEMENTED` and the other commands fail
+([#12](https://github.com/atinfinity/kachaka_isaac_sim/issues/12)).
 
 ## Performance
 
@@ -243,6 +288,12 @@ python3 /tests/ros_nav_check.py      # Nav2 goals (needs slam.launch.py nav:=tru
 python3 /tests/ros_dock_check.py     # charger, battery and RETURN_HOME (same)
 python3 /tests/ros_shelf_check.py    # shelf docking, towing and placing (same)
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, goal_pose, cancel_all (same)
+```
+
+The kachaka-api check runs on the host with the official client (same setup):
+
+```bash
+uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 ```
 
 `scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf).
