@@ -9,9 +9,8 @@ import math
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from pxr import Usd
-
 from isaacsim.core.experimental.prims import RigidPrim
+from pxr import Usd
 
 from .drive import Pose2D, quat_from_yaw, relative_pose, wrap_angle, yaw_from_quat
 from .world import ShelfJoint
