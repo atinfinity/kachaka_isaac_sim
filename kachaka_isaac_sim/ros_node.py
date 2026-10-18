@@ -7,13 +7,14 @@ with simulation time, and /clock is published from here.
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
 
 import rclpy
 from builtin_interfaces.msg import Time
-from geometry_msgs.msg import PoseStamped, TransformStamped, Twist
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped, TransformStamped, Twist
 from nav_msgs.msg import Odometry
 from rclpy.executors import ShutdownException, SingleThreadedExecutor, TimeoutException
 from rclpy.node import Node
@@ -78,6 +79,14 @@ class KachakaSimNode:
         self.battery_pub = n.create_publisher(BatteryState, f"{ns}/robot_info/battery_state", sensor)
         self.charger_pub = n.create_publisher(PoseStamped, f"{ns}/sim/charger_pose", LATCHED)
         self.charger_detection_pub = n.create_publisher(PoseStamped, f"{ns}/sim/charger_detection", sensor)
+        # Shelves (sim-only; kachaka_sim_bringup's command_server turns them
+        # into the real robot's layout topics and shelf commands).
+        self.layout_pub = n.create_publisher(String, f"{ns}/sim/layout", LATCHED)
+        self.shelf_poses_pub = n.create_publisher(PoseArray, f"{ns}/sim/shelf_poses", sensor)
+        self.shelf_detection_pub = n.create_publisher(PoseArray, f"{ns}/sim/shelf_detection", sensor)
+        self.shelf_docked_pub = n.create_publisher(String, f"{ns}/sim/shelf_docked", LATCHED)
+        self.shelf_dock_handler = None  # set by the sim: bool -> (success, message)
+        n.create_service(SetBool, f"{ns}/sim/shelf_dock", self._on_shelf_dock)
         version_pub = n.create_publisher(String, f"{ns}/robot_info/version", LATCHED)
         desc_pub = n.create_publisher(String, f"{ns}/robot_description", LATCHED)
 
@@ -126,6 +135,13 @@ class KachakaSimNode:
         # the simulator accepts cmd_vel either way and only records the flag.
         self.manual_control_enabled = req.data
         res.success = True
+        return res
+
+    def _on_shelf_dock(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
+        if self.shelf_dock_handler is None:
+            res.success, res.message = False, "no shelves in this world"
+        else:
+            res.success, res.message = self.shelf_dock_handler(req.data)
         return res
 
     # --- called from the sim loop --------------------------------------------
@@ -301,6 +317,39 @@ class KachakaSimNode:
         q = msg.pose.orientation
         q.w, q.x, q.y, q.z = (float(c) for c in quat_from_yaw(pose.yaw))
         self.charger_pub.publish(msg)
+
+    def publish_layout(self, shelves: list[dict], locations: list[dict]) -> None:
+        """Shelves (id, name, home, size) and extra locations (id, name, pose),
+        poses as [x, y, yaw] in the map frame (sim-only, latched JSON)."""
+        self.layout_pub.publish(String(data=json.dumps({"shelves": shelves, "locations": locations})))
+
+    @staticmethod
+    def _pose(p: Pose2D) -> Pose:
+        msg = Pose()
+        msg.position.x, msg.position.y = float(p.x), float(p.y)
+        q = msg.orientation
+        q.w, q.x, q.y, q.z = (float(c) for c in quat_from_yaw(p.yaw))
+        return msg
+
+    def publish_shelf_poses(self, t: float, poses: list[Pose2D]) -> None:
+        """Shelf poses in the map frame, in sim/layout order (sim-only)."""
+        msg = PoseArray()
+        msg.header.stamp = to_time(t)
+        msg.header.frame_id = "map"
+        msg.poses = [self._pose(p) for p in poses]
+        self.shelf_poses_pub.publish(msg)
+
+    def publish_shelf_detection(self, t: float, poses: list[Pose2D]) -> None:
+        """Shelf poses relative to the robot, in sim/layout order (sim-only)."""
+        msg = PoseArray()
+        msg.header.stamp = to_time(t)
+        msg.header.frame_id = self.frame("base_footprint")
+        msg.poses = [self._pose(p) for p in poses]
+        self.shelf_detection_pub.publish(msg)
+
+    def publish_shelf_docked(self, shelf_id: str) -> None:
+        """Id of the shelf the robot tows, or "" (sim-only, latched)."""
+        self.shelf_docked_pub.publish(String(data=shelf_id))
 
     def shutdown(self) -> None:
         self.executor.shutdown()

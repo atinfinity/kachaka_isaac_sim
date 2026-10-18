@@ -22,9 +22,10 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
   カチャカには後方の距離センサーがないので、Nav2 は後退しない設定です
-- Nav2 のドッキングサーバーを使った `kachaka_command/execute` の RETURN_HOME と自動充電
+- Nav2 のドッキングサーバーを使った `kachaka_command/execute` の RETURN_HOME、自動充電、
+  カチャカシェルフのコマンド（DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF）
 
-シェルフのドッキングとほかのコマンドは今後対応予定です（[#2](https://github.com/atinfinity/kachaka_isaac_sim/issues/2)）。
+ほかのコマンドは今後対応予定です（[#2](https://github.com/atinfinity/kachaka_isaac_sim/issues/2)）。
 
 ### 充電器に戻る
 
@@ -40,6 +41,36 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 Nav2 を含む ROS 2 スタック（`NAV=true ... up slam` または `up navigation`）が必要です。
 `command_server` もその中で起動します。充電器から離れるには Nav2 のゴールを送るだけです。
 バッテリーの増減速度と充電器の寸法は推定値です（`config/robot.yaml`）。
+
+### シェルフの運搬
+
+![シェルフの下に入ってドッキングし、途中で旋回しながら別の場所まで牽引し、置いて前進で抜ける様子](docs/shelf.gif)
+
+*DOCK_SHELF のあと MOVE_SHELF で別の場所へ運び、UNDOCK_SHELF で離れる（3 倍速）。*
+
+部屋にはカチャカシェルフが 1 台（`S01`、ホーム `S01_home`）と、ほかの場所が 1 つ（`L01`）あります。
+ロボットは前進でシェルフの下に入り、ピンを上げてキャスター付きのシェルフを牽引します
+（最高 0.5 m/s、`drive.max_linear_vel_towing`。Nav2 の上限 0.3 m/s のほうが低い）。
+牽引中は Nav2 のフットプリントがシェルフの大きさになります。
+アンドックではピンを下げて前進でシェルフから抜けます。前がふさがっているときは失敗します。
+
+```bash
+ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action/ExecKachakaCommand \
+    "{kachaka_command: {command_type: 1, move_shelf_command_target_shelf_id: S01,
+      move_shelf_command_destination_location_id: L01, move_shelf_command_undock_on_destination: true}}"   # MOVE_SHELF_COMMAND
+```
+
+| コマンド | 動作 |
+|---|---|
+| DOCK_SHELF | ロボットの前（1.5 m 以内）にあるシェルフとドッキング |
+| UNDOCK_SHELF | 牽引中のシェルフを置いて前進で抜ける |
+| MOVE_SHELF | 必要ならドッキングし、指定の場所まで運ぶ。アンドックは任意 |
+| RETURN_SHELF | シェルフのホームまで運んでアンドック |
+| RETURN_HOME | 牽引中ならシェルフをホームに戻してから充電器へ |
+
+シェルフは `layout/shelves/list`、ホームは `layout/locations/list` に載ります。
+`--shelf X Y YAW` でシェルフを置けます。シェルフは SLAM 上の場所に置かれるので、
+ワールド上では数 cm ずれます。
 
 ## 動作環境
 
@@ -95,6 +126,8 @@ scripts/run_sim.sh --no-cameras          # LiDAR とオドメトリだけでよ�
 scripts/run_sim.sh --render-hz 20        # 描画・カメラのループ周期（「性能」を参照）
 scripts/run_sim.sh --charger X Y YAW     # 充電器の位置（既定: 部屋の西の壁際）
 scripts/run_sim.sh --no-charger
+scripts/run_sim.sh --shelf X Y YAW       # シェルフを置く（複数可。デフォルトは部屋に 1 台）
+scripts/run_sim.sh --no-shelves
 scripts/run_sim.sh --help
 ```
 
@@ -123,10 +156,15 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/ground_truth` | `nav_msgs/Odometry`（シミュレータのみ） | 20 Hz |
 | `sim/charger_pose` | `geometry_msgs/PoseStamped`（シミュレータのみ、latched） | |
 | `sim/charger_detection` | `geometry_msgs/PoseStamped`、1.5 m 以内のときロボットから見た充電器の位置（シミュレータのみ） | 20 Hz |
+| `sim/layout` | `std_msgs/String`、シェルフと追加の場所の JSON（シミュレータのみ、latched） | |
+| `sim/shelf_poses` | `geometry_msgs/PoseArray`、map 座標のシェルフ位置（シミュレータのみ） | 2 Hz |
+| `sim/shelf_detection` | `geometry_msgs/PoseArray`、ロボットから見たシェルフ位置（シミュレータのみ） | 20 Hz |
+| `sim/shelf_docked` | `std_msgs/String`、牽引中のシェルフ ID か空文字（シミュレータのみ、latched） | |
+| `sim/shelf_dock` | `std_srvs/SetBool` サービス、ピンの上げ下げ（シミュレータのみ） | |
 
 実機が自分で提供している機能は `kachaka_sim_bringup` の `command_server` が提供します。
-`kachaka_command/execute` action（RETURN_HOME のみ。ほかのコマンドは abort）、充電器を含む
-`layout/locations/list`、`auto_homing/set_enabled` サービスです。実機と一緒には起動しないでください
+`kachaka_command/execute` action（RETURN_HOME とシェルフのコマンド。ほかは abort）、
+`layout/locations/list` と `layout/shelves/list`、`auto_homing/set_enabled` サービスです。実機と一緒には起動しないでください
 （`command_server:=false`）。
 
 `/clock` と `/tf` はトップレベルに出ます。ROS 2 側では `use_sim_time:=true` を使ってください。
@@ -170,9 +208,10 @@ python3 /tests/ros_sensor_check.py   # topic の周期、部屋の壁に対す�
 python3 /tests/ros_camera_check.py /tmp/images
 python3 /tests/ros_nav_check.py      # Nav2 のゴール（slam.launch.py nav:=true が必要）
 python3 /tests/ros_dock_check.py     # 充電器、バッテリー、RETURN_HOME（同上）
+python3 /tests/ros_shelf_check.py    # シェルフのドッキング、牽引、設置（同上）
 ```
 
-上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`）。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`）。
 
 ## ライセンス
 

@@ -461,6 +461,58 @@ docking_server:
       simulation_step: 0.1
       dock_collision_threshold: 0.3
 
+shelf_docking_server:
+  # A second docking server for Kachaka Shelves (launch/shelf_docking.launch.py),
+  # used by command_server for DOCK_SHELF, MOVE_SHELF and RETURN_SHELF. The
+  # robot drives forward under a shelf, unlike onto the charger, and Jazzy sets
+  # the direction per server. The dock pose is the pose of a robot docked
+  # under the shelf; command_server relays the simulator's shelf detection
+  # (or, to put a shelf down, the destination) to shelf_detected_dock_pose.
+  ros__parameters:
+    controller_frequency: 50.0
+    initial_perception_timeout: 5.0
+    wait_charge_timeout: 5.0
+    dock_approach_timeout: 30.0
+    undock_linear_tolerance: 0.05
+    undock_angular_tolerance: 0.1
+    max_retries: 3
+    base_frame: "base_footprint"
+    fixed_frame: "odom"
+    dock_backwards: false
+    dock_prestaging_tolerance: 0.1
+
+    dock_plugins: ['shelf_dock']
+    shelf_dock:
+      plugin: 'opennav_docking::SimpleNonChargingDock'
+      use_external_detection_pose: true
+      external_detection_timeout: 1.0
+      external_detection_translation_x: 0.0
+      external_detection_translation_y: 0.0
+      external_detection_rotation_roll: 0.0
+      external_detection_rotation_pitch: 0.0
+      external_detection_rotation_yaw: 0.0
+      filter_coef: 0.1
+      docking_threshold: 0.02
+      staging_x_offset: -0.9
+      staging_yaw_offset: 0.0
+      use_stall_detection: false
+
+    controller:
+      k_phi: 3.0
+      k_delta: 2.0
+      v_linear_min: 0.05
+      v_linear_max: 0.15
+      use_collision_detection: true
+      costmap_topic: "local_costmap/costmap_raw"
+      footprint_topic: "local_costmap/published_footprint"
+      transform_tolerance: 0.1
+      projection_time: 5.0
+      simulation_step: 0.1
+      # The robot passes the shelf's legs a few centimetres off; skip the
+      # checks once its front is near the shelf. The distance is to the
+      # controller's target, 0.25 m beyond the dock pose.
+      dock_collision_threshold: 0.85
+
 loopback_simulator:
   ros__parameters:
     base_frame_id: "base_footprint"

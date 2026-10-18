@@ -12,7 +12,7 @@ drive:
   wheel_separation: 0.200   # m, official URDF
   max_linear_vel: 0.3       # m/s, full scale of the real bridge (spec top speed 0.8)
   max_angular_vel: 1.57     # rad/s, full scale of the real bridge
-  max_linear_vel_towing: 0.5  # m/s, spec top speed with a Kachaka Shelf (phase 2)
+  max_linear_vel_towing: 0.5  # m/s, cap while towing a shelf (spec top speed with a shelf)
   max_linear_accel: 2.0     # m/s^2 (est.)
   max_angular_accel: 3.0    # rad/s^2 (est.)
   wheel_max_torque: 2.0     # Nm per wheel, Kachaka Pro max motor torque
@@ -103,3 +103,19 @@ charger:
   # (sim/charger_detection), for Nav2's docking server. How the real robot
   # finds its dock is not published; this stands in for it.
   detection_range: 1.5      # m
+
+# Kachaka Shelf (3-layer). The shelf rolls on four casters and is towed through
+# a fixed joint while docked. Its pose is the base_footprint pose of a robot
+# docked under it (the robot's docking pin under the shelf centre), and the
+# robot drives in and out along the shelf's x axis (the 328 mm side).
+shelf:
+  mass: 6.0                 # kg (est.)
+  caster_friction: 0.02
+  dock_tolerance_xy: 0.05   # m, the pin must be this close to the shelf centre (est.)
+  dock_tolerance_yaw: 0.2   # rad, from either direction along the shelf's x axis (est.)
+  # Shelves and extra locations in the default room ([x, y, yaw], world frame).
+  # Other worlds take them from scripts/run_sim.py --shelf.
+  room:
+    - {id: S01, name: Shelf 1, pose: [1.3, -1.2, 0.0]}
+  room_locations:
+    - {id: L01, name: Kitchen, pose: [0.5, 1.0, 1.5708]}

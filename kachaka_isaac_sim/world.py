@@ -1,4 +1,4 @@
-"""Stage building: physics scene, floor, simple room, shelf, robot and contact materials.
+"""Stage building: physics scene, floor, simple room, shelves, charger, robot and contact materials.
 
 Import only after SimulationApp has started.
 """
@@ -84,8 +84,7 @@ def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78), c
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("convexHull")
 
 
-def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, height: float = 2.4,
-                    shelf_stl: Path | None = None) -> None:
+def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, height: float = 2.4) -> None:
     """A walled room with a couple of obstacles, enough to test teleop and SLAM."""
     t = 0.05
     root = "/World/Room"
@@ -97,8 +96,6 @@ def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, 
     add_box(stage, f"{root}/box_a", (1.4, 1.0, 0.25), (0.4, 0.4, 0.5), (0.55, 0.4, 0.3))
     add_box(stage, f"{root}/box_b", (-1.2, -0.9, 0.35), (0.6, 0.3, 0.7), (0.3, 0.45, 0.6))
     add_box(stage, f"{root}/pillar", (-0.6, 1.1, 0.4), (0.2, 0.2, 0.8), (0.6, 0.6, 0.6))
-    if shelf_stl is not None and shelf_stl.exists():
-        add_shelf(stage, f"{root}/shelf", shelf_stl, 1.3, -1.2, math.pi / 2)
 
 
 def read_stl(path: Path, scale: float = 1.0):
@@ -111,23 +108,105 @@ def read_stl(path: Path, scale: float = 1.0):
     return np.frombuffer(data[84:84 + count * 50], dtype=tri)["v"].reshape(-1, 3) * scale
 
 
-def add_shelf(stage: Usd.Stage, path: str, stl: Path, x: float, y: float, yaw: float = 0.0) -> None:
-    """Kachaka Shelf as a static obstacle (triangle-mesh collider, so the
-    robot-sized gap under it stays open)."""
+# Kachaka Shelf colliders, measured from the 3-layer mesh (metres, shelf frame,
+# z from the floor). The robot drives in along x between the caster rows at
+# y = +-0.195, under the bottom plate.
+SHELF_LEG_XY = (0.131, 0.195)
+SHELF_LEG_SIZE = (0.012, 0.046)
+# The bottom plate's collider starts at 0.107 m, not the mesh's 0.104 m: the
+# LiDAR scans at 0.1049 m and sees only the legs under a shelf, as the real
+# robot does, so a shelf is not mapped as a closed box the robot cannot leave.
+SHELF_PLATES = ((0.107, 0.121), (0.435, 0.452), (0.649, 0.666))  # bottom, middle, top (z ranges)
+SHELF_SIZE = (0.328, 0.488)  # x (width the robot drives across), y
+SHELF_CASTER_RADIUS = 0.03
+
+
+def add_shelf(stage: Usd.Stage, path: str, stl: Path, pose, cfg: SimpleNamespace) -> str:
+    """Kachaka Shelf as a rigid body on four casters, with the mesh as its
+    visual. `pose` (x, y, yaw) is the base_footprint pose of a robot docked
+    under it. Simple colliders keep the gap under the bottom plate open (the
+    robot's body is 0.095 m tall). Also adds the disabled fixed joint that
+    tows the shelf while docked (see `ShelfJoint`). Returns the body path."""
+    x, y, yaw = pose
+    body = UsdGeom.Xform.Define(stage, path)
+    xf = UsdGeom.Xformable(body.GetPrim())
+    xf.AddTranslateOp().Set(Gf.Vec3d(x, y, 0.0))
+    xf.AddRotateZOp().Set(math.degrees(yaw))
+    UsdPhysics.RigidBodyAPI.Apply(body.GetPrim())
+    UsdPhysics.MassAPI.Apply(body.GetPrim()).CreateMassAttr(float(cfg.mass))
+
     v = read_stl(stl, 0.001)
-    z0 = -float(v[:, 2].min())  # stand on the floor
-    mesh = UsdGeom.Mesh.Define(stage, path)
+    mesh = UsdGeom.Mesh.Define(stage, f"{path}/visual")
     mesh.CreatePointsAttr([Gf.Vec3f(*map(float, p)) for p in v])
     mesh.CreateFaceVertexCountsAttr([3] * (len(v) // 3))
     mesh.CreateFaceVertexIndicesAttr(list(range(len(v))))
     mesh.CreateSubdivisionSchemeAttr("none")
     # Matte charcoal steel and boards, as on the real shelf (linear RGB).
     mesh.CreateDisplayColorAttr([Gf.Vec3f(0.11, 0.113, 0.12)])
-    xf = UsdGeom.Xformable(mesh.GetPrim())
-    xf.AddTranslateOp().Set(Gf.Vec3d(x, y, z0))
-    xf.AddRotateZOp().Set(math.degrees(yaw))
-    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
-    UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("none")
+    UsdGeom.Xformable(mesh.GetPrim()).AddTranslateOp().Set(Gf.Vec3d(0, 0, -float(v[:, 2].min())))
+
+    # Colliders, invisible: the mesh shows the shelf.
+    def box(name, center, size):
+        add_box(stage, f"{path}/{name}", center, size)
+        UsdGeom.Imageable(stage.GetPrimAtPath(f"{path}/{name}")).MakeInvisible()
+
+    lx, ly = SHELF_LEG_XY
+    top = SHELF_PLATES[-1][1]
+    caster_mat = _physics_material(stage, "/World/PhysicsMaterials/shelf_caster", cfg.caster_friction, "min")
+    for i, (sx, sy) in enumerate(((1, 1), (1, -1), (-1, 1), (-1, -1))):
+        z0 = 2 * SHELF_CASTER_RADIUS
+        box(f"leg_{i}", (sx * lx, sy * ly, (z0 + top) / 2), (*SHELF_LEG_SIZE, top - z0))
+        sphere = UsdGeom.Sphere.Define(stage, f"{path}/caster_{i}")
+        sphere.CreateRadiusAttr(SHELF_CASTER_RADIUS)
+        sphere.AddTranslateOp().Set(Gf.Vec3d(sx * lx, sy * ly, SHELF_CASTER_RADIUS))
+        sphere.MakeInvisible()
+        UsdPhysics.CollisionAPI.Apply(sphere.GetPrim())
+        _bind_physics_material(sphere.GetPrim(), caster_mat)
+    for name, (z0, z1) in zip(("bottom", "middle", "top"), SHELF_PLATES):
+        box(f"plate_{name}", (0.0, 0.0, (z0 + z1) / 2), (*SHELF_SIZE, z1 - z0))
+
+    ShelfJoint.define(stage, path)
+    return path
+
+
+class ShelfJoint:
+    """Fixed joint from the robot's base_link to a shelf, disabled until the
+    robot docks. It exists from the start so docking only changes attributes
+    and never adds prims to a running simulation."""
+
+    def __init__(self, stage: Usd.Stage, shelf_path: str):
+        self.joint = UsdPhysics.FixedJoint.Get(stage, f"{shelf_path}_joint")
+
+    @staticmethod
+    def define(stage: Usd.Stage, shelf_path: str) -> None:
+        j = UsdPhysics.FixedJoint.Define(stage, f"{shelf_path}_joint")
+        j.CreateBody0Rel().SetTargets([BASE_LINK])
+        j.CreateBody1Rel().SetTargets([shelf_path])
+        j.CreateJointEnabledAttr(False)
+        j.CreateExcludeFromArticulationAttr(True)
+        j.CreateCollisionEnabledAttr(False)
+        j.CreateLocalPos0Attr(Gf.Vec3f(0, 0, 0))
+        j.CreateLocalRot0Attr(Gf.Quatf(1, 0, 0, 0))
+        j.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
+        j.CreateLocalRot1Attr(Gf.Quatf(1, 0, 0, 0))
+
+    def attach(self, rel_xyz, rel_quat) -> None:
+        """Lock the shelf at `rel_xyz`, `rel_quat` (w, x, y, z) in base_link."""
+        self.joint.GetLocalPos0Attr().Set(Gf.Vec3f(*map(float, rel_xyz)))
+        w, x, y, z = map(float, rel_quat)
+        self.joint.GetLocalRot0Attr().Set(Gf.Quatf(w, x, y, z))
+        self.joint.GetJointEnabledAttr().Set(True)
+
+    def detach(self) -> None:
+        self.joint.GetJointEnabledAttr().Set(False)
+
+
+def disable_pin_collision(stage: Usd.Stage) -> None:
+    """The docking pin pokes up into the shelf's bottom plate; real shelves
+    have a hole there. Without one in the colliders, let the pin pass."""
+    for p in Usd.PrimRange(stage.GetPrimAtPath(f"{BASE_LINK}/docking_link")):
+        if p.HasAPI(UsdPhysics.CollisionAPI):
+            UsdPhysics.CollisionAPI(p).CreateCollisionEnabledAttr(False)
 
 
 def add_charger(stage: Usd.Stage, path: str, pose, cfg: SimpleNamespace) -> None:
