@@ -4,7 +4,8 @@
 # and a collision-monitor height range that includes the LiDAR (z = 0.105 m).
 # Nav2 never drives backwards: the LiDAR covers only 240 deg to the front and
 # Kachaka has no rear range sensor (MPPI vx_min 0, smoother min x 0, and
-# behavior trees without the BackUp recovery).
+# behavior trees without the BackUp recovery). The exception is docking onto
+# the charger, which the real robot also does backwards (docking_server).
 # /odom and /cmd_vel are relayed to the Kachaka namespace by nav_bridge.
 amcl:
   ros__parameters:
@@ -407,6 +408,10 @@ collision_monitor:
       enabled: True
 
 docking_server:
+  # Used by kachaka_sim_bringup's command_server for RETURN_HOME. The real
+  # robot backs onto its charger (it drives forward to leave it), so this is
+  # the one place the robot reverses: the last ~0.9 m from the staging pose
+  # straight onto the dock. Docking publishes /cmd_vel directly.
   ros__parameters:
     controller_frequency: 50.0
     initial_perception_timeout: 5.0
@@ -417,40 +422,37 @@ docking_server:
     max_retries: 3
     base_frame: "base_footprint"
     fixed_frame: "odom"
-    dock_backwards: false
-    dock_prestaging_tolerance: 0.5
+    dock_backwards: true
+    dock_prestaging_tolerance: 0.1
 
-    # Types of docks
     dock_plugins: ['simple_charging_dock']
     simple_charging_dock:
       plugin: 'opennav_docking::SimpleChargingDock'
-      docking_threshold: 0.05
-      staging_x_offset: -0.7
+      # The goal carries the dock pose (the charger location); near the dock
+      # the simulator's detection (sim/charger_detection, relayed by
+      # command_server) refines it. The detection is the docked robot pose,
+      # so it is turned by pi to point into the dock. Within docking_threshold
+      # Nav2 considers itself docked; the simulator decides whether the
+      # contacts touch (battery_state).
       use_external_detection_pose: true
-      use_battery_status: false # true
-      use_stall_detection: false # true
-
       external_detection_timeout: 1.0
-      external_detection_translation_x: -0.18
+      external_detection_translation_x: 0.0
       external_detection_translation_y: 0.0
-      external_detection_rotation_roll: -1.57
-      external_detection_rotation_pitch: -1.57
-      external_detection_rotation_yaw: 0.0
+      external_detection_rotation_roll: 0.0
+      external_detection_rotation_pitch: 0.0
+      external_detection_rotation_yaw: 3.14159
       filter_coef: 0.1
-
-    # Dock instances
-    # The following example illustrates configuring dock instances.
-    # docks: ['home_dock']  # Input your docks here
-    # home_dock:
-    #   type: 'simple_charging_dock'
-    #   frame: map
-    #   pose: [0.0, 0.0, 0.0]
+      docking_threshold: 0.02
+      staging_x_offset: -0.9
+      staging_yaw_offset: 3.14159  # face away from the dock, ready to back in
+      use_battery_status: false
+      use_stall_detection: false
 
     controller:
       k_phi: 3.0
       k_delta: 2.0
-      v_linear_min: 0.15
-      v_linear_max: 0.15
+      v_linear_min: 0.05
+      v_linear_max: 0.1
       use_collision_detection: true
       costmap_topic: "local_costmap/costmap_raw"
       footprint_topic: "local_costmap/published_footprint"

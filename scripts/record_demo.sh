@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
-# Record the README demo: the simulator's bird's-eye view next to RViz while
-# Nav2 drives the robot through goals during SLAM. Produces docs/demo.gif.
+# Record the README demos: the simulator's view next to RViz.
 #
-#   scripts/record_demo.sh
+#   scripts/record_demo.sh        # Nav2 goals during SLAM -> docs/demo.gif
+#   scripts/record_demo.sh dock   # RETURN_HOME onto the charger -> docs/dock.gif
 #
 # Needs the ROS image (docker compose -f docker/compose.yaml build) and
 # ffmpeg on the host. Runs headless: RViz draws into Xvfb inside the container.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-OUT=build/demo
+DEMO=${1:-nav}
+case "$DEMO" in
+    nav)
+        GIF=docs/demo.gif
+        VIEW=(0.0 -2.4 7.5 0.0 -0.1 0.0)
+        RUN="python3 /tests/ros_nav_check.py" ;;
+    dock)
+        GIF=docs/dock.gif
+        VIEW=(-1.2 1.5 1.3 -1.8 0.0 0.0)  # oblique, close to the charger, clear of box_b
+        RUN="python3 /tests/ros_dock_check.py --demo" ;;
+    *) echo "usage: $0 [nav|dock]" >&2; exit 2 ;;
+esac
+OUT=build/$DEMO
 DISPLAY_NUM=99
 COMPOSE=(docker compose -f docker/compose.yaml)
 rm -rf "$OUT" && mkdir -p "$OUT"
@@ -22,7 +34,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[demo] starting the simulator"
-scripts/run_sim.sh --headless --no-cameras --record "$OUT/sim" > "$OUT/sim.log" 2>&1 &
+scripts/run_sim.sh --headless --no-cameras --record "$OUT/sim" --record-view "${VIEW[@]}" > "$OUT/sim.log" 2>&1 &
 until grep -q "\[kachaka\] running" "$OUT/sim.log"; do sleep 2; done
 
 echo "[demo] starting SLAM, Nav2 and RViz (Xvfb :$DISPLAY_NUM)"
@@ -43,12 +55,11 @@ date +%s.%N > "$OUT/rviz_start.txt"
 ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 0 -framerate 10 -video_size 1440x900 -i ":$DISPLAY_NUM" \
     -c:v libx264 -preset ultrafast -pix_fmt yuv420p "$OUT/rviz.mp4" &
 FFMPEG_PID=$!
-docker exec kachaka-demo-ros bash -c "source /ws/install/setup.bash && python3 /tests/ros_nav_check.py" \
-    | tee "$OUT/nav.log"
+docker exec kachaka-demo-ros bash -c "source /ws/install/setup.bash && $RUN" | tee "$OUT/run.log"
 date +%s.%N > "$OUT/end.txt"
 sleep 1
 kill -INT "$FFMPEG_PID"; wait "$FFMPEG_PID" || true
 FFMPEG_PID=
 
-echo "[demo] composing docs/demo.gif"
-.venv/bin/python scripts/make_demo_gif.py "$OUT" docs/demo.gif --rviz-crop ${RVIZ_CROP:-470 90 920 750}
+echo "[demo] composing $GIF"
+.venv/bin/python scripts/make_demo_gif.py "$OUT" "$GIF" --rviz-crop ${RVIZ_CROP:-470 90 920 750}

@@ -13,8 +13,8 @@ applications. Synthetic data generation is a secondary use.
   ToF depth, IMU, and stubs (battery, version, `set_enabled` services,
   `robot_description`, `joint_states`). Kachaka Shelf placed as a static obstacle.
 - **Phase 2**: shelf docking (shelf as a caster articulation, joint created
-  between robot and shelf when the docking pin rises), charger, `goal_pose`,
-  `kachaka_command/execute` action.
+  between robot and shelf when the docking pin rises), `goal_pose`, the other
+  `kachaka_command/execute` commands. Charger, battery and RETURN_HOME are done.
 - One robot; namespace and frame prefix are parameters.
 
 ## Runtime
@@ -50,8 +50,14 @@ generic names (`/cmd_vel`, `/scan`, `/odom`).
 | `odometry/odometry` | Odometry | ground truth + configurable noise; drives TF odom→base_footprint |
 | `wheel_odometry/wheel_odometry` | Odometry | integrated from wheel joints (slip shows) |
 | `sim/ground_truth` | Odometry | sim-only |
-| `robot_info/battery_state`, `robot_info/version` | stubs | |
-| `manual_control/set_enabled`, `auto_homing/set_enabled` | SetBool | stubs, always succeed |
+| `robot_info/battery_state` | BatteryState | SensorDataQoS, 1 Hz, voltage −1, CHARGING or DISCHARGING, like the real bridge |
+| `robot_info/version` | stub | |
+| `manual_control/set_enabled` | SetBool | stub, always succeeds |
+| `sim/charger_pose`, `sim/charger_detection` | PoseStamped | sim-only, see Charger below |
+
+`kachaka_sim_bringup`'s `command_server` adds the parts the real robot runs
+itself: `kachaka_command/execute` (RETURN_HOME), `layout/locations/list`
+(charger, id `home`) and `auto_homing/set_enabled`.
 | `robot_description`, `joint_states` | | |
 
 TF follows the real robot: URDF frames plus `laser_link`, `camera_front`,
@@ -92,3 +98,33 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
 - **Camera near clip** is short (2.5 cm RGB, 1 cm ToF, set in `config/robot.yaml`)
   so close objects stay visible; the lenses sit just behind the body shell.
 - The default room has 2.4 m walls so the upward ToF sees them.
+- **Callbacks drained each frame.** The simulator spins its ROS node once per
+  render frame (10 Hz) but runs every ready callback, not just one. With one,
+  `cmd_vel` queued up and the robot kept moving ~0.5 s after Nav2 stopped it.
+
+## Charger, battery and RETURN_HOME
+- **Dock model.** An L-shaped dark grey dock after the photos in Kachaka's
+  support pages: a back panel (collider) with a green LED, a thin floor plate
+  and two contacts (visual only). Sizes are estimates (`config/robot.yaml`).
+- **Charging** is decided from ground truth: the robot charges when its
+  `base_footprint` is within 4 cm and 0.15 rad of the docked pose. The battery
+  is linear: 0.5/h drain, 1.0/h charge *(est.)*, updated each second.
+- **Backward docking**, the one exception to "never reverse": the real robot
+  backs onto its charger and drives forward to leave. Nav2's docking server
+  (`opennav_docking`, `dock_backwards: true`) drives to a staging pose 0.9 m in
+  front of the dock, then reverses slowly (≤ 0.1 m/s). Leaving is an ordinary
+  forward Nav2 goal.
+- **Detection.** The SLAM map drifts a few cm from the world, too much for the
+  contacts. The simulator publishes the dock pose relative to the robot within
+  1.5 m (`sim/charger_detection`); `command_server` relays it to the docking
+  server's `detected_dock_pose` (reliable QoS, which the server requires). How
+  the real robot finds its dock is not published.
+- **Sensors on the charger.** The real robot stops its LiDAR and ToF while
+  charging. `charger.sensors_off` does the same but is off by default:
+  slam_toolbox stamps `map→odom` with the last scan, so without scans Nav2's
+  TF lookups fail and it cannot drive off the charger. The real robot
+  localizes itself and does not have this problem.
+- **Auto homing** in `command_server`: after `auto_homing_idle_timeout` (300 s)
+  without velocity commands, or below 15 % battery. Retries wait 60 s.
+- Result error codes of `kachaka_command/execute` are the simulator's own
+  (negative); the real ones are not published.

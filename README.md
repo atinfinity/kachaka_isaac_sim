@@ -16,13 +16,30 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Robot model converted from the official URDF and meshes.
 - Differential drive with the real speed limits (0.3 m/s, 1.57 rad/s), torque-limited wheels and casters.
 - Sensors: 2D LiDAR, front/back RGB cameras, ToF depth camera, IMU.
-- Odometry (fused and wheel), TF, `joint_states`, `robot_description`, battery and version stubs.
+- Odometry (fused and wheel), TF, `joint_states`, `robot_description`, version stub.
+- Charging dock and battery: the battery drains while driving and charges on the dock.
 - Same topic names, message types and QoS as the real bridge.
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
   Nav2 never drives backwards, since Kachaka has no rear range sensor.
+- `kachaka_command/execute` with RETURN_HOME, and auto homing, built on Nav2's docking server.
 
-Shelf docking is planned (phase 2).
+Shelf docking and the other commands are planned ([#2](https://github.com/atinfinity/kachaka_isaac_sim/issues/2)).
+
+### Returning to the charger
+
+![RETURN_HOME: Nav2 drives to the charger and the robot backs onto it](docs/dock.gif)
+
+*RETURN_HOME (2× speed). Nav2 drives to a point in front of the charger, then the robot backs onto it, as the real one does.*
+
+```bash
+ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action/ExecKachakaCommand \
+    "{kachaka_command: {command_type: 8}}"   # RETURN_HOME_COMMAND
+```
+
+This needs the ROS 2 stack with Nav2 (`NAV=true ... up slam`, or `up navigation`),
+which runs `command_server`. The robot leaves the charger with any Nav2 goal.
+Battery rates and the charger's size are estimates (`config/robot.yaml`).
 
 ## Requirements
 
@@ -77,6 +94,8 @@ scripts/run_sim.sh --world /path/to.usd  # any USD scene
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
 scripts/run_sim.sh --no-cameras          # faster, when you only need LiDAR and odometry
 scripts/run_sim.sh --render-hz 20        # render/camera loop rate (see Performance)
+scripts/run_sim.sh --charger X Y YAW     # place the charger (default: by the west wall of the room)
+scripts/run_sim.sh --no-charger
 scripts/run_sim.sh --help
 ```
 
@@ -101,8 +120,17 @@ Namespace `/kachaka`, as on the real robot.
 | `front_camera/image_raw`, `back_camera/image_raw` | `sensor_msgs/Image` (rgb8, 640×480) + `camera_info` | 10 Hz |
 | `tof_camera/image_raw` | `sensor_msgs/Image` (16UC1, mm) + `camera_info` | 10 Hz |
 | `joint_states`, `robot_description` | | |
-| `robot_info/battery_state`, `robot_info/version` | stubs | |
+| `robot_info/battery_state` | `sensor_msgs/BatteryState` (charging or discharging) | 1 Hz |
+| `robot_info/version` | stub | |
 | `sim/ground_truth` | `nav_msgs/Odometry` (simulator only) | 20 Hz |
+| `sim/charger_pose` | `geometry_msgs/PoseStamped` (simulator only, latched) | |
+| `sim/charger_detection` | `geometry_msgs/PoseStamped`, charger relative to the robot within 1.5 m (simulator only) | 20 Hz |
+
+`kachaka_sim_bringup`'s `command_server` provides what the real robot does
+itself: the `kachaka_command/execute` action (RETURN_HOME only; other
+commands abort), `layout/locations/list` with the charger, and the
+`auto_homing/set_enabled` service. Do not run it with a real Kachaka
+(`command_server:=false`).
 
 `/clock` and `/tf` are published at the top level; use `use_sim_time:=true` on
 the ROS 2 side. See [docs/design.md](docs/design.md) for the details and the
@@ -111,7 +139,7 @@ decisions behind them.
 ### Using the ROS 2 package with a real Kachaka
 
 `ros2_ws/src/kachaka_sim_bringup` only depends on the `/kachaka` topics, so it
-should also work with a real robot (`use_sim_time:=false`). This has not been
+should also work with a real robot (`use_sim_time:=false`, `command_server:=false`). This has not been
 tested.
 
 ## Performance
@@ -148,9 +176,10 @@ python3 /tests/ros_teleop_check.py   # drive the robot and print odometry
 python3 /tests/ros_sensor_check.py   # topic rates, LiDAR ranges against the room walls, IMU
 python3 /tests/ros_camera_check.py /tmp/images
 python3 /tests/ros_nav_check.py      # Nav2 goals (needs slam.launch.py nav:=true)
+python3 /tests/ros_dock_check.py     # charger, battery and RETURN_HOME (same)
 ```
 
-`scripts/record_demo.sh` records the GIF above.
+`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger).
 
 ## License
 

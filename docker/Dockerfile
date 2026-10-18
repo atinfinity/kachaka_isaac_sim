@@ -18,12 +18,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /ws
-# kachaka_description (meshes for RViz) and our bringup package.
+# kachaka_description (meshes for RViz), kachaka_interfaces (command action,
+# locations) and our bringup package.
 COPY third_party/kachaka-api/ros2/kachaka_description src/kachaka_description
+COPY third_party/kachaka-api/ros2/kachaka_interfaces src/kachaka_interfaces
 COPY ros2_ws/src src
 RUN . /opt/ros/jazzy/setup.sh \
     && colcon build --symlink-install --event-handlers console_direct- \
-        --packages-select kachaka_description kachaka_sim_bringup
+        --packages-select kachaka_description kachaka_interfaces kachaka_sim_bringup
 
 COPY docker/entrypoint.sh /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]

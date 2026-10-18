@@ -21,10 +21,12 @@ from .drive import (
     Pose2D,
     VelocityCommand,
     WheelOdometry,
+    relative_pose,
     wheel_speeds,
     yaw_from_quat,
 )
 from .physics_sensors import Imu, Lidar, quat_to_matrix
+from .power import Battery, Charger
 from .ros_node import KachakaSimNode
 from .urdf_tools import frame_pose, read_com, read_joints
 
@@ -34,7 +36,7 @@ RIGHT_WHEEL = "base_r_drive_wheel_joint"
 
 class SimRobot:
     def __init__(self, articulation_path: str, robot_path: str, urdf_path: Path, cfg: SimpleNamespace,
-                 node: KachakaSimNode, start_time: float, seed: int | None = None):
+                 node: KachakaSimNode, start_time: float, seed: int | None = None, charger: Charger | None = None):
         self.cfg = cfg
         self.node = node
         self.t = start_time
@@ -52,7 +54,12 @@ class SimRobot:
         self.odom_period = 1.0 / cfg.odometry.rate
         self.next_odom = start_time
         self.next_battery = start_time
-        self.battery = float(cfg.stubs.battery_percentage)
+        b = cfg.battery
+        self.battery = Battery(float(b.initial_percentage), float(b.drain_per_hour), float(b.charge_per_hour))
+        self.charger = charger
+        self.on_charger = False
+        # The real robot turns its LiDAR and ToF off on the charger.
+        self.sensors_off_on_charger = bool(cfg.charger.sensors_off)
 
         joints = read_joints(urdf_path)
         self.lidar = Lidar(cfg.lidar, *frame_pose(joints, cfg.lidar.frame_id), robot_path, seed)
@@ -108,6 +115,7 @@ class SimRobot:
             qd = self.art.get_dof_velocities().numpy()[0]
             yaw = yaw_from_quat(*quat)
             gt = Pose2D(float(pos[0]), float(pos[1]), yaw)
+            self.on_charger = self.charger is not None and self.charger.docked(gt)
             # The COM offset only adds a sideways term, so the forward
             # projection of the COM velocity is exact.
             v = float(lin[0] * math.cos(yaw) + lin[1] * math.sin(yaw))
@@ -115,15 +123,23 @@ class SimRobot:
             fused = self.fused_odom.update(gt)
             wo = self.wheel_odom
             node.publish_odometry(t, fused, wo.pose, gt, v, w, wo.v, wo.w)
+            if self.charger is not None:
+                rel = relative_pose(gt, self.charger.pose)
+                if math.hypot(rel.x, rel.y) <= self.cfg.charger.detection_range:
+                    node.publish_charger_detection(t, rel)
             node.publish_joints(t, self.dof_names, q, qd)
 
         if t + 1e-9 >= self.next_lidar:
             self.next_lidar += self.lidar_period
-            self.lidar.scan(pos, rot)
-            node.publish_scan(t, self.lidar, self.lidar_period)
+            if not self.sensors_paused:
+                self.lidar.scan(pos, rot)
+                node.publish_scan(t, self.lidar, self.lidar_period)
 
         if t + 1e-9 >= self.next_battery:
             self.next_battery += 1.0
-            drain = self.cfg.stubs.battery_drain_per_hour / 3600.0
-            self.battery = max(0.0, self.battery - drain)
-            node.publish_battery(t, self.battery)
+            level = self.battery.update(1.0, self.on_charger)
+            node.publish_battery(t, level, self.on_charger)
+
+    @property
+    def sensors_paused(self) -> bool:
+        return self.on_charger and self.sensors_off_on_charger

@@ -74,6 +74,32 @@ imu:
 
 stubs:
   version: "kachaka-isaac-sim 0.1.0"
-  battery_percentage: 1.0
-  battery_drain_per_hour: 0.5   # fraction per hour of sim time
-  battery_voltage: 25.2
+
+battery:
+  initial_percentage: 1.0
+  drain_per_hour: 0.5       # fraction per hour of sim time, off the charger (est.)
+  charge_per_hour: 1.0      # fraction per hour of sim time, on the charger (est.)
+
+# Charging dock. The pose is given per world (scripts/run_sim.py --charger);
+# it is the base_footprint pose of a docked robot, which faces away from the
+# dock: the robot backs onto it, as the real one does.
+charger:
+  room_pose: [-2.27, 0.0, 0.0]  # x, y, yaw in the default room (back panel on the west wall)
+  width: 0.26               # m (est.)
+  panel_height: 0.09        # m (est.)
+  panel_thickness: 0.04     # m (est.)
+  plate_depth: 0.13         # m, floor plate under the robot's rear (est.)
+  gap: 0.03                 # m, robot rear to panel when docked (est.)
+  robot_rear: 0.16          # m, base_footprint to the robot's back (footprint)
+  tolerance_xy: 0.04        # m, contacts touch within this distance (est.)
+  tolerance_yaw: 0.15       # rad (est.)
+  # The real robot stops its LiDAR and ToF on the charger. Off by default here:
+  # the real robot localizes itself, but the bundled ROS 2 stack relies on
+  # slam_toolbox, whose map->odom transform goes stale without scans, so Nav2
+  # could not drive off the charger. Set true to test code against the real
+  # behaviour.
+  sensors_off: false
+  # The dock pose relative to the robot is published within this range
+  # (sim/charger_detection), for Nav2's docking server. How the real robot
+  # finds its dock is not published; this stands in for it.
+  detection_range: 1.5      # m

@@ -67,8 +67,8 @@ def add_ground(stage: Usd.Stage, visible: bool = True) -> None:
         UsdGeom.Imageable(stage.GetPrimAtPath("/World/GroundPlane")).MakeInvisible()
 
 
-def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78)) -> None:
-    """Static box collider as an explicit mesh (scaled Cube colliders misbehave)."""
+def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78), collider: bool = True) -> None:
+    """Static box as an explicit mesh (scaled Cube colliders misbehave)."""
     hx, hy, hz = (s / 2 for s in size)
     pts = [Gf.Vec3f(x * hx, y * hy, z * hz) for z in (-1, 1) for y in (-1, 1) for x in (-1, 1)]
     faces = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
@@ -79,8 +79,9 @@ def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78)) -
     mesh.CreateExtentAttr([Gf.Vec3f(-hx, -hy, -hz), Gf.Vec3f(hx, hy, hz)])
     mesh.CreateDisplayColorAttr([Gf.Vec3f(*color)])
     mesh.AddTranslateOp().Set(Gf.Vec3d(*center))
-    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
-    UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("convexHull")
+    if collider:
+        UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+        UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("convexHull")
 
 
 def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, height: float = 2.4,
@@ -127,6 +128,34 @@ def add_shelf(stage: Usd.Stage, path: str, stl: Path, x: float, y: float, yaw: f
     xf.AddRotateZOp().Set(math.degrees(yaw))
     UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
     UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("none")
+
+
+def add_charger(stage: Usd.Stage, path: str, pose, cfg: SimpleNamespace) -> None:
+    """L-shaped charging dock: a thin floor plate with two contacts and a back
+    panel with a green LED, dark grey like the real one.
+
+    `pose` (x, y, yaw) is the base_footprint pose of a docked robot, which
+    faces away from the panel. Only the panel collides; the plate is a few
+    millimetres thick and stays visual so the wheels do not snag on it.
+    """
+    x, y, yaw = pose
+    root = UsdGeom.Xform.Define(stage, path)
+    xf = UsdGeom.Xformable(root.GetPrim())
+    xf.AddTranslateOp().Set(Gf.Vec3d(x, y, 0.0))
+    xf.AddRotateZOp().Set(math.degrees(yaw))
+    grey = (0.05, 0.052, 0.055)
+    w, h, t = cfg.width, cfg.panel_height, cfg.panel_thickness
+    face = -(cfg.robot_rear + cfg.gap)  # panel front face, in the dock frame
+    add_box(stage, f"{path}/panel", (face - t / 2, 0.0, h / 2), (t, w, h), grey)
+    plate = 0.004
+    add_box(stage, f"{path}/plate", (face + cfg.plate_depth / 2, 0.0, plate / 2), (cfg.plate_depth, w, plate),
+            grey, collider=False)
+    for side in (-1, 1):
+        add_box(stage, f"{path}/contact_{'l' if side > 0 else 'r'}",
+                (face + cfg.plate_depth - 0.02, side * 0.04, plate + 0.002), (0.02, 0.012, 0.004),
+                (0.55, 0.55, 0.5), collider=False)
+    add_box(stage, f"{path}/led", (face - t / 2, 0.0, h + 0.002), (0.01, 0.03, 0.004), (0.1, 0.9, 0.2),
+            collider=False)
 
 
 def add_robot(stage: Usd.Stage, usd_path: Path, x: float = 0.0, y: float = 0.0, yaw: float = 0.0) -> Usd.Prim:

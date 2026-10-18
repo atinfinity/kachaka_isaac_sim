@@ -35,6 +35,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--x", type=float, default=0.0, help="spawn x [m]")
     p.add_argument("--y", type=float, default=0.0, help="spawn y [m]")
     p.add_argument("--yaw", type=float, default=0.0, help="spawn yaw [rad]")
+    p.add_argument("--charger", type=float, nargs=3, metavar=("X", "Y", "YAW"),
+                   help="place the charging dock where a docked robot is at X, Y, YAW (world frame). "
+                        "Default: on the west wall in 'room', none elsewhere")
+    p.add_argument("--no-charger", action="store_true", help="no charging dock")
     p.add_argument("--physics-hz", type=int, default=120)
     p.add_argument("--render-hz", type=float, default=10.0,
                    help="render and main-loop rate; keep it a multiple of the camera rate")
@@ -50,9 +54,9 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def publish_cameras(node, cameras, t: float) -> None:
+def publish_cameras(node, cameras, t: float, tof_off: bool = False) -> None:
     for cam in cameras:
-        if not cam.due(t):
+        if not cam.due(t) or (tof_off and cam.kind == "depth"):
             continue
         data = cam.read()
         if data is None:
@@ -101,6 +105,14 @@ def main() -> int:
         world.add_simple_room(stage, shelf_stl=SHELF_STL)
     elif not builtin:
         world.load_world_usd(stage, world.resolve_world(args.world))
+    charger_pose = None
+    if not args.no_charger:
+        if args.charger:
+            charger_pose = tuple(args.charger)
+        elif args.world == "room":
+            charger_pose = tuple(cfg.charger.room_pose)
+    if charger_pose:
+        world.add_charger(stage, "/World/Charger", charger_pose, cfg.charger)
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
     cameras = []
@@ -137,8 +149,17 @@ def main() -> int:
     node = KachakaSimNode(cfg, ROBOT_URDF)
     for cam in cameras:
         node.add_camera(cam.name)
+    charger = None
+    if charger_pose:
+        from kachaka_isaac_sim.drive import Pose2D, relative_pose
+        from kachaka_isaac_sim.power import Charger
+
+        dock = Pose2D(*charger_pose)
+        charger = Charger(dock, cfg.charger.tolerance_xy, cfg.charger.tolerance_yaw)
+        # SLAM starts its map at the odometry origin, i.e. the spawn pose.
+        node.publish_charger_pose(relative_pose(Pose2D(args.x, args.y, args.yaw), dock))
     sim_start = SimulationManager.get_simulation_time()
-    robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed)
+    robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed, charger)
     callbacks = [
         SimulationManager.register_callback(lambda dt, ctx: robot.pre_step(dt), SimulationEvent.PHYSICS_PRE_STEP),
         SimulationManager.register_callback(lambda dt, ctx: robot.post_step(dt), SimulationEvent.PHYSICS_POST_STEP),
@@ -146,14 +167,15 @@ def main() -> int:
 
     timing = [0.0, 0.0, 0]  # update seconds, camera seconds, loop count
     wall_start = time.monotonic()
-    print(f"[kachaka] running: ROS namespace '{node.ns}', world '{args.world}'", flush=True)
+    where = f", charger at {charger_pose}" if charger_pose else ""
+    print(f"[kachaka] running: ROS namespace '{node.ns}', world '{args.world}'{where}", flush=True)
     try:
         while app.is_running():
             t0 = time.perf_counter()
             node.spin_once()
             app.update()
             t1 = time.perf_counter()
-            publish_cameras(node, cameras, robot.t)
+            publish_cameras(node, cameras, robot.t, tof_off=robot.sensors_paused)
             if recorder:
                 recorder.capture(robot.t - sim_start)
             timing[0] += t1 - t0

@@ -16,13 +16,30 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - 公式 URDF とメッシュから変換したロボットモデル
 - 実機と同じ速度上限（0.3 m/s、1.57 rad/s）の差動二輪。車輪トルク制限とキャスター付き
 - センサー: 2D LiDAR、前後の RGB カメラ、ToF 深度カメラ、IMU
-- オドメトリ（統合・車輪）、TF、`joint_states`、`robot_description`、バッテリー・バージョンのスタブ
+- オドメトリ（統合・車輪）、TF、`joint_states`、`robot_description`、バージョンのスタブ
+- 充電器とバッテリー: 走行中は減り、充電器の上で充電されます
 - topic 名・メッセージ型・QoS は実機ブリッジと同じ
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
   カチャカには後方の距離センサーがないので、Nav2 は後退しない設定です
+- Nav2 のドッキングサーバーを使った `kachaka_command/execute` の RETURN_HOME と自動充電
 
-シェルフのドッキングは今後対応予定です（フェーズ 2）。
+シェルフのドッキングとほかのコマンドは今後対応予定です（[#2](https://github.com/atinfinity/kachaka_isaac_sim/issues/2)）。
+
+### 充電器に戻る
+
+![RETURN_HOME: Nav2 で充電器の前まで走り、後退して充電器に乗る様子](docs/dock.gif)
+
+*RETURN_HOME（2 倍速）。Nav2 で充電器の前まで走り、実機と同じく後ろ向きに充電器へ乗ります。*
+
+```bash
+ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action/ExecKachakaCommand \
+    "{kachaka_command: {command_type: 8}}"   # RETURN_HOME_COMMAND
+```
+
+Nav2 を含む ROS 2 スタック（`NAV=true ... up slam` または `up navigation`）が必要です。
+`command_server` もその中で起動します。充電器から離れるには Nav2 のゴールを送るだけです。
+バッテリーの増減速度と充電器の寸法は推定値です（`config/robot.yaml`）。
 
 ## 動作環境
 
@@ -76,6 +93,8 @@ scripts/run_sim.sh --world /path/to.usd  # 任意の USD シーン
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
 scripts/run_sim.sh --no-cameras          # LiDAR とオドメトリだけでよいとき（速い）
 scripts/run_sim.sh --render-hz 20        # 描画・カメラのループ周期（「性能」を参照）
+scripts/run_sim.sh --charger X Y YAW     # 充電器の位置（既定: 部屋の西の壁際）
+scripts/run_sim.sh --no-charger
 scripts/run_sim.sh --help
 ```
 
@@ -99,8 +118,16 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `front_camera/image_raw`、`back_camera/image_raw` | `sensor_msgs/Image`（rgb8、640×480）+ `camera_info` | 10 Hz |
 | `tof_camera/image_raw` | `sensor_msgs/Image`（16UC1、mm）+ `camera_info` | 10 Hz |
 | `joint_states`、`robot_description` | | |
-| `robot_info/battery_state`、`robot_info/version` | スタブ | |
+| `robot_info/battery_state` | `sensor_msgs/BatteryState`（充電中または放電中） | 1 Hz |
+| `robot_info/version` | スタブ | |
 | `sim/ground_truth` | `nav_msgs/Odometry`（シミュレータのみ） | 20 Hz |
+| `sim/charger_pose` | `geometry_msgs/PoseStamped`（シミュレータのみ、latched） | |
+| `sim/charger_detection` | `geometry_msgs/PoseStamped`、1.5 m 以内のときロボットから見た充電器の位置（シミュレータのみ） | 20 Hz |
+
+実機が自分で提供している機能は `kachaka_sim_bringup` の `command_server` が提供します。
+`kachaka_command/execute` action（RETURN_HOME のみ。ほかのコマンドは abort）、充電器を含む
+`layout/locations/list`、`auto_homing/set_enabled` サービスです。実機と一緒には起動しないでください
+（`command_server:=false`）。
 
 `/clock` と `/tf` はトップレベルに出ます。ROS 2 側では `use_sim_time:=true` を使ってください。
 詳細と設計判断は [docs/design.md](docs/design.md) にあります（英語）。
@@ -108,7 +135,7 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 ### ROS 2 パッケージを実機で使う
 
 `ros2_ws/src/kachaka_sim_bringup` は `/kachaka` の topic にしか依存しないので、実機
-（`use_sim_time:=false`）でも動くはずです。ただし未確認です。
+（`use_sim_time:=false`、`command_server:=false`）でも動くはずです。ただし未確認です。
 
 ## 性能
 
@@ -142,9 +169,10 @@ python3 /tests/ros_teleop_check.py   # ロボットを走らせてオドメト�
 python3 /tests/ros_sensor_check.py   # topic の周期、部屋の壁に対する LiDAR の距離、IMU
 python3 /tests/ros_camera_check.py /tmp/images
 python3 /tests/ros_nav_check.py      # Nav2 のゴール（slam.launch.py nav:=true が必要）
+python3 /tests/ros_dock_check.py     # 充電器、バッテリー、RETURN_HOME（同上）
 ```
 
-上の GIF は `scripts/record_demo.sh` で録画しています。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`）。
 
 ## ライセンス
 

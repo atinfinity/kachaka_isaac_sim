@@ -11,6 +11,7 @@ in this repository):
 - kachaka-api (https://github.com/pf-robotics/kachaka-api)
   Copyright 2023 Preferred Robotics, Inc. Apache License 2.0.
   The robot URDF and meshes are converted to USD from this repository.
+  kachaka_interfaces is built into the ROS 2 Docker image from this repository.
 
 - kachaka_shelf_description (https://github.com/GAI-313/kachaka_shelf_description)
   Copyright (c) 2026 GAI. MIT License.

@@ -8,7 +8,8 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -19,6 +20,9 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true", description="false for a real Kachaka"),
         DeclareLaunchArgument("rviz", default_value="true"),
+        DeclareLaunchArgument("command_server", default_value="true",
+                              description="serve kachaka_command/execute (RETURN_HOME) and auto homing; "
+                                          "false for a real Kachaka, which has its own"),
         DeclareLaunchArgument("nav", default_value="false", description="also start Nav2"),
         DeclareLaunchArgument("slam_params_file",
                               default_value=PathJoinSubstitution([pkg, "config", "slam_toolbox.yaml"])),
@@ -42,6 +46,13 @@ def generate_launch_description():
                 "params_file": LaunchConfiguration("params_file"),
             }.items(),
             condition=IfCondition(LaunchConfiguration("nav")),
+        ),
+        Node(
+            package="kachaka_sim_bringup",
+            executable="command_server",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+            condition=IfCondition(PythonExpression(["'", LaunchConfiguration("nav"), "' == 'true' and '", LaunchConfiguration("command_server"), "' == 'true'"])),
         ),
         IncludeLaunchDescription(
             PathJoinSubstitution([pkg, "launch", "rviz.launch.py"]),

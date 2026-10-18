@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import rclpy
 from builtin_interfaces.msg import Time
-from geometry_msgs.msg import TransformStamped, Twist
+from geometry_msgs.msg import PoseStamped, TransformStamped, Twist
 from nav_msgs.msg import Odometry
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import ShutdownException, SingleThreadedExecutor, TimeoutException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
@@ -49,7 +49,6 @@ class KachakaSimNode:
         self.prefix = cfg.ros.frame_prefix or ""
         self.generic = bool(cfg.ros.remap_generic)
         self.manual_control_enabled = True
-        self.auto_homing_enabled = True
         self.cmd: tuple[float, float] | None = None  # newest Twist, consumed by the sim loop
         n = self.node
 
@@ -58,7 +57,8 @@ class KachakaSimNode:
         if self.generic:
             n.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
         n.create_service(SetBool, f"{ns}/manual_control/set_enabled", self._on_manual_control)
-        n.create_service(SetBool, f"{ns}/auto_homing/set_enabled", self._on_auto_homing)
+        # auto_homing/set_enabled is served by kachaka_sim_bringup's command
+        # server, which does the returning (it needs Nav2).
 
         # --- outputs --------------------------------------------------------
         self.clock_pub = n.create_publisher(Clock, "/clock", 10)
@@ -75,7 +75,9 @@ class KachakaSimNode:
         self.joint_pub = n.create_publisher(JointState, f"{ns}/joint_states", 10)
         self.tf_pub = n.create_publisher(TFMessage, "/tf", 100)
         self.tf_static_pub = n.create_publisher(TFMessage, "/tf_static", LATCHED)
-        self.battery_pub = n.create_publisher(BatteryState, f"{ns}/robot_info/battery_state", 10)
+        self.battery_pub = n.create_publisher(BatteryState, f"{ns}/robot_info/battery_state", sensor)
+        self.charger_pub = n.create_publisher(PoseStamped, f"{ns}/sim/charger_pose", LATCHED)
+        self.charger_detection_pub = n.create_publisher(PoseStamped, f"{ns}/sim/charger_detection", sensor)
         version_pub = n.create_publisher(String, f"{ns}/robot_info/version", LATCHED)
         desc_pub = n.create_publisher(String, f"{ns}/robot_description", LATCHED)
 
@@ -126,14 +128,18 @@ class KachakaSimNode:
         res.success = True
         return res
 
-    def _on_auto_homing(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
-        self.auto_homing_enabled = req.data
-        res.success = True
-        return res
-
     # --- called from the sim loop --------------------------------------------
-    def spin_once(self) -> None:
-        self.executor.spin_once(timeout_sec=0.0)
+    def spin_once(self, max_callbacks: int = 200) -> None:
+        """Run every ready callback. `Executor.spin_once` runs only one, which
+        at the render rate lets commands queue up and arrive late."""
+        for _ in range(max_callbacks):
+            try:
+                handler, _, _ = self.executor.wait_for_ready_callbacks(timeout_sec=0.0)
+            except (TimeoutException, ShutdownException):
+                return
+            handler()
+            if handler.exception() is not None:
+                raise handler.exception()
 
     def take_cmd(self) -> tuple[float, float] | None:
         cmd, self.cmd = self.cmd, None
@@ -263,14 +269,38 @@ class KachakaSimNode:
         info_pub.publish(info)
         info_pub2.publish(info)
 
-    def publish_battery(self, t: float, percentage: float) -> None:
+    def publish_battery(self, t: float, percentage: float, charging: bool) -> None:
+        # Fields as the real bridge fills them: no voltage, only charging or
+        # discharging.
         msg = BatteryState()
         msg.header.stamp = to_time(t)
-        msg.voltage = float(self.cfg.stubs.battery_voltage)
+        msg.voltage = -1.0
         msg.percentage = float(percentage)
         msg.present = True
-        msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
+        msg.power_supply_status = (BatteryState.POWER_SUPPLY_STATUS_CHARGING if charging
+                                   else BatteryState.POWER_SUPPLY_STATUS_DISCHARGING)
         self.battery_pub.publish(msg)
+
+    def publish_charger_detection(self, t: float, pose: Pose2D) -> None:
+        """Docked base_footprint pose relative to the robot (sim-only)."""
+        msg = PoseStamped()
+        msg.header.stamp = to_time(t)
+        msg.header.frame_id = self.frame("base_footprint")
+        msg.pose.position.x = float(pose.x)
+        msg.pose.position.y = float(pose.y)
+        q = msg.pose.orientation
+        q.w, q.x, q.y, q.z = (float(c) for c in quat_from_yaw(pose.yaw))
+        self.charger_detection_pub.publish(msg)
+
+    def publish_charger_pose(self, pose: Pose2D) -> None:
+        """Docked base_footprint pose in the map frame (sim-only, latched)."""
+        msg = PoseStamped()
+        msg.header.frame_id = "map"
+        msg.pose.position.x = float(pose.x)
+        msg.pose.position.y = float(pose.y)
+        q = msg.pose.orientation
+        q.w, q.x, q.y, q.z = (float(c) for c in quat_from_yaw(pose.yaw))
+        self.charger_pub.publish(msg)
 
     def shutdown(self) -> None:
         self.executor.shutdown()

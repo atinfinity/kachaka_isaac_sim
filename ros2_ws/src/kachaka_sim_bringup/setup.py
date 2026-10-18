@@ -19,5 +19,8 @@ setup(
     install_requires=["setuptools"],
     zip_safe=True,
     license="Apache-2.0",
-    entry_points={"console_scripts": [f"nav_bridge = {package_name}.nav_bridge:main"]},
+    entry_points={"console_scripts": [
+        f"nav_bridge = {package_name}.nav_bridge:main",
+        f"command_server = {package_name}.command_server:main",
+    ]},
 )
