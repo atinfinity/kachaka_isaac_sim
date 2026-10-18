@@ -36,10 +36,35 @@ def setup_stage(stage: Usd.Stage, physics_hz: int) -> None:
     light.CreateIntensityAttr(800.0)
 
 
-def add_ground(stage: Usd.Stage) -> None:
+# Indoor scenes shipped with Isaac Sim (streamed from the Isaac asset server).
+ISAAC_WORLDS = {
+    "office": "Isaac/Environments/Office/office.usd",
+    "hospital": "Isaac/Environments/Hospital/hospital.usd",
+    "warehouse": "Isaac/Environments/Simple_Warehouse/full_warehouse.usd",
+    "simple_room": "Isaac/Environments/Simple_Room/simple_room.usd",
+}
+
+
+def resolve_world(name: str) -> str:
+    """Return a USD path or URL for a named Isaac scene, else `name` itself."""
+    if name in ISAAC_WORLDS:
+        from isaacsim.storage.native import get_assets_root_path
+
+        root = get_assets_root_path()
+        if root is None:
+            raise RuntimeError("Isaac Sim asset server is not reachable")
+        return f"{root}/{ISAAC_WORLDS[name]}"
+    return name
+
+
+def add_ground(stage: Usd.Stage, visible: bool = True) -> None:
+    """Flat collider at z=0. Hidden under loaded scenes whose own floor may
+    lack collision; visibility does not affect physics."""
     from isaacsim.core.experimental.objects import GroundPlane
 
     GroundPlane("/World/GroundPlane")
+    if not visible:
+        UsdGeom.Imageable(stage.GetPrimAtPath("/World/GroundPlane")).MakeInvisible()
 
 
 def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78)) -> None:

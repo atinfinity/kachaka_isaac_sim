@@ -4,6 +4,7 @@ up the ROS 2 environment that Isaac Sim needs before the process starts.
     scripts/run_sim.sh                 # GUI, simple walled room
     scripts/run_sim.sh --headless      # no window
     scripts/run_sim.sh --world empty   # floor only
+    scripts/run_sim.sh --world office  # Isaac Sim indoor scene (needs internet)
     scripts/run_sim.sh --world /path/to/scene.usd
 """
 
@@ -29,7 +30,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", default=str(DEFAULT_CONFIG), help="robot parameters (YAML)")
     p.add_argument("--headless", action="store_true", help="run without a window")
-    p.add_argument("--world", default="room", help="'room', 'empty', or a USD file to load as the environment")
+    p.add_argument("--world", default="room",
+                   help="'room', 'empty', an Isaac scene (office, hospital, warehouse, simple_room) or a USD path/URL")
     p.add_argument("--x", type=float, default=0.0, help="spawn x [m]")
     p.add_argument("--y", type=float, default=0.0, help="spawn y [m]")
     p.add_argument("--yaw", type=float, default=0.0, help="spawn yaw [rad]")
@@ -89,11 +91,12 @@ def main() -> int:
 
     stage = stage_utils.create_new_stage()
     world.setup_stage(stage, args.physics_hz)
-    world.add_ground(stage)
+    builtin = args.world in ("room", "empty")
+    world.add_ground(stage, visible=builtin)
     if args.world == "room":
         world.add_simple_room(stage, shelf_stl=SHELF_STL)
-    elif args.world != "empty":
-        world.load_world_usd(stage, args.world)
+    elif not builtin:
+        world.load_world_usd(stage, world.resolve_world(args.world))
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
     cameras = []
