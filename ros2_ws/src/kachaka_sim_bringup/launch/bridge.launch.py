@@ -1,4 +1,5 @@
-"""Relay between Nav2's generic topics (/odom, /cmd_vel) and the Kachaka namespace."""
+"""Relay between Nav2's generic topics (/odom, /cmd_vel) and the Kachaka namespace,
+and /map to the global costmap (/nav_map) with the cells under the robot freed."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -18,5 +19,11 @@ def generate_launch_description():
                 "use_sim_time": LaunchConfiguration("use_sim_time"),
                 "kachaka_namespace": LaunchConfiguration("kachaka_namespace"),
             }],
+        ),
+        Node(
+            package="kachaka_sim_bringup",
+            executable="footprint_map_filter",
+            output="screen",
+            parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
         ),
     ])

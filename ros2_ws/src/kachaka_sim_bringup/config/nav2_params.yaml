@@ -262,6 +262,9 @@ global_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
+        # /map with the cells under the robot freed (footprint_map_filter), so
+        # a docked shelf's legs still in the SLAM map do not enclose the robot.
+        map_topic: /nav_map
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0

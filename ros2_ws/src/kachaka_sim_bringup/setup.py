@@ -21,6 +21,7 @@ setup(
     license="Apache-2.0",
     entry_points={"console_scripts": [
         f"nav_bridge = {package_name}.nav_bridge:main",
+        f"footprint_map_filter = {package_name}.footprint_map_filter:main",
         f"command_server = {package_name}.command_server:main",
         f"shelf_markers = {package_name}.shelf_markers:main",
     ]},

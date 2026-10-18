@@ -156,10 +156,18 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   relative to the robot (`sim/shelf_detection`) and `command_server` relays the
   chosen one to `shelf_detected_dock_pose`. To put a shelf down at a location,
   it relays the location's pose (from SLAM) instead, so placement is as good
-  as SLAM: 3–8 cm in the test room.
+  as SLAM: 3–10 cm in the test room.
 - **Footprint.** On `sim/shelf_docked`, `command_server` publishes the shelf's
   footprint to both costmaps' `footprint` topics (and back on undock) and
   clears the costmaps.
+- **Shelf legs in the map.** slam_toolbox mapped the legs while the shelf
+  stood still, and they stay in `/map` after the robot docks under it. With
+  the towing footprint the inflation around them covered the robot's own cell,
+  so NavFn found no path until SLAM cleared them (up to a minute).
+  `footprint_map_filter` relays `/map` to `/nav_map` with the cells under the
+  robot's current footprint (plus 5 cm) set free, and the global costmap's
+  static layer reads `/nav_map`. A robot is never inside an obstacle, so this
+  holds without a shelf too.
 - **Undocking** lowers the pin and drives 0.40 m forward at 0.15 m/s on
   `manual_control/cmd_vel`. It refuses (error −9) when the LiDAR sees
   something in that path, since the robot does not reverse.
