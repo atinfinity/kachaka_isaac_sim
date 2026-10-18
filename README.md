@@ -238,18 +238,27 @@ Commands and the locations need the ROS 2 side (`slam.launch.py nav:=true`),
 since `command_server` runs them. The robot pose is in slam_toolbox's map
 frame and `get_png_map` returns its `/map`.
 
-| Area | Supported |
-|---|---|
-| Robot info | serial number, version, `is_ready`, errors and error codes, pose, battery |
-| Sensors | odometry, wheel odometry, IMU, LiDAR, front/back/ToF camera info, images and compressed images, static TF |
-| Map | `get_png_map`, `get_map_list`, `get_current_map_id` (one map, `sim`) |
-| Commands | MOVE_TO_POSE, MOVE_TO_LOCATION, RETURN_HOME, SPEAK, DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF; `cancel_command`, `get_command_state`, `get_last_command_result`, `proceed` |
-| Layout | `get_locations`, `get_default_location_id`, `get_shelves`, `get_moving_shelf_id` |
-| Control | `set_manual_control_enabled`, `set_robot_velocity`, `set_robot_stop`, auto homing, speaker volume |
-| No-ops | torches, `activate_laser_scan`; `get_object_detection` is always empty |
+Every RPC of the `KachakaApi` service (kachaka-api 3.17.5.0) is in one of
+these lists. The client methods are the RPC names in snake_case
+(`GetRobotPose` → `get_robot_pose`).
 
-The other RPCs return `UNIMPLEMENTED` and the other commands fail
-([#12](https://github.com/atinfinity/kachaka_isaac_sim/issues/12)).
+| Area | Implemented | Not implemented ([#12](https://github.com/atinfinity/kachaka_isaac_sim/issues/12)) |
+|---|---|---|
+| Robot info | `GetRobotSerialNumber`, `GetRobotVersion`, `IsReady`, `GetError`, `GetRobotErrorCodeJson`, `GetRobotPose`, `GetBatteryInfo` | `RestartRobot`, `SetEmergencyStop` |
+| Sensors | `GetRosImu`, `GetRosOdometry`, `GetRosWheelOdometry`, `GetRosLaserScan`, `Get{Front,Back,Tof}CameraRos{CameraInfo,Image,CompressedImage}`, `GetStaticTransform` | `GetDynamicTransform` |
+| Map | `GetPngMap`, `GetMapList`, `GetCurrentMapId` (one map, `sim`) | `SwitchMap`, `LoadMapPreview`, `ExportMap`, `ImportMap`, `ImportImageAsMap`, `SetRobotPose` |
+| Commands | `StartCommand`, `CancelCommand`, `GetCommandState`, `GetLastCommandResult`, `Proceed` | `GetShortcuts`, `StartShortcutCommand`, `GetHistoryList` |
+| Layout | `GetLocations`, `GetLocationsDigest`, `GetShelves`, `GetShelvesDigest`, `GetMovingShelfId` | `ResetShelfPose` |
+| Control | `SetManualControlEnabled`, `GetManualControlEnabled`, `SetRobotVelocity`, `SetAutoHomingEnabled`, `GetAutoHomingEnabled`, `SetSpeakerVolume`, `GetSpeakerVolume` | |
+| Sound | | `GetSoundList`, `PlaySound`, `StopSound`, `AddSound`, `DeleteSound` |
+| No-ops | `SetFrontTorchIntensity`, `SetBackTorchIntensity`, `ActivateLaserScan`; `GetObjectDetection` is always empty | `GetObjectDetectionFeatures` |
+
+Not implemented RPCs return `UNIMPLEMENTED`.
+
+| `StartCommand` command | |
+|---|---|
+| Implemented | MOVE_TO_POSE, MOVE_TO_LOCATION, RETURN_HOME, SPEAK (no audio), DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF |
+| Not implemented (fails) | LOCK, MOVE_FORWARD, ROTATE_IN_PLACE, DOCK_ANY_SHELF_WITH_REGISTRATION, LOCALIZE, MOVE_BY_VELOCITY_WITH_MUTED_SENSORS, DEPART_FROM_CHARGER |
 
 ## Performance
 

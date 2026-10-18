@@ -228,18 +228,26 @@ client.return_home()
 コマンドと場所の一覧は `command_server` が扱うので、ROS 2 側（`slam.launch.py nav:=true`）が必要です。
 ロボットの位置は slam_toolbox の map 座標で、`get_png_map` はその `/map` を返します。
 
-| 分類 | 対応しているもの |
-|---|---|
-| ロボット情報 | シリアル番号、バージョン、`is_ready`、エラーとエラーコード、位置、バッテリー |
-| センサー | オドメトリ、車輪オドメトリ、IMU、LiDAR、前後・ToF カメラの camera info・画像・圧縮画像、静的 TF |
-| 地図 | `get_png_map`、`get_map_list`、`get_current_map_id`（地図は `sim` の 1 枚） |
-| コマンド | MOVE_TO_POSE、MOVE_TO_LOCATION、RETURN_HOME、SPEAK、DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF。`cancel_command`、`get_command_state`、`get_last_command_result`、`proceed` |
-| レイアウト | `get_locations`、`get_default_location_id`、`get_shelves`、`get_moving_shelf_id` |
-| 操作 | `set_manual_control_enabled`、`set_robot_velocity`、`set_robot_stop`、自動充電、スピーカー音量 |
-| 何もしない | ライト、`activate_laser_scan`。`get_object_detection` は常に空 |
+`KachakaApi` サービス（kachaka-api 3.17.5.0）の RPC はすべて以下のどちらかに載っています。
+クライアントのメソッド名は RPC 名を snake_case にしたものです（`GetRobotPose` → `get_robot_pose`）。
 
-それ以外の RPC は `UNIMPLEMENTED` を返し、それ以外のコマンドは失敗します
-（[#12](https://github.com/atinfinity/kachaka_isaac_sim/issues/12)）。
+| 分類 | 対応 | 未実装（[#12](https://github.com/atinfinity/kachaka_isaac_sim/issues/12)） |
+|---|---|---|
+| ロボット情報 | `GetRobotSerialNumber`、`GetRobotVersion`、`IsReady`、`GetError`、`GetRobotErrorCodeJson`、`GetRobotPose`、`GetBatteryInfo` | `RestartRobot`、`SetEmergencyStop` |
+| センサー | `GetRosImu`、`GetRosOdometry`、`GetRosWheelOdometry`、`GetRosLaserScan`、`Get{Front,Back,Tof}CameraRos{CameraInfo,Image,CompressedImage}`、`GetStaticTransform` | `GetDynamicTransform` |
+| 地図 | `GetPngMap`、`GetMapList`、`GetCurrentMapId`（地図は `sim` の 1 枚） | `SwitchMap`、`LoadMapPreview`、`ExportMap`、`ImportMap`、`ImportImageAsMap`、`SetRobotPose` |
+| コマンド | `StartCommand`、`CancelCommand`、`GetCommandState`、`GetLastCommandResult`、`Proceed` | `GetShortcuts`、`StartShortcutCommand`、`GetHistoryList` |
+| レイアウト | `GetLocations`、`GetLocationsDigest`、`GetShelves`、`GetShelvesDigest`、`GetMovingShelfId` | `ResetShelfPose` |
+| 操作 | `SetManualControlEnabled`、`GetManualControlEnabled`、`SetRobotVelocity`、`SetAutoHomingEnabled`、`GetAutoHomingEnabled`、`SetSpeakerVolume`、`GetSpeakerVolume` | |
+| サウンド | | `GetSoundList`、`PlaySound`、`StopSound`、`AddSound`、`DeleteSound` |
+| 何もしない | `SetFrontTorchIntensity`、`SetBackTorchIntensity`、`ActivateLaserScan`。`GetObjectDetection` は常に空 | `GetObjectDetectionFeatures` |
+
+未実装の RPC は `UNIMPLEMENTED` を返します。
+
+| `StartCommand` のコマンド | |
+|---|---|
+| 対応 | MOVE_TO_POSE、MOVE_TO_LOCATION、RETURN_HOME、SPEAK（音声なし）、DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF |
+| 未実装（失敗する） | LOCK、MOVE_FORWARD、ROTATE_IN_PLACE、DOCK_ANY_SHELF_WITH_REGISTRATION、LOCALIZE、MOVE_BY_VELOCITY_WITH_MUTED_SENSORS、DEPART_FROM_CHARGER |
 
 ## 性能
 
