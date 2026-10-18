@@ -3,6 +3,7 @@
 #
 #   scripts/record_demo.sh        # Nav2 goals during SLAM -> docs/demo.gif
 #   scripts/record_demo.sh dock   # RETURN_HOME onto the charger -> docs/dock.gif
+#   scripts/record_demo.sh shelf  # dock, tow, turn and leave a shelf -> docs/shelf.gif
 #
 # Needs the ROS image (docker compose -f docker/compose.yaml build) and
 # ffmpeg on the host. Runs headless: RViz draws into Xvfb inside the container.
@@ -18,7 +19,11 @@ case "$DEMO" in
         GIF=docs/dock.gif
         VIEW=(-2.1 -1.7 2.0 -1.7 0.0 0.0)  # from the south like RViz (+x right), over box_b
         RUN="python3 /tests/ros_dock_check.py --demo" ;;
-    *) echo "usage: $0 [nav|dock]" >&2; exit 2 ;;
+    shelf)
+        GIF=docs/shelf.gif
+        VIEW=(0.9 -1.6 5.8 0.9 0.3 0.0)  # inside the south wall, looking down (+x right like RViz)
+        RUN="python3 /tests/ros_shelf_check.py --demo" ;;
+    *) echo "usage: $0 [nav|dock|shelf]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 DISPLAY_NUM=99
@@ -66,4 +71,4 @@ pgrep -f "^\S*/bin/python \S*run_sim.py" | xargs -r kill -INT
 for _ in $(seq 60); do pgrep -f "^\S*/bin/python \S*run_sim.py" >/dev/null || break; sleep 1; done
 
 echo "[demo] composing $GIF"
-.venv/bin/python scripts/make_demo_gif.py "$OUT" "$GIF" --rviz-crop ${RVIZ_CROP:-470 90 920 750}
+.venv/bin/python scripts/make_demo_gif.py "$OUT" "$GIF" --speed ${SPEED:-2} --rviz-crop ${RVIZ_CROP:-470 90 920 750}

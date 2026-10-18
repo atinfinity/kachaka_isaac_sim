@@ -17,11 +17,13 @@ def generate_launch_description():
     pkg = FindPackageShare("kachaka_sim_bringup")
     nav2 = FindPackageShare("nav2_bringup")
     use_sim_time = LaunchConfiguration("use_sim_time")
+    commands = IfCondition(PythonExpression(
+        ["'", LaunchConfiguration("nav"), "' == 'true' and '", LaunchConfiguration("command_server"), "' == 'true'"]))
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true", description="false for a real Kachaka"),
         DeclareLaunchArgument("rviz", default_value="true"),
         DeclareLaunchArgument("command_server", default_value="true",
-                              description="serve kachaka_command/execute (RETURN_HOME) and auto homing; "
+                              description="serve kachaka_command/execute (RETURN_HOME, shelves) and auto homing; "
                                           "false for a real Kachaka, which has its own"),
         DeclareLaunchArgument("nav", default_value="false", description="also start Nav2"),
         DeclareLaunchArgument("slam_params_file",
@@ -52,7 +54,12 @@ def generate_launch_description():
             executable="command_server",
             output="screen",
             parameters=[{"use_sim_time": use_sim_time}],
-            condition=IfCondition(PythonExpression(["'", LaunchConfiguration("nav"), "' == 'true' and '", LaunchConfiguration("command_server"), "' == 'true'"])),
+            condition=commands,
+        ),
+        IncludeLaunchDescription(
+            PathJoinSubstitution([pkg, "launch", "shelf_docking.launch.py"]),
+            launch_arguments={"use_sim_time": use_sim_time, "params_file": LaunchConfiguration("params_file")}.items(),
+            condition=commands,
         ),
         IncludeLaunchDescription(
             PathJoinSubstitution([pkg, "launch", "rviz.launch.py"]),

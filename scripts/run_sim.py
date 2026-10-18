@@ -39,6 +39,10 @@ def parse_args() -> argparse.Namespace:
                    help="place the charging dock where a docked robot is at X, Y, YAW (world frame). "
                         "Default: on the west wall in 'room', none elsewhere")
     p.add_argument("--no-charger", action="store_true", help="no charging dock")
+    p.add_argument("--shelf", type=float, nargs=3, action="append", metavar=("X", "Y", "YAW"),
+                   help="place a Kachaka Shelf where a robot docked under it is at X, Y, YAW (world frame; "
+                        "repeatable). Default: the shelves in config 'shelf.room' in 'room', none elsewhere")
+    p.add_argument("--no-shelves", action="store_true", help="no Kachaka Shelves")
     p.add_argument("--physics-hz", type=int, default=120)
     p.add_argument("--render-hz", type=float, default=10.0,
                    help="render and main-loop rate; keep it a multiple of the camera rate")
@@ -68,6 +72,27 @@ def publish_cameras(node, cameras, t: float, tof_off: bool = False) -> None:
             node.publish_image(t, cam.name, cam.cfg.frame_id, mm, "16UC1", cam.fx)
         else:
             node.publish_image(t, cam.name, cam.cfg.frame_id, data, "32FC1", cam.fx)
+
+
+def place_shelves(args, cfg):
+    """Shelf specs and extra locations for this world."""
+    from kachaka_isaac_sim.drive import Pose2D
+
+    if args.no_shelves or not SHELF_STL.exists():
+        return [], []
+    if args.shelf:
+        entries = [{"id": f"S{i + 1:02d}", "name": f"Shelf {i + 1}", "pose": pose}
+                   for i, pose in enumerate(args.shelf)]
+        locations = []
+    elif args.world == "room":
+        entries = [vars(e) for e in cfg.shelf.room]
+        locations = [{"id": e.id, "name": e.name, "pose": Pose2D(*e.pose)} for e in cfg.shelf.room_locations]
+    else:
+        return [], []
+    from kachaka_isaac_sim.shelves import ShelfSpec
+
+    specs = [ShelfSpec(e["id"], e["name"], f"/World/Shelves/{e['id']}", Pose2D(*e["pose"])) for e in entries]
+    return specs, locations
 
 
 def main() -> int:
@@ -102,7 +127,7 @@ def main() -> int:
     builtin = args.world in ("room", "empty")
     world.add_ground(stage, visible=builtin)
     if args.world == "room":
-        world.add_simple_room(stage, shelf_stl=SHELF_STL)
+        world.add_simple_room(stage)
     elif not builtin:
         world.load_world_usd(stage, world.resolve_world(args.world))
     charger_pose = None
@@ -113,8 +138,12 @@ def main() -> int:
             charger_pose = tuple(cfg.charger.room_pose)
     if charger_pose:
         world.add_charger(stage, "/World/Charger", charger_pose, cfg.charger)
+    shelf_specs, locations = place_shelves(args, cfg)
+    for spec in shelf_specs:
+        world.add_shelf(stage, spec.path, SHELF_STL, (spec.home.x, spec.home.y, spec.home.yaw), cfg.shelf)
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
+    world.disable_pin_collision(stage)
     cameras = []
     if not args.no_cameras:
         from kachaka_isaac_sim.cameras import create_cameras
@@ -149,17 +178,36 @@ def main() -> int:
     node = KachakaSimNode(cfg, ROBOT_URDF)
     for cam in cameras:
         node.add_camera(cam.name)
+    from kachaka_isaac_sim.drive import Pose2D, relative_pose
+
+    # SLAM starts its map at the odometry origin, i.e. the spawn pose, so
+    # sim-only poses for the ROS side are given relative to it.
+    spawn = Pose2D(args.x, args.y, args.yaw)
     charger = None
     if charger_pose:
-        from kachaka_isaac_sim.drive import Pose2D, relative_pose
         from kachaka_isaac_sim.power import Charger
 
         dock = Pose2D(*charger_pose)
         charger = Charger(dock, cfg.charger.tolerance_xy, cfg.charger.tolerance_yaw)
-        # SLAM starts its map at the odometry origin, i.e. the spawn pose.
-        node.publish_charger_pose(relative_pose(Pose2D(args.x, args.y, args.yaw), dock))
+        node.publish_charger_pose(relative_pose(spawn, dock))
+    shelves = None
+    if shelf_specs:
+        from kachaka_isaac_sim.shelves import Shelves
+        from kachaka_isaac_sim.world import SHELF_SIZE
+
+        shelves = Shelves(stage, shelf_specs, cfg.shelf)
+
+        def in_map(p):
+            m = relative_pose(spawn, p)
+            return [round(m.x, 4), round(m.y, 4), round(m.yaw, 4)]
+
+        node.publish_layout(
+            [{"id": s.id, "name": s.name, "home": in_map(s.home), "width": SHELF_SIZE[1], "depth": SHELF_SIZE[0]}
+             for s in shelf_specs],
+            [{"id": loc["id"], "name": loc["name"], "pose": in_map(loc["pose"])} for loc in locations])
     sim_start = SimulationManager.get_simulation_time()
-    robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed, charger)
+    robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed, charger,
+                     shelves, spawn)
     callbacks = [
         SimulationManager.register_callback(lambda dt, ctx: robot.pre_step(dt), SimulationEvent.PHYSICS_PRE_STEP),
         SimulationManager.register_callback(lambda dt, ctx: robot.post_step(dt), SimulationEvent.PHYSICS_POST_STEP),

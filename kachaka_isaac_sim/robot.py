@@ -32,11 +32,13 @@ from .urdf_tools import frame_pose, read_com, read_joints
 
 LEFT_WHEEL = "base_l_drive_wheel_joint"
 RIGHT_WHEEL = "base_r_drive_wheel_joint"
+DOCKING_JOINT = "docking_joint"
 
 
 class SimRobot:
     def __init__(self, articulation_path: str, robot_path: str, urdf_path: Path, cfg: SimpleNamespace,
-                 node: KachakaSimNode, start_time: float, seed: int | None = None, charger: Charger | None = None):
+                 node: KachakaSimNode, start_time: float, seed: int | None = None, charger: Charger | None = None,
+                 shelves=None, map_origin: Pose2D | None = None):
         self.cfg = cfg
         self.node = node
         self.t = start_time
@@ -44,6 +46,7 @@ class SimRobot:
         self.dof_names = self.art.dof_names
         self.i_left = self.dof_names.index(LEFT_WHEEL)
         self.i_right = self.dof_names.index(RIGHT_WHEEL)
+        self.i_pin = self.dof_names.index(DOCKING_JOINT) if DOCKING_JOINT in self.dof_names else None
         self._configure_drives()
 
         d = cfg.drive
@@ -60,6 +63,13 @@ class SimRobot:
         self.on_charger = False
         # The real robot turns its LiDAR and ToF off on the charger.
         self.sensors_off_on_charger = bool(cfg.charger.sensors_off)
+        self.shelves = shelves  # shelves.Shelves or None
+        self.map_origin = map_origin or Pose2D(0.0, 0.0, 0.0)  # world pose of the map frame
+        self.gt = Pose2D(0.0, 0.0, 0.0)
+        self.next_shelves = start_time
+        if shelves is not None:
+            node.shelf_dock_handler = self.set_shelf_docked
+            node.publish_shelf_docked("")
 
         joints = read_joints(urdf_path)
         self.lidar = Lidar(cfg.lidar, *frame_pose(joints, cfg.lidar.frame_id), robot_path, seed)
@@ -92,6 +102,29 @@ class SimRobot:
         targets = [[0.0] * len(self.dof_names)]
         targets[0][self.i_left], targets[0][self.i_right] = wl, wr
         self.art.set_dof_velocity_targets(targets)
+        if self.i_pin is not None:
+            pin = [[0.0] * len(self.dof_names)]
+            pin[0][self.i_pin] = self.PIN_UP if self.towing else 0.0
+            self.art.set_dof_position_targets(pin)
+
+    PIN_UP = 0.012  # m, docking_joint upper limit
+
+    @property
+    def towing(self) -> bool:
+        return self.shelves is not None and self.shelves.docked is not None
+
+    def set_shelf_docked(self, dock: bool) -> tuple[bool, str]:
+        """Raise the pin into the shelf above the robot, or lower it. Called
+        from ROS (sim/shelf_dock) between physics steps."""
+        sh = self.shelves
+        ok, msg = sh.dock(self.gt) if dock else sh.undock()
+        if ok:
+            d = self.cfg.drive
+            self.limiter.limits.max_linear_vel = (min(d.max_linear_vel, d.max_linear_vel_towing) if self.towing
+                                                  else d.max_linear_vel)
+            self.lidar.ignore = {sh.docked_path} if self.towing else set()
+            self.node.publish_shelf_docked(sh.specs[sh.docked].id if self.towing else "")
+        return ok, msg
 
     def post_step(self, dt: float) -> None:
         self.t += dt
@@ -115,6 +148,7 @@ class SimRobot:
             qd = self.art.get_dof_velocities().numpy()[0]
             yaw = yaw_from_quat(*quat)
             gt = Pose2D(float(pos[0]), float(pos[1]), yaw)
+            self.gt = gt
             self.on_charger = self.charger is not None and self.charger.docked(gt)
             # The COM offset only adds a sideways term, so the forward
             # projection of the COM velocity is exact.
@@ -128,6 +162,14 @@ class SimRobot:
                 if math.hypot(rel.x, rel.y) <= self.cfg.charger.detection_range:
                     node.publish_charger_detection(t, rel)
             node.publish_joints(t, self.dof_names, q, qd)
+            if self.shelves is not None:
+                # The real robot finds shelves with its cameras; the
+                # simulator hands their poses over instead.
+                poses = self.shelves.update()
+                node.publish_shelf_detection(t, [relative_pose(gt, p) for p in poses])
+                if t + 1e-9 >= self.next_shelves:
+                    self.next_shelves += 0.5
+                    node.publish_shelf_poses(t, [relative_pose(self.map_origin, p) for p in poses])
 
         if t + 1e-9 >= self.next_lidar:
             self.next_lidar += self.lidar_period

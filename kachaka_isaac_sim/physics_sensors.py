@@ -48,6 +48,7 @@ class Lidar:
         self.query = get_physx_scene_query_interface()
         self.cfg = cfg
         self.robot_prefix = robot_path + "/"
+        self.ignore: set[str] = set()  # rigid bodies to see through (a towed shelf)
         self.offset = np.array(mount_xyz, dtype=float)
         self.mount_rot = quat_to_matrix(*mount_quat)
         self.rng = random.Random(seed)
@@ -73,10 +74,11 @@ class Lidar:
         cfg = self.cfg
         o = (float(origin[0]), float(origin[1]), float(origin[2]))
         prefix = self.robot_prefix
+        ignore = self.ignore
         best = [math.inf]
 
         def on_hit(hit) -> bool:
-            if not hit.rigid_body.startswith(prefix) and hit.distance < best[0]:
+            if not hit.rigid_body.startswith(prefix) and hit.rigid_body not in ignore and hit.distance < best[0]:
                 best[0] = hit.distance
             return True  # hits are not sorted, so look at all of them
 

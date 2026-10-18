@@ -12,9 +12,8 @@ applications. Synthetic data generation is a secondary use.
 - **MVP**: differential drive, odometry/TF, LiDAR, front/back RGB cameras,
   ToF depth, IMU, and stubs (battery, version, `set_enabled` services,
   `robot_description`, `joint_states`). Kachaka Shelf placed as a static obstacle.
-- **Phase 2**: shelf docking (shelf as a caster articulation, joint created
-  between robot and shelf when the docking pin rises), `goal_pose`, the other
-  `kachaka_command/execute` commands. Charger, battery and RETURN_HOME are done.
+- **Phase 2**: `goal_pose` and the other `kachaka_command/execute` commands.
+  Charger, battery, RETURN_HOME and shelf docking/carrying are done.
 - One robot; namespace and frame prefix are parameters.
 
 ## Runtime
@@ -54,10 +53,12 @@ generic names (`/cmd_vel`, `/scan`, `/odom`).
 | `robot_info/version` | stub | |
 | `manual_control/set_enabled` | SetBool | stub, always succeeds |
 | `sim/charger_pose`, `sim/charger_detection` | PoseStamped | sim-only, see Charger below |
+| `sim/layout`, `sim/shelf_poses`, `sim/shelf_detection`, `sim/shelf_docked`, `sim/shelf_dock` (srv) | | sim-only, see Kachaka Shelf below |
 
 `kachaka_sim_bringup`'s `command_server` adds the parts the real robot runs
-itself: `kachaka_command/execute` (RETURN_HOME), `layout/locations/list`
-(charger, id `home`) and `auto_homing/set_enabled`.
+itself: `kachaka_command/execute` (RETURN_HOME and the shelf commands),
+`layout/locations/list` (charger id `home`, shelf homes `<shelf>_home`),
+`layout/shelves/list` and `auto_homing/set_enabled`.
 | `robot_description`, `joint_states` | | |
 
 TF follows the real robot: URDF frames plus `laser_link`, `camera_front`,
@@ -66,7 +67,7 @@ are known).
 
 ## World
 Isaac Sim bundled indoor assets plus Kachaka Shelf models from
-`GAI-313/kachaka_shelf_description` (MIT) as obstacles.
+`GAI-313/kachaka_shelf_description` (MIT) that the robot can dock with and carry.
 
 ## Acceptance criteria (MVP)
 1. Teleop drives the robot at the commanded speed.
@@ -128,3 +129,40 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   without velocity commands, or below 15 % battery. Retries wait 60 s.
 - Result error codes of `kachaka_command/execute` are the simulator's own
   (negative); the real ones are not published.
+
+## Kachaka Shelf
+- **Model.** The 3-layer shelf mesh from `GAI-313/kachaka_shelf_description`
+  as a rigid body (6 kg *(est.)*) on four low-friction caster spheres. Its pose
+  is the `base_footprint` pose of a robot docked under it.
+- **Docking.** `sim/shelf_dock` raises the pin when the robot is within 5 cm
+  and 0.2 rad of that pose (either direction along the shelf's x axis) and
+  joins robot and shelf with a fixed joint; lowering the pin removes it. While
+  towing, the speed is capped at `drive.max_linear_vel_towing` (0.5 m/s; Nav2's
+  0.3 m/s limit is lower) and the LiDAR ignores the towed shelf.
+- **LiDAR sees the legs only.** The scan plane (z 0.105 m) lies just under the
+  bottom plate, so its collider starts at 0.107 m. Otherwise the shelf showed
+  up in the map as a closed box and Nav2 could not plan out from under it.
+- **Forward docking with a second docking server.** Jazzy's `opennav_docking`
+  takes the docking direction per server, so `shelf_docking.launch.py` runs
+  `shelf_docking_server` (`dock_backwards: false`, SimpleNonChargingDock with
+  external detection) next to the charger's. Staging is 0.9 m in front of the
+  docked pose. The server aims 0.25 m past the dock pose and checks collisions
+  up to that point, so `dock_collision_threshold` is 0.85 m: far enough that
+  the shelf's own legs do not count.
+- **Side.** A shelf can be entered from either end. `command_server` picks the
+  end facing the robot, switches to the other one if the staging pose is in
+  an occupied or unknown costmap cell, and retries the other end when staging fails.
+- **Detection.** As with the charger, the simulator publishes shelf poses
+  relative to the robot (`sim/shelf_detection`) and `command_server` relays the
+  chosen one to `shelf_detected_dock_pose`. To put a shelf down at a location,
+  it relays the location's pose (from SLAM) instead, so placement is as good
+  as SLAM: 3–8 cm in the test room.
+- **Footprint.** On `sim/shelf_docked`, `command_server` publishes the shelf's
+  footprint to both costmaps' `footprint` topics (and back on undock) and
+  clears the costmaps.
+- **Undocking** lowers the pin and drives 0.40 m forward at 0.15 m/s on
+  `manual_control/cmd_vel`. It refuses (error −9) when the LiDAR sees
+  something in that path, since the robot does not reverse.
+- **Not modelled.** The real robot finds shelves with its cameras and shows
+  each shelf's speed mode; here detection is handed over by the simulator and
+  speed mode is always the default.

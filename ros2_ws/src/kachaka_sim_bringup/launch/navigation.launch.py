@@ -21,7 +21,7 @@ def generate_launch_description():
         DeclareLaunchArgument("use_sim_time", default_value="true", description="false for a real Kachaka"),
         DeclareLaunchArgument("rviz", default_value="true"),
         DeclareLaunchArgument("command_server", default_value="true",
-                              description="serve kachaka_command/execute (RETURN_HOME) and auto homing; "
+                              description="serve kachaka_command/execute (RETURN_HOME, shelves) and auto homing; "
                                           "false for a real Kachaka, which has its own"),
         DeclareLaunchArgument("params_file", default_value=PathJoinSubstitution([pkg, "config", "nav2_params.yaml"])),
         IncludeLaunchDescription(
@@ -45,6 +45,11 @@ def generate_launch_description():
             executable="command_server",
             output="screen",
             parameters=[{"use_sim_time": use_sim_time}],
+            condition=IfCondition(LaunchConfiguration("command_server")),
+        ),
+        IncludeLaunchDescription(
+            PathJoinSubstitution([pkg, "launch", "shelf_docking.launch.py"]),
+            launch_arguments={"use_sim_time": use_sim_time, "params_file": params}.items(),
             condition=IfCondition(LaunchConfiguration("command_server")),
         ),
         IncludeLaunchDescription(

@@ -22,9 +22,10 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
   Nav2 never drives backwards, since Kachaka has no rear range sensor.
-- `kachaka_command/execute` with RETURN_HOME, and auto homing, built on Nav2's docking server.
+- `kachaka_command/execute` with RETURN_HOME, auto homing and the Kachaka Shelf commands
+  (DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF), built on Nav2's docking server.
 
-Shelf docking and the other commands are planned ([#2](https://github.com/atinfinity/kachaka_isaac_sim/issues/2)).
+The other commands are planned ([#2](https://github.com/atinfinity/kachaka_isaac_sim/issues/2)).
 
 ### Returning to the charger
 
@@ -40,6 +41,37 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 This needs the ROS 2 stack with Nav2 (`NAV=true ... up slam`, or `up navigation`),
 which runs `command_server`. The robot leaves the charger with any Nav2 goal.
 Battery rates and the charger's size are estimates (`config/robot.yaml`).
+
+### Carrying a shelf
+
+![The robot docks under the shelf, tows it to another location, turning on the way, puts it down and drives out forward](docs/shelf.gif)
+
+*DOCK_SHELF, then MOVE_SHELF to another location and UNDOCK_SHELF (3× speed).*
+
+The room has one Kachaka Shelf (`S01`, home location `S01_home`) and one other
+location (`L01`). The robot drives in under a shelf forward, raises its pin and
+tows the shelf on its casters (≤ 0.5 m/s, `drive.max_linear_vel_towing`; Nav2's
+own limit of 0.3 m/s is lower). Nav2's footprint grows to the shelf's while towing.
+Undocking lowers the pin and drives forward out of the shelf; it fails if
+something blocks the way.
+
+```bash
+ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action/ExecKachakaCommand \
+    "{kachaka_command: {command_type: 1, move_shelf_command_target_shelf_id: S01,
+      move_shelf_command_destination_location_id: L01, move_shelf_command_undock_on_destination: true}}"   # MOVE_SHELF_COMMAND
+```
+
+| Command | What it does |
+|---|---|
+| DOCK_SHELF | docks with the shelf in front of the robot (within 1.5 m) |
+| UNDOCK_SHELF | puts the towed shelf down and drives out forward |
+| MOVE_SHELF | docks with the shelf if needed, tows it to a location, optionally undocks |
+| RETURN_SHELF | MOVE_SHELF to the shelf's home location, then undocks |
+| RETURN_HOME | returns a towed shelf home first, then docks with the charger |
+
+Shelves are listed on `layout/shelves/list` and their homes on
+`layout/locations/list`. Place shelves with `--shelf X Y YAW`. The shelf lands
+where SLAM puts the location, a few centimetres off the world.
 
 ## Requirements
 
@@ -96,6 +128,8 @@ scripts/run_sim.sh --no-cameras          # faster, when you only need LiDAR and 
 scripts/run_sim.sh --render-hz 20        # render/camera loop rate (see Performance)
 scripts/run_sim.sh --charger X Y YAW     # place the charger (default: by the west wall of the room)
 scripts/run_sim.sh --no-charger
+scripts/run_sim.sh --shelf X Y YAW       # place a shelf (repeatable; default: one in the room)
+scripts/run_sim.sh --no-shelves
 scripts/run_sim.sh --help
 ```
 
@@ -125,11 +159,16 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/ground_truth` | `nav_msgs/Odometry` (simulator only) | 20 Hz |
 | `sim/charger_pose` | `geometry_msgs/PoseStamped` (simulator only, latched) | |
 | `sim/charger_detection` | `geometry_msgs/PoseStamped`, charger relative to the robot within 1.5 m (simulator only) | 20 Hz |
+| `sim/layout` | `std_msgs/String`, JSON with the shelves and extra locations (simulator only, latched) | |
+| `sim/shelf_poses` | `geometry_msgs/PoseArray`, shelves in the map frame (simulator only) | 2 Hz |
+| `sim/shelf_detection` | `geometry_msgs/PoseArray`, shelves relative to the robot (simulator only) | 20 Hz |
+| `sim/shelf_docked` | `std_msgs/String`, id of the towed shelf or empty (simulator only, latched) | |
+| `sim/shelf_dock` | `std_srvs/SetBool` service: raise or lower the pin (simulator only) | |
 
 `kachaka_sim_bringup`'s `command_server` provides what the real robot does
-itself: the `kachaka_command/execute` action (RETURN_HOME only; other
-commands abort), `layout/locations/list` with the charger, and the
-`auto_homing/set_enabled` service. Do not run it with a real Kachaka
+itself: the `kachaka_command/execute` action (RETURN_HOME and the shelf
+commands; others abort), `layout/locations/list` and `layout/shelves/list`,
+and the `auto_homing/set_enabled` service. Do not run it with a real Kachaka
 (`command_server:=false`).
 
 `/clock` and `/tf` are published at the top level; use `use_sim_time:=true` on
@@ -177,9 +216,10 @@ python3 /tests/ros_sensor_check.py   # topic rates, LiDAR ranges against the roo
 python3 /tests/ros_camera_check.py /tmp/images
 python3 /tests/ros_nav_check.py      # Nav2 goals (needs slam.launch.py nav:=true)
 python3 /tests/ros_dock_check.py     # charger, battery and RETURN_HOME (same)
+python3 /tests/ros_shelf_check.py    # shelf docking, towing and placing (same)
 ```
 
-`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger).
+`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf).
 
 ## License
 

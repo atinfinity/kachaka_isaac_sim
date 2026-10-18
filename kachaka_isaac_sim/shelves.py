@@ -1,0 +1,74 @@
+"""Kachaka Shelves in the running simulation: poses, docking and undocking.
+
+Import only after SimulationApp has started.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from types import SimpleNamespace
+
+from isaacsim.core.experimental.prims import RigidPrim
+from pxr import Usd
+
+from .drive import Pose2D, quat_from_yaw, relative_pose, wrap_angle, yaw_from_quat
+from .world import ShelfJoint
+
+
+@dataclass
+class ShelfSpec:
+    id: str
+    name: str
+    path: str
+    home: Pose2D  # world frame
+
+
+def dock_offset(robot: Pose2D, shelf: Pose2D, tol_xy: float, tol_yaw: float) -> Pose2D | None:
+    """The shelf pose relative to the robot if the robot is under it, close
+    enough to its centre and lined up with its x axis (either way), else None."""
+    rel = relative_pose(robot, shelf)
+    yaw_err = min(abs(wrap_angle(rel.yaw)), abs(wrap_angle(rel.yaw - math.pi)))
+    if math.hypot(rel.x, rel.y) <= tol_xy and yaw_err <= tol_yaw:
+        return rel
+    return None
+
+
+class Shelves:
+    def __init__(self, stage: Usd.Stage, specs: list[ShelfSpec], cfg: SimpleNamespace):
+        self.specs = specs
+        self.cfg = cfg
+        self.view = RigidPrim([s.path for s in specs])
+        self.joints = [ShelfJoint(stage, s.path) for s in specs]
+        self.poses = [s.home for s in specs]
+        self.docked: int | None = None  # index of the towed shelf
+
+    def update(self) -> list[Pose2D]:
+        pos, quat = (a.numpy() for a in self.view.get_world_poses())
+        self.poses = [Pose2D(float(p[0]), float(p[1]), yaw_from_quat(*map(float, q))) for p, q in zip(pos, quat)]
+        return self.poses
+
+    @property
+    def docked_path(self) -> str | None:
+        return None if self.docked is None else self.specs[self.docked].path
+
+    def dock(self, robot: Pose2D) -> tuple[bool, str]:
+        if self.docked is not None:
+            return True, f"already docked with {self.specs[self.docked].id}"
+        self.update()
+        for i, pose in enumerate(self.poses):
+            rel = dock_offset(robot, pose, self.cfg.dock_tolerance_xy, self.cfg.dock_tolerance_yaw)
+            if rel is None:
+                continue
+            # Both bodies stand on the floor, so the planar offset is enough.
+            self.joints[i].attach((rel.x, rel.y, 0.0), quat_from_yaw(rel.yaw))
+            self.docked = i
+            return True, f"docked with {self.specs[i].id}"
+        return False, "no shelf above the robot"
+
+    def undock(self) -> tuple[bool, str]:
+        if self.docked is None:
+            return True, "no shelf docked"
+        i, self.docked = self.docked, None
+        self.joints[i].detach()
+        return True, f"undocked {self.specs[i].id}"
