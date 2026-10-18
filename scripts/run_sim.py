@@ -51,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-sim-time", type=float, default=0.0, help="exit after this many sim seconds (0: never)")
     p.add_argument("--seed", type=int, default=None, help="seed for sensor and odometry noise")
     p.add_argument("--no-cameras", action="store_true", help="skip RGB and ToF cameras (faster)")
+    p.add_argument("--api-port", type=int, default=26400,
+                   help="port of the kachaka-api gRPC server (0: no server)")
     p.add_argument("--record", metavar="DIR", help="save bird's-eye PNG frames to DIR (for demo videos)")
     p.add_argument("--record-hz", type=float, default=10.0, help="frame rate for --record")
     p.add_argument("--record-view", type=float, nargs=6, default=[0.0, -2.4, 7.5, 0.0, -0.1, 0.0],
@@ -178,6 +180,11 @@ def main() -> int:
     node = KachakaSimNode(cfg, ROBOT_URDF)
     for cam in cameras:
         node.add_camera(cam.name)
+    api = None
+    if args.api_port:
+        from kachaka_isaac_sim.api_server import KachakaApiServer
+
+        api = KachakaApiServer(node, args.api_port)
     from kachaka_isaac_sim.drive import Pose2D, relative_pose
 
     # SLAM starts its map at the odometry origin, i.e. the spawn pose, so
@@ -216,6 +223,8 @@ def main() -> int:
     timing = [0.0, 0.0, 0]  # update seconds, camera seconds, loop count
     wall_start = time.monotonic()
     where = f", charger at {charger_pose}" if charger_pose else ""
+    if api:
+        where += f", kachaka-api on port {args.api_port}"
     print(f"[kachaka] running: ROS namespace '{node.ns}', world '{args.world}'{where}", flush=True)
     try:
         while app.is_running():
@@ -249,6 +258,8 @@ def main() -> int:
     if recorder:
         recorder.close()
         print(f"[kachaka] recorded {recorder.count} frames to {args.record}", flush=True)
+    if api:
+        api.stop()
     node.shutdown()
     # SimulationApp.close() can abort on Isaac Sim 6.1; nothing is left to save.
     os._exit(0)

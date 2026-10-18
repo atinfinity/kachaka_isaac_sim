@@ -25,6 +25,8 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - 実機ブリッジの全コマンドに対応した `kachaka_command/execute`（Nav2 ベース）: MOVE_TO_POSE、
   MOVE_TO_LOCATION、RETURN_HOME、SPEAK（テキストのみ）、カチャカシェルフのコマンド
   （DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF）。`goal_pose` と自動充電にも対応
+- ポート 26400 で [kachaka-api](https://github.com/pf-robotics/kachaka-api) の gRPC API を提供。
+  公式の Python クライアント（`KachakaApiClient`）が実機なしで使えます
 
 ### コマンド
 
@@ -149,6 +151,7 @@ scripts/run_sim.sh --charger X Y YAW     # 充電器の位置（既定: 部屋�
 scripts/run_sim.sh --no-charger
 scripts/run_sim.sh --shelf X Y YAW       # シェルフを置く（複数可。デフォルトは部屋に 1 台）
 scripts/run_sim.sh --no-shelves
+scripts/run_sim.sh --api-port 26400      # kachaka-api の gRPC ポート（既定 26400。0 で無効）
 scripts/run_sim.sh --help
 ```
 
@@ -184,6 +187,8 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/shelf_docked` | `std_msgs/String`、牽引中のシェルフ ID か空文字（シミュレータのみ、latched） | |
 | `sim/shelf_dock` | `std_srvs/SetBool` サービス、ピンの上げ下げ（シミュレータのみ） | |
 | `sim/speech` | `std_msgs/String`、SPEAK と `tts_on_success` のテキスト（シミュレータのみ） | |
+| `sim/command/start`、`sim/command/cancel` | `std_msgs/String`、JSON。kachaka-api サーバーから `command_server` へのコマンド（シミュレータのみ） | |
+| `sim/command/state` | `std_msgs/String`、JSON。実行中のコマンドと最後の結果（シミュレータのみ、latched） | |
 
 実機が自分で提供している機能は `kachaka_sim_bringup` の `command_server` が提供します。
 `kachaka_command/execute` action、`goal_pose`、
@@ -197,6 +202,52 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 
 `ros2_ws/src/kachaka_sim_bringup` は `/kachaka` の topic にしか依存しないので、実機
 （`use_sim_time:=false`、`command_server:=false`）でも動くはずです。ただし未確認です。
+
+## kachaka-api（gRPC）
+
+シミュレータは実機と同じくポート 26400 で [kachaka-api](https://github.com/pf-robotics/kachaka-api)
+の gRPC API を提供します。ホストに公式クライアントを入れて（ROS は不要）シミュレータに接続します。
+
+```bash
+pip install kachaka-api
+```
+
+```python
+from kachaka_api import KachakaApiClient
+
+client = KachakaApiClient("127.0.0.1:26400")
+print(client.get_robot_pose())
+client.update_resolver()
+client.speak("hello")
+client.move_to_location("L01")
+client.move_shelf("S01", "L01")
+client.return_shelf("S01")
+client.return_home()
+```
+
+コマンドと場所の一覧は `command_server` が扱うので、ROS 2 側（`slam.launch.py nav:=true`）が必要です。
+ロボットの位置は slam_toolbox の map 座標で、`get_png_map` はその `/map` を返します。
+
+`KachakaApi` サービス（kachaka-api 3.17.5.0）の RPC はすべて以下のどちらかに載っています。
+クライアントのメソッド名は RPC 名を snake_case にしたものです（`GetRobotPose` → `get_robot_pose`）。
+
+| 分類 | 対応 | 未実装（[#12](https://github.com/atinfinity/kachaka_isaac_sim/issues/12)） |
+|---|---|---|
+| ロボット情報 | `GetRobotSerialNumber`、`GetRobotVersion`、`IsReady`、`GetError`、`GetRobotErrorCodeJson`、`GetRobotPose`、`GetBatteryInfo` | `RestartRobot`、`SetEmergencyStop` |
+| センサー | `GetRosImu`、`GetRosOdometry`、`GetRosWheelOdometry`、`GetRosLaserScan`、`Get{Front,Back,Tof}CameraRos{CameraInfo,Image,CompressedImage}`、`GetStaticTransform` | `GetDynamicTransform` |
+| 地図 | `GetPngMap`、`GetMapList`、`GetCurrentMapId`（地図は `sim` の 1 枚） | `SwitchMap`、`LoadMapPreview`、`ExportMap`、`ImportMap`、`ImportImageAsMap`、`SetRobotPose` |
+| コマンド | `StartCommand`、`CancelCommand`、`GetCommandState`、`GetLastCommandResult`、`Proceed` | `GetShortcuts`、`StartShortcutCommand`、`GetHistoryList` |
+| レイアウト | `GetLocations`、`GetLocationsDigest`、`GetShelves`、`GetShelvesDigest`、`GetMovingShelfId` | `ResetShelfPose` |
+| 操作 | `SetManualControlEnabled`、`GetManualControlEnabled`、`SetRobotVelocity`、`SetAutoHomingEnabled`、`GetAutoHomingEnabled`、`SetSpeakerVolume`、`GetSpeakerVolume` | |
+| サウンド | | `GetSoundList`、`PlaySound`、`StopSound`、`AddSound`、`DeleteSound` |
+| 何もしない | `SetFrontTorchIntensity`、`SetBackTorchIntensity`、`ActivateLaserScan`。`GetObjectDetection` は常に空 | `GetObjectDetectionFeatures` |
+
+未実装の RPC は `UNIMPLEMENTED` を返します。
+
+| `StartCommand` のコマンド | |
+|---|---|
+| 対応 | MOVE_TO_POSE、MOVE_TO_LOCATION、RETURN_HOME、SPEAK（音声なし）、DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF |
+| 未実装（失敗する） | LOCK、MOVE_FORWARD、ROTATE_IN_PLACE、DOCK_ANY_SHELF_WITH_REGISTRATION、LOCALIZE、MOVE_BY_VELOCITY_WITH_MUTED_SENSORS、DEPART_FROM_CHARGER |
 
 ## 性能
 
@@ -233,6 +284,12 @@ python3 /tests/ros_nav_check.py      # Nav2 のゴール（slam.launch.py nav:=t
 python3 /tests/ros_dock_check.py     # 充電器、バッテリー、RETURN_HOME（同上）
 python3 /tests/ros_shelf_check.py    # シェルフのドッキング、牽引、設置（同上）
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK、goal_pose、cancel_all（同上）
+```
+
+kachaka-api のテストはホストで公式クライアントを使って実行します（準備は同上）:
+
+```bash
+uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 ```
 
 上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`）。

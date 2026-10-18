@@ -21,6 +21,12 @@
     it the command waits until the earlier ones finish, as on the real robot.
 - Topic `/kachaka/goal_pose` (PoseStamped): sends MOVE_TO_POSE through the
   action without `cancel_all`, like the real bridge.
+- The simulator's kachaka-api gRPC server (kachaka_isaac_sim/api_server.py)
+  starts commands on `sim/command/start` and cancels the running one on
+  `sim/command/cancel` (JSON in std_msgs/String). `sim/command/state`
+  (latched JSON) reports the running command and the last result of every
+  command, from either side, like the real robot's GetCommandState and
+  GetLastCommandResult.
 - Topic `/kachaka/layout/locations/list`: the charger, the shelves' homes and
   the world's other locations. Topic `/kachaka/layout/shelves/list`: the
   shelves with their current poses. Both come from simulator topics
@@ -40,6 +46,7 @@ import json
 import math
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 
 import rclpy
@@ -72,6 +79,7 @@ from sensor_msgs.msg import BatteryState, LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 from tf2_ros import Buffer, TransformException, TransformListener
+from unique_identifier_msgs.msg import UUID
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 
@@ -188,6 +196,10 @@ class CommandServer(Node):
         self.last_activity = self.get_clock().now()
         self.lock = threading.Lock()  # one command at a time
         self.request_id = 0  # bumped by each command that cancels the others; older ones stop
+        self.run_seq = 0  # numbers the commands as they start running
+        self.cancel_seq = 0  # sim/command/cancel stops the running command with this number
+        self.state_lock = threading.Lock()
+        self.state = {"running": None, "last": None}  # published on sim/command/state
         self.auto_retry_at = 0.0  # monotonic time; wait after a failed auto homing
         self.shelf_target = None  # what the shelf docking server should see (see _relay_shelf)
         self.dock_error = 0  # DockRobot error code of the last failed docking
@@ -240,6 +252,12 @@ class CommandServer(Node):
         self.self_client = ActionClient(self, ExecKachakaCommand, f"{prefix}/kachaka_command/execute",
                                         callback_group=group)
         self.create_subscription(PoseStamped, f"{prefix}/goal_pose", self._on_goal_pose, 5, callback_group=group)
+        self.state_pub = self.create_publisher(String, f"{prefix}/sim/command/state", LATCHED)
+        self.create_subscription(String, f"{prefix}/sim/command/start", self._on_api_start, 10,
+                                 callback_group=group)
+        self.create_subscription(String, f"{prefix}/sim/command/cancel", self._on_api_cancel, 10,
+                                 callback_group=group)
+        self._set_state()
         self.action_server = ActionServer(
             self, ExecKachakaCommand, f"{prefix}/kachaka_command/execute",
             execute_callback=self._execute,
@@ -299,6 +317,30 @@ class CommandServer(Node):
         goal.kachaka_command.move_to_pose_command_yaw = p.yaw
         self.self_client.send_goal_async(goal)
         self.get_logger().info(f"sent goal_pose ({p.x:.3f}, {p.y:.3f}, {p.yaw:.3f})")
+
+    def _on_api_start(self, msg: String) -> None:
+        """A command from the gRPC server, sent through the action under the
+        gRPC command id so sim/command/state reports it under that id."""
+        req = json.loads(msg.data)
+        goal = ExecKachakaCommand.Goal(cancel_all=bool(req.get("cancel_all")),
+                                       tts_on_success=str(req.get("tts_on_success", "")))
+        cmd = goal.kachaka_command
+        command_type = int(req.get("command_type", 0))
+        cmd.command_type = command_type if 0 <= command_type < 256 else KachakaCommand.COMMAND_TYPE_OTHER
+        for k, v in req.get("fields", {}).items():
+            if k != "command_type" and hasattr(cmd, k):
+                setattr(cmd, k, type(getattr(cmd, k))(v))
+        self.self_client.send_goal_async(goal, goal_uuid=UUID(uuid=list(bytes.fromhex(req["id"]))))
+
+    def _on_api_cancel(self, _msg: String) -> None:
+        if self.state["running"] is not None:
+            self.cancel_seq = self.run_seq
+            self.get_logger().info("cancel requested")
+
+    def _set_state(self, **changes) -> None:
+        with self.state_lock:
+            self.state.update(changes)
+            self.state_pub.publish(String(data=json.dumps(self.state)))
 
     def _on_set_auto_homing(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
         self.auto_homing = req.data
@@ -385,6 +427,9 @@ class CommandServer(Node):
     # --- kachaka_command/execute ----------------------------------------------
     def _execute(self, goal_handle) -> ExecKachakaCommand.Result:
         cmd = goal_handle.request.kachaka_command
+        info = {"id": bytes(goal_handle.goal_id.uuid).hex(), "command_type": cmd.command_type,
+                "fields": {k: getattr(cmd, k) for k in cmd.get_fields_and_field_types()
+                           if k != "command_type" and getattr(cmd, k)}}
         handlers = {
             KachakaCommand.RETURN_HOME_COMMAND: self._return_home,
             KachakaCommand.DOCK_SHELF_COMMAND: self._dock_shelf_command,
@@ -405,13 +450,13 @@ class CommandServer(Node):
         if handler is None:
             msg = f"command_type {cmd.command_type} is not supported by the simulator yet"
             self.get_logger().warn(msg)
+            self._set_state(last={**info, "success": False, "error_code": ERROR_UNSUPPORTED})
             goal_handle.abort()
             return ExecKachakaCommand.Result(success=False, error_code=ERROR_UNSUPPORTED, message=msg)
-        code, msg = self.run(handler, goal_handle, goal_handle.request.cancel_all)
+        code, msg = self.run(handler, goal_handle, goal_handle.request.cancel_all, info,
+                             goal_handle.request.tts_on_success)
         if code != OK:
             self.get_logger().warn(f"command {cmd.command_type} failed: {msg} ({code})")
-        elif goal_handle.request.tts_on_success:
-            self._speak(goal_handle.request.tts_on_success)
         result = ExecKachakaCommand.Result(success=code == OK, error_code=code, message=msg)
         if code == OK:
             goal_handle.succeed()
@@ -421,29 +466,43 @@ class CommandServer(Node):
             goal_handle.abort()
         return result
 
-    def run(self, handler, goal_handle=None, cancel_all=True) -> tuple[int, str]:
+    def run(self, handler, goal_handle=None, cancel_all=True, info=None, tts="") -> tuple[int, str]:
         """Run one command and block until it ends. With cancel_all it stops
         the running command and the queued ones; without, it waits its turn.
-        Either way a later command with cancel_all stops it."""
+        Either way a later command with cancel_all stops it. `info` (id,
+        command_type, fields) is what sim/command/state reports; `tts` is
+        spoken after success."""
         if cancel_all:
             self.request_id += 1
         my_id = self.request_id
+        my_seq = -1
 
         def stopped() -> bool:
-            return my_id != self.request_id or (goal_handle is not None and goal_handle.is_cancel_requested)
+            return my_id != self.request_id or self.cancel_seq == my_seq or \
+                (goal_handle is not None and goal_handle.is_cancel_requested)
 
+        code, msg = ERROR_CANCELED, "canceled before it started"
         with self.lock:
-            if stopped():
-                return ERROR_CANCELED, "canceled before it started"
-            self.last_activity = self.get_clock().now()
             try:
-                return handler(stopped)
+                if not stopped():
+                    self.run_seq += 1
+                    my_seq = self.run_seq
+                    self._set_state(running=info)
+                    self.last_activity = self.get_clock().now()
+                    code, msg = handler(stopped)
+                    if code == OK and tts:
+                        self._speak(tts)
             finally:
                 self.shelf_target = None
                 self.last_activity = self.get_clock().now()
+                last = {**info, "success": code == OK, "error_code": code} if info else self.state["last"]
+                self._set_state(running=None, last=last)
+        return code, msg
 
     def return_home(self) -> tuple[int, str]:
-        return self.run(self._return_home)
+        """RETURN_HOME outside the action (auto homing)."""
+        info = {"id": uuid.uuid4().hex, "command_type": KachakaCommand.RETURN_HOME_COMMAND, "fields": {}}
+        return self.run(self._return_home, info=info)
 
     def _return_home(self, stopped) -> tuple[int, str]:
         """Dock on the charger and wait until it charges."""

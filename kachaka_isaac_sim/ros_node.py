@@ -51,6 +51,9 @@ class KachakaSimNode:
         self.generic = bool(cfg.ros.remap_generic)
         self.manual_control_enabled = True
         self.cmd: tuple[float, float] | None = None  # newest Twist, consumed by the sim loop
+        # Sees every message published here: tap(name, msg...). Set by the
+        # kachaka-api gRPC server (api_server.py).
+        self.tap = lambda name, *msg: None
         n = self.node
 
         # --- inputs ---------------------------------------------------------
@@ -114,6 +117,7 @@ class KachakaSimNode:
                 continue
             msg.transforms.append(self._transform(0.0, j["parent"], j["child"], j["xyz"], j["quat"]))
         self.tf_static_pub.publish(msg)
+        self.static_tf = msg
 
     def _transform(self, t: float, parent: str, child: str, xyz, quat) -> TransformStamped:
         tf = TransformStamped()
@@ -134,6 +138,7 @@ class KachakaSimNode:
         # The real robot needs manual control enabled before cmd_vel moves it;
         # the simulator accepts cmd_vel either way and only records the flag.
         self.manual_control_enabled = req.data
+        self.tap("manual_control", req.data)
         res.success = True
         return res
 
@@ -189,7 +194,10 @@ class KachakaSimNode:
         self.odom_pub.publish(odom)
         if self.generic_odom_pub:
             self.generic_odom_pub.publish(odom)
-        self.wheel_odom_pub.publish(self._odom_msg(t, "odom", wheel, wheel_v, wheel_w, 1e-2))
+        wheel_odom = self._odom_msg(t, "odom", wheel, wheel_v, wheel_w, 1e-2)
+        self.wheel_odom_pub.publish(wheel_odom)
+        self.tap("odometry", odom)
+        self.tap("wheel_odometry", wheel_odom)
         self.gt_pub.publish(self._odom_msg(t, "world", gt, v, w, 0.0))
         tf = self._transform(t, "odom", "base_footprint", (fused.x, fused.y, 0.0), quat_from_yaw(fused.yaw))
         self.tf_pub.publish(TFMessage(transforms=[tf]))
@@ -234,6 +242,7 @@ class KachakaSimNode:
         self.scan_pub.publish(msg)
         if self.generic_scan_pub:
             self.generic_scan_pub.publish(msg)
+        self.tap("scan", msg)
 
     def publish_imu(self, t: float, imu) -> None:
         cfg = self.cfg.imu
@@ -250,6 +259,7 @@ class KachakaSimNode:
             msg.angular_velocity_covariance[i] = float(cfg.gyro_noise) ** 2
             msg.linear_acceleration_covariance[i] = float(cfg.accel_noise) ** 2
         self.imu_pub.publish(msg)
+        self.tap("imu", msg)
 
     def add_camera(self, name: str) -> None:
         n, base = self.node, f"{self.ns}/{name}"
@@ -284,6 +294,7 @@ class KachakaSimNode:
         info.p = [fx, 0.0, cx, 0.0, 0.0, fx, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
         info_pub.publish(info)
         info_pub2.publish(info)
+        self.tap(name, img, info)
 
     def publish_battery(self, t: float, percentage: float, charging: bool) -> None:
         # Fields as the real bridge fills them: no voltage, only charging or
@@ -296,6 +307,7 @@ class KachakaSimNode:
         msg.power_supply_status = (BatteryState.POWER_SUPPLY_STATUS_CHARGING if charging
                                    else BatteryState.POWER_SUPPLY_STATUS_DISCHARGING)
         self.battery_pub.publish(msg)
+        self.tap("battery", msg)
 
     def publish_charger_detection(self, t: float, pose: Pose2D) -> None:
         """Docked base_footprint pose relative to the robot (sim-only)."""
@@ -317,11 +329,14 @@ class KachakaSimNode:
         q = msg.pose.orientation
         q.w, q.x, q.y, q.z = (float(c) for c in quat_from_yaw(pose.yaw))
         self.charger_pub.publish(msg)
+        self.tap("charger", pose)
 
     def publish_layout(self, shelves: list[dict], locations: list[dict]) -> None:
         """Shelves (id, name, home, size) and extra locations (id, name, pose),
         poses as [x, y, yaw] in the map frame (sim-only, latched JSON)."""
-        self.layout_pub.publish(String(data=json.dumps({"shelves": shelves, "locations": locations})))
+        layout = {"shelves": shelves, "locations": locations}
+        self.layout_pub.publish(String(data=json.dumps(layout)))
+        self.tap("layout", layout)
 
     @staticmethod
     def _pose(p: Pose2D) -> Pose:
@@ -338,6 +353,7 @@ class KachakaSimNode:
         msg.header.frame_id = "map"
         msg.poses = [self._pose(p) for p in poses]
         self.shelf_poses_pub.publish(msg)
+        self.tap("shelf_poses", poses)
 
     def publish_shelf_detection(self, t: float, poses: list[Pose2D]) -> None:
         """Shelf poses relative to the robot, in sim/layout order (sim-only)."""
@@ -350,6 +366,7 @@ class KachakaSimNode:
     def publish_shelf_docked(self, shelf_id: str) -> None:
         """Id of the shelf the robot tows, or "" (sim-only, latched)."""
         self.shelf_docked_pub.publish(String(data=shelf_id))
+        self.tap("shelf_docked", shelf_id)
 
     def shutdown(self) -> None:
         self.executor.shutdown()

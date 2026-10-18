@@ -195,3 +195,34 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
 - **Not modelled.** The real robot finds shelves with its cameras and shows
   each shelf's speed mode; here detection is handed over by the simulator and
   speed mode is always the default.
+
+## kachaka-api gRPC server
+- **In the simulator process.** `kachaka_isaac_sim/api_server.py` serves the
+  `KachakaApi` service from the pip package's generated stubs (kachaka-api
+  3.17.5.0, grpcio 1.66.1) on `--api-port` (26400). The ROS node hands each
+  message it publishes to the server (`KachakaSimNode.tap`), which keeps the
+  latest one and converts it to the proto type on request, so sensor RPCs
+  need no ROS round trip.
+- **Cursors.** Each stream keeps its latest value with a cursor (monotonic
+  ns). A request whose cursor equals the latest one waits for the next
+  value, as on the real robot; the client's `start_command` relies on this.
+- **Commands go through `command_server`.** Isaac Sim's bundled rclpy cannot
+  load the `kachaka_interfaces` types, so the server cannot call
+  `kachaka_command/execute`. It publishes JSON on `sim/command/start` (with a
+  fresh command id) and `sim/command/cancel` instead. `command_server` sends
+  the command to its own action under that id as the goal UUID, so queueing,
+  `cancel_all` and `tts_on_success` behave as for ROS clients. It publishes the
+  running command and the last result of every command (ROS, gRPC, auto
+  homing) on the latched `sim/command/state`, which backs `GetCommandState`
+  and `GetLastCommandResult`. Without `command_server`, `StartCommand` fails
+  with −6.
+- **Pose and map.** `GetRobotPose` composes slam_toolbox's map→odom (from
+  `/tf`) with odometry; `GetPngMap` converts `/map` to the robot's PNG
+  format (occupied 174, free 253, unknown 234, top row = max y). There is a
+  single map, `sim`.
+- **Locations** are the charger (`home`, the default), each shelf's home
+  (`<id>_home`) and the layout's extra locations.
+- **Manual control.** `SetRobotVelocity` takes values normalized to the speed
+  limits and publishes on `manual_control/cmd_vel`; it fails with −12 while
+  manual control is disabled, so the client enables it first, as on the robot.
+- Unimplemented RPCs return `UNIMPLEMENTED` (#12).

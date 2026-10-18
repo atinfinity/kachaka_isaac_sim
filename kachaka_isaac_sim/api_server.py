@@ -1,0 +1,607 @@
+"""kachaka-api gRPC server inside the simulator.
+
+Serves the real robot's gRPC API (`KachakaApi`, port 26400) so programs written
+with the official Python client, `kachaka_api.KachakaApiClient`, run against
+the simulator. Robot state and sensors come straight from the simulator
+(KachakaSimNode hands every message it publishes to `tap`). Commands go to
+kachaka_sim_bringup's command_server, which runs them through Nav2 like the
+ROS 2 action `kachaka_command/execute`; the two talk over simulator-only
+topics with JSON in std_msgs/String, because the custom kachaka_interfaces
+types cannot be imported into Isaac Sim's bundled rclpy:
+
+- `sim/command/start`: {"id", "command_type", "fields", "cancel_all", "tts_on_success"}
+- `sim/command/cancel`: cancel the running command
+- `sim/command/state` (latched, from command_server): {"running": {...} | null,
+  "last": {..., "success", "error_code"} | null}
+
+Getters follow the real long-polling protocol: a request carrying the cursor
+of the newest data waits until newer data arrives; any other cursor returns
+the newest data at once. RPCs the simulator lacks return UNIMPLEMENTED.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import math
+import threading
+import time
+import uuid
+from concurrent import futures
+
+import grpc
+from kachaka_api.generated import kachaka_api_pb2 as pb2
+from kachaka_api.generated import kachaka_api_pb2_grpc as pb2_grpc
+from nav_msgs.msg import OccupancyGrid
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+from std_srvs.srv import SetBool
+from tf2_msgs.msg import TFMessage
+
+from .drive import Pose2D
+
+LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
+MAX_LINEAR = 0.3  # SetRobotVelocity full scale, as in kachaka_api.base
+MAX_ANGULAR = 1.57
+CHARGER_ID = "home"  # as in command_server
+# PNG map gray levels the real robot uses (kachaka_grpc_ros2_bridge's mapping_component).
+PNG_OCCUPIED, PNG_FREE, PNG_UNKNOWN = 174, 253, 234
+# Simulator error codes (command_server's), served by GetRobotErrorCodeJson.
+ERROR_CODES = {
+    -1: ("Unsupported command", "The simulator does not support this command."),
+    -2: ("No charger", "There is no charger in this world."),
+    -3: ("Docking failed", "Docking with the charger or the shelf failed."),
+    -4: ("Not charging", "The robot docked but is not charging."),
+    -5: ("Canceled", "The command was canceled."),
+    -6: ("Server unavailable", "Nav2 or the command server is not running."),
+    -7: ("No shelf", "No shelf found, or the robot does not tow one."),
+    -8: ("Unknown location", "The location or shelf id is unknown."),
+    -9: ("Blocked", "Something stands in the way."),
+    -10: ("Navigation failed", "Nav2 could not reach the goal."),
+    -11: ("Other shelf docked", "The robot tows another shelf."),
+}
+ERROR_SERVER_UNAVAILABLE = -6
+ERROR_MANUAL_CONTROL_DISABLED = -12
+
+
+class Store:
+    """Newest value per stream with a cursor, and long-polling reads."""
+
+    def __init__(self):
+        self.cond = threading.Condition()
+        self.data: dict[str, tuple[int, object]] = {}
+        self.last_cursor = 0
+
+    def set(self, name: str, value) -> None:
+        with self.cond:
+            self.last_cursor = max(time.monotonic_ns(), self.last_cursor + 1)
+            self.data[name] = (self.last_cursor, value)
+            self.cond.notify_all()
+
+    def peek(self, name: str):
+        entry = self.data.get(name)
+        return entry[1] if entry else None
+
+    def get(self, name: str, request, context) -> tuple[int, object]:
+        cursor = request.metadata.cursor if request is not None else 0
+        with self.cond:
+            while True:
+                entry = self.data.get(name)
+                if entry is not None and entry[0] != cursor:
+                    return entry
+                if not context.is_active():
+                    context.abort(grpc.StatusCode.CANCELLED, "client went away")
+                self.cond.wait(0.5)
+
+
+# --- ROS message -> protobuf --------------------------------------------------
+def _header(h) -> pb2.RosHeader:
+    return pb2.RosHeader(stamp_nsec=h.stamp.sec * 1_000_000_000 + h.stamp.nanosec, frame_id=h.frame_id)
+
+
+def _vec(v) -> pb2.Vector3:
+    return pb2.Vector3(x=v.x, y=v.y, z=v.z)
+
+
+def _quat(q) -> pb2.Quaternion:
+    return pb2.Quaternion(x=q.x, y=q.y, z=q.z, w=q.w)
+
+
+def _imu(m) -> pb2.RosImu:
+    return pb2.RosImu(header=_header(m.header), orientation=_quat(m.orientation),
+                      orientation_covariance=list(m.orientation_covariance),
+                      angular_velocity=_vec(m.angular_velocity),
+                      angular_velocity_covariance=list(m.angular_velocity_covariance),
+                      linear_acceleration=_vec(m.linear_acceleration),
+                      linear_acceleration_covariance=list(m.linear_acceleration_covariance))
+
+
+def _odometry(m) -> pb2.RosOdometry:
+    p, t = m.pose, m.twist
+    return pb2.RosOdometry(
+        header=_header(m.header), child_frame_id=m.child_frame_id,
+        pose=pb2.Pose3dWithCovariance(pose=pb2.Pose3d(position=_vec(p.pose.position),
+                                                      orientation=_quat(p.pose.orientation)),
+                                      covariance=list(p.covariance)),
+        twist=pb2.TwistWithCovariance(twist=pb2.Twist(linear=_vec(t.twist.linear), angular=_vec(t.twist.angular)),
+                                      covariance=list(t.covariance)))
+
+
+def _scan(m) -> pb2.RosLaserScan:
+    return pb2.RosLaserScan(header=_header(m.header), angle_min=m.angle_min, angle_max=m.angle_max,
+                            angle_increment=m.angle_increment, time_increment=m.time_increment,
+                            scan_time=m.scan_time, range_min=m.range_min, range_max=m.range_max,
+                            ranges=list(m.ranges), intensities=list(m.intensities))
+
+
+def _camera_info(m) -> pb2.RosCameraInfo:
+    return pb2.RosCameraInfo(header=_header(m.header), height=m.height, width=m.width,
+                             distortion_model=m.distortion_model, D=list(m.d), K=list(m.k), R=list(m.r),
+                             P=list(m.p), binning_x=m.binning_x, binning_y=m.binning_y,
+                             roi=pb2.RegionOfInterest(x_offset=m.roi.x_offset, y_offset=m.roi.y_offset,
+                                                      height=m.roi.height, width=m.roi.width,
+                                                      do_rectify=m.roi.do_rectify))
+
+
+def _image(m) -> pb2.RosImage:
+    return pb2.RosImage(header=_header(m.header), height=m.height, width=m.width, encoding=m.encoding,
+                        is_bigendian=bool(m.is_bigendian), step=m.step, data=bytes(m.data))
+
+
+def _compressed(m) -> pb2.RosCompressedImage:
+    """JPEG for colour images, PNG for depth (lossless)."""
+    import cv2
+    import numpy as np
+
+    if m.encoding == "rgb8":
+        rgb = np.frombuffer(bytes(m.data), np.uint8).reshape(m.height, m.width, 3)
+        ok, buf = cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+        fmt = "rgb8; jpeg compressed bgr8"
+    else:
+        dtype = np.uint16 if m.encoding == "16UC1" else np.float32
+        img = np.frombuffer(bytes(m.data), dtype).reshape(m.height, m.width)
+        if dtype is np.float32:
+            img = (np.nan_to_num(img) * 1000.0).round().clip(0, 65535).astype(np.uint16)
+        ok, buf = cv2.imencode(".png", img)
+        fmt = "16UC1; png compressed"
+    return pb2.RosCompressedImage(header=_header(m.header), format=fmt, data=buf.tobytes() if ok else b"")
+
+
+def _png_map(m: OccupancyGrid) -> pb2.Map:
+    import numpy as np
+    from PIL import Image
+
+    info = m.info
+    grid = np.asarray(m.data, np.int8).reshape(info.height, info.width)
+    img = np.full(grid.shape, PNG_UNKNOWN, np.uint8)
+    img[grid == 0] = PNG_FREE
+    img[grid >= 65] = PNG_OCCUPIED
+    out = io.BytesIO()
+    Image.fromarray(img[::-1]).save(out, format="PNG")  # PNG rows run top (max y) down
+    q = info.origin.orientation
+    origin = pb2.Pose(x=info.origin.position.x, y=info.origin.position.y,
+                      theta=math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)))
+    return pb2.Map(data=out.getvalue(), name="sim", resolution=info.resolution, width=info.width,
+                   height=info.height, origin=origin)
+
+
+def _transforms(m: TFMessage) -> list[pb2.RosTransformStamped]:
+    return [pb2.RosTransformStamped(header=_header(t.header), child_frame_id=t.child_frame_id,
+                                    translation=_vec(t.transform.translation), rotation=_quat(t.transform.rotation))
+            for t in m.transforms]
+
+
+# --- commands: protobuf <-> command_server JSON -------------------------------
+def command_to_json(cmd: pb2.Command) -> tuple[int, dict]:
+    """(command_type, fields). The type is the oneof field number, which is
+    also KachakaCommand's constant; fields are named like KachakaCommand's
+    (`<oneof name>_<field>`)."""
+    which = cmd.WhichOneof("command")
+    if which is None:
+        return 0, {}
+    sub = getattr(cmd, which)
+    return pb2.Command.DESCRIPTOR.fields_by_name[which].number, \
+        {f"{which}_{f.name}": getattr(sub, f.name) for f in sub.DESCRIPTOR.fields}
+
+
+def command_from_json(command_type: int, fields: dict) -> pb2.Command:
+    cmd = pb2.Command()
+    fd = pb2.Command.DESCRIPTOR.fields_by_number.get(command_type)
+    if fd is None:
+        return cmd
+    sub = getattr(cmd, fd.name)
+    sub.SetInParent()
+    for f in sub.DESCRIPTOR.fields:
+        key = f"{fd.name}_{f.name}"
+        if key in fields:
+            setattr(sub, f.name, fields[key])
+    return cmd
+
+
+def _yaw(q) -> float:
+    return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+
+
+class KachakaApiServer(pb2_grpc.KachakaApiServicer):
+    """The servicer. Create it before the simulator publishes anything, so
+    the latched layout and charger messages reach `tap`."""
+
+    def __init__(self, sim_node, port: int, serial: str = "SIMULATOR"):
+        self.sim = sim_node
+        self.store = Store()
+        self.serial = serial
+        self.map_to_odom = Pose2D(0.0, 0.0, 0.0)  # from SLAM's /tf; identity until it runs
+        self.layout = {"shelves": [], "locations": []}
+        self.charger: Pose2D | None = None
+        self.shelf_poses: list[Pose2D] = []
+        self.charging = False
+        self.auto_homing = True  # command_server's default
+        self.volume = 5
+        n, ns = sim_node.node, sim_node.ns
+        self.odom_frame, self.map_frame = sim_node.frame("odom"), "map"
+        self.cmd_pub = n.create_publisher(String, f"{ns}/sim/command/start", 10)
+        self.cancel_pub = n.create_publisher(String, f"{ns}/sim/command/cancel", 10)
+        from geometry_msgs.msg import Twist
+
+        self._twist = Twist
+        self.vel_pub = n.create_publisher(Twist, f"{ns}/manual_control/cmd_vel", 10)
+        self.auto_homing_client = n.create_client(SetBool, f"{ns}/auto_homing/set_enabled")
+        n.create_subscription(String, f"{ns}/sim/command/state", self._on_command_state, LATCHED)
+        n.create_subscription(OccupancyGrid, "/map", lambda m: self.store.set("map", m), LATCHED)
+        n.create_subscription(TFMessage, "/tf", self._on_tf, 100)
+        s = self.store
+        s.set("command_state", None)
+        s.set("last_result", None)
+        s.set("manual_control", sim_node.manual_control_enabled)
+        s.set("auto_homing", self.auto_homing)
+        s.set("moving_shelf", "")
+        s.set("volume", self.volume)
+        s.set("static", None)  # serial number, version, map id: never change
+        s.set("errors", [])
+        s.set("static_tf", sim_node.static_tf)
+        sim_node.tap = self.tap
+
+        self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=64))
+        pb2_grpc.add_KachakaApiServicer_to_server(self, self.server)
+        if self.server.add_insecure_port(f"0.0.0.0:{port}") == 0:
+            raise RuntimeError(f"cannot listen on port {port}")
+        self.server.start()
+
+    def stop(self) -> None:
+        self.server.stop(grace=0.5)
+
+    # --- inputs from the simulator and ROS ----------------------------------
+    def tap(self, name: str, *msg) -> None:
+        """Called by KachakaSimNode with each message it publishes."""
+        s = self.store
+        if name == "battery":
+            m = msg[0]
+            self.charging = m.power_supply_status == m.POWER_SUPPLY_STATUS_CHARGING
+            s.set("battery", m)
+        elif name == "odometry":
+            s.set("odometry", msg[0])
+            s.set("pose", msg[0])
+        elif name == "layout":
+            self.layout = msg[0]
+            self.shelf_poses = [Pose2D(*sh["home"]) for sh in self.layout["shelves"]]
+            self._publish_layout()
+        elif name == "charger":
+            self.charger = msg[0]
+            self._publish_layout()
+        elif name == "shelf_poses":
+            if len(msg[0]) == len(self.layout["shelves"]):
+                self.shelf_poses = list(msg[0])
+                s.set("shelves", None)
+        elif name == "shelf_docked":
+            s.set("moving_shelf", msg[0])
+        elif name.endswith("_camera"):
+            img, info = msg
+            s.set(f"{name}/image", img)
+            s.set(f"{name}/info", info)
+        else:  # imu, wheel_odometry, scan, manual_control
+            s.set(name, msg[0])
+
+    def _publish_layout(self) -> None:
+        self.store.set("locations", None)
+        self.store.set("shelves", None)
+
+    def _on_tf(self, msg: TFMessage) -> None:
+        for t in msg.transforms:
+            if t.header.frame_id == self.map_frame and t.child_frame_id == self.odom_frame:
+                tr = t.transform
+                self.map_to_odom = Pose2D(tr.translation.x, tr.translation.y, _yaw(tr.rotation))
+
+    def _on_command_state(self, msg: String) -> None:
+        state = json.loads(msg.data)
+        running, last = state.get("running"), state.get("last")
+        prev_running = self.store.peek("command_state")
+        if (running or {}).get("id") != (prev_running or {}).get("id"):
+            self.store.set("command_state", running)
+        prev_last = self.store.peek("last_result")
+        if last and last.get("id") != (prev_last or {}).get("id"):
+            self.store.set("last_result", last)
+
+    # --- helpers --------------------------------------------------------------
+    @staticmethod
+    def _meta(cursor: int) -> pb2.Metadata:
+        return pb2.Metadata(cursor=cursor)
+
+    def _robot_pose(self, odom) -> pb2.Pose:
+        p = odom.pose.pose
+        x, y, yaw = p.position.x, p.position.y, _yaw(p.orientation)
+        m = self.map_to_odom
+        c, s = math.cos(m.yaw), math.sin(m.yaw)
+        theta = math.atan2(math.sin(m.yaw + yaw), math.cos(m.yaw + yaw))
+        return pb2.Pose(x=m.x + c * x - s * y, y=m.y + s * x + c * y, theta=theta)
+
+    def _locations(self) -> list[pb2.Location]:
+        locs = []
+        if self.charger is not None:
+            c = self.charger
+            locs.append(pb2.Location(id=CHARGER_ID, name="Charger", type=pb2.LOCATION_TYPE_CHARGER,
+                                     pose=pb2.Pose(x=c.x, y=c.y, theta=c.yaw)))
+        for sh in self.layout["shelves"]:
+            x, y, yaw = sh["home"]
+            locs.append(pb2.Location(id=f"{sh['id']}_home", name=f"{sh['name']} home",
+                                     type=pb2.LOCATION_TYPE_SHELF_HOME, pose=pb2.Pose(x=x, y=y, theta=yaw)))
+        for loc in self.layout["locations"]:
+            x, y, yaw = loc["pose"]
+            locs.append(pb2.Location(id=loc["id"], name=loc["name"], type=pb2.LOCATION_TYPE_UNSPECIFIED,
+                                     pose=pb2.Pose(x=x, y=y, theta=yaw)))
+        return locs
+
+    def _shelves(self) -> list[pb2.Shelf]:
+        out = []
+        for sh, p in zip(self.layout["shelves"], self.shelf_poses):
+            out.append(pb2.Shelf(id=sh["id"], name=sh["name"], pose=pb2.Pose(x=p.x, y=p.y, theta=p.yaw),
+                                 size=pb2.ShelfSize(width=sh["width"], depth=sh["depth"]),
+                                 appearance=pb2.SHELF_APPEARANCE_DEFAULT_SHELF,
+                                 home_location_id=f"{sh['id']}_home",
+                                 speed_mode=pb2.SHELF_SPEED_MODE_NORMAL))
+        return out
+
+    @staticmethod
+    def _command(entry) -> pb2.Command:
+        return command_from_json(entry["command_type"], entry.get("fields", {}))
+
+    # --- robot info -----------------------------------------------------------
+    def GetRobotSerialNumber(self, request, context):
+        cursor, _ = self.store.get("static", request, context)
+        return pb2.GetRobotSerialNumberResponse(metadata=self._meta(cursor), serial_number=self.serial)
+
+    def GetRobotVersion(self, request, context):
+        cursor, _ = self.store.get("static", request, context)
+        return pb2.GetRobotVersionResponse(metadata=self._meta(cursor), version=str(self.sim.cfg.stubs.version))
+
+    def IsReady(self, request, context):
+        return pb2.IsReadyResponse(ready=self.store.peek("odometry") is not None)
+
+    def GetError(self, request, context):
+        cursor, errors = self.store.get("errors", request, context)
+        return pb2.GetErrorResponse(metadata=self._meta(cursor), error_codes=errors)
+
+    def GetRobotErrorCodeJson(self, request, context):
+        items = [{"code": code, "error_type": "error", "title": title, "description": desc, "title_en": title,
+                  "description_en": desc, "ref_url": ""} for code, (title, desc) in ERROR_CODES.items()]
+        return pb2.GetRobotErrorCodeJsonResponse(json=json.dumps(items), result=pb2.Result(success=True))
+
+    def GetRobotPose(self, request, context):
+        cursor, odom = self.store.get("pose", request, context)
+        return pb2.GetRobotPoseResponse(metadata=self._meta(cursor), pose=self._robot_pose(odom))
+
+    def GetBatteryInfo(self, request, context):
+        cursor, m = self.store.get("battery", request, context)
+        status = pb2.POWER_SUPPLY_STATUS_CHARGING if m.power_supply_status == m.POWER_SUPPLY_STATUS_CHARGING \
+            else pb2.POWER_SUPPLY_STATUS_DISCHARGING
+        return pb2.GetBatteryInfoResponse(metadata=self._meta(cursor), remaining_percentage=m.percentage * 100.0,
+                                          power_supply_status=status)
+
+    def GetPngMap(self, request, context):
+        cursor, m = self.store.get("map", request, context)
+        return pb2.GetPngMapResponse(metadata=self._meta(cursor), map=_png_map(m))
+
+    def GetCurrentMapId(self, request, context):
+        cursor, _ = self.store.get("static", request, context)
+        return pb2.GetCurrentMapIdResponse(metadata=self._meta(cursor), id="sim")
+
+    def GetMapList(self, request, context):
+        cursor, _ = self.store.get("static", request, context)
+        return pb2.GetMapListResponse(metadata=self._meta(cursor),
+                                      map_list_entries=[pb2.MapListEntry(id="sim", name="sim")])
+
+    def GetStaticTransform(self, request, context):
+        cursor, m = self.store.get("static_tf", request, context)
+        return pb2.GetStaticTransformResponse(metadata=self._meta(cursor), transforms=_transforms(m))
+
+    # --- sensors --------------------------------------------------------------
+    def GetRosImu(self, request, context):
+        cursor, m = self.store.get("imu", request, context)
+        return pb2.GetRosImuResponse(metadata=self._meta(cursor), imu=_imu(m))
+
+    def GetRosOdometry(self, request, context):
+        cursor, m = self.store.get("odometry", request, context)
+        return pb2.GetRosOdometryResponse(metadata=self._meta(cursor), odometry=_odometry(m))
+
+    def GetRosWheelOdometry(self, request, context):
+        cursor, m = self.store.get("wheel_odometry", request, context)
+        return pb2.GetRosWheelOdometryResponse(metadata=self._meta(cursor), odometry=_odometry(m))
+
+    def GetRosLaserScan(self, request, context):
+        cursor, m = self.store.get("scan", request, context)
+        return pb2.GetRosLaserScanResponse(metadata=self._meta(cursor), scan=_scan(m))
+
+    def _camera(self, name, kind, request, context):
+        cursor, m = self.store.get(f"{name}/{'info' if kind == 'info' else 'image'}", request, context)
+        if kind == "info":
+            return cursor, _camera_info(m)
+        return cursor, _image(m) if kind == "raw" else _compressed(m)
+
+    def GetFrontCameraRosCameraInfo(self, request, context):
+        c, m = self._camera("front_camera", "info", request, context)
+        return pb2.GetFrontCameraRosCameraInfoResponse(metadata=self._meta(c), camera_info=m)
+
+    def GetFrontCameraRosImage(self, request, context):
+        c, m = self._camera("front_camera", "raw", request, context)
+        return pb2.GetFrontCameraRosImageResponse(metadata=self._meta(c), image=m)
+
+    def GetFrontCameraRosCompressedImage(self, request, context):
+        c, m = self._camera("front_camera", "compressed", request, context)
+        return pb2.GetFrontCameraRosCompressedImageResponse(metadata=self._meta(c), image=m)
+
+    def GetBackCameraRosCameraInfo(self, request, context):
+        c, m = self._camera("back_camera", "info", request, context)
+        return pb2.GetBackCameraRosCameraInfoResponse(metadata=self._meta(c), camera_info=m)
+
+    def GetBackCameraRosImage(self, request, context):
+        c, m = self._camera("back_camera", "raw", request, context)
+        return pb2.GetBackCameraRosImageResponse(metadata=self._meta(c), image=m)
+
+    def GetBackCameraRosCompressedImage(self, request, context):
+        c, m = self._camera("back_camera", "compressed", request, context)
+        return pb2.GetBackCameraRosCompressedImageResponse(metadata=self._meta(c), image=m)
+
+    def GetTofCameraRosCameraInfo(self, request, context):
+        c, m = self._camera("tof_camera", "info", request, context)
+        return pb2.GetTofCameraRosCameraInfoResponse(metadata=self._meta(c), camera_info=m)
+
+    def GetTofCameraRosImage(self, request, context):
+        if self.charging:  # the ToF camera is off on the charger
+            c, _ = self.store.get("battery", request, context)
+            return pb2.GetTofCameraRosImageResponse(metadata=self._meta(c), is_available=False)
+        c, m = self._camera("tof_camera", "raw", request, context)
+        return pb2.GetTofCameraRosImageResponse(metadata=self._meta(c), image=m, is_available=True)
+
+    def GetTofCameraRosCompressedImage(self, request, context):
+        if self.charging:
+            c, _ = self.store.get("battery", request, context)
+            return pb2.GetTofCameraRosCompressedImageResponse(metadata=self._meta(c), is_available=False)
+        c, m = self._camera("tof_camera", "compressed", request, context)
+        return pb2.GetTofCameraRosCompressedImageResponse(metadata=self._meta(c), image=m, is_available=True)
+
+    def GetObjectDetection(self, request, context):
+        # No object detector in the simulator: the newest odometry paces an
+        # always-empty result.
+        cursor, m = self.store.get("odometry", request, context)
+        header = pb2.RosHeader(stamp_nsec=_header(m.header).stamp_nsec, frame_id=self.sim.frame("camera_front"))
+        return pb2.GetObjectDetectionResponse(metadata=self._meta(cursor), header=header)
+
+    def ActivateLaserScan(self, request, context):
+        return pb2.ActivateLaserScanResponse(result=pb2.Result(success=True))
+
+    # --- commands -------------------------------------------------------------
+    def StartCommand(self, request, context):
+        if self.cmd_pub.get_subscription_count() == 0:
+            return pb2.StartCommandResponse(result=pb2.Result(success=False, error_code=ERROR_SERVER_UNAVAILABLE))
+        command_type, fields = command_to_json(request.command)
+        cmd_id = uuid.uuid4().hex
+        self.cmd_pub.publish(String(data=json.dumps({
+            "id": cmd_id, "command_type": command_type, "fields": fields,
+            "cancel_all": request.cancel_all, "tts_on_success": request.tts_on_success})))
+        return pb2.StartCommandResponse(result=pb2.Result(success=True), command_id=cmd_id)
+
+    def CancelCommand(self, request, context):
+        running = self.store.peek("command_state")
+        self.cancel_pub.publish(String(data=""))
+        cmd = self._command(running) if running else pb2.Command()
+        return pb2.CancelCommandResponse(result=pb2.Result(success=True), command=cmd)
+
+    def GetCommandState(self, request, context):
+        cursor, running = self.store.get("command_state", request, context)
+        if running is None:
+            return pb2.GetCommandStateResponse(metadata=self._meta(cursor), state=pb2.COMMAND_STATE_PENDING)
+        return pb2.GetCommandStateResponse(metadata=self._meta(cursor), state=pb2.COMMAND_STATE_RUNNING,
+                                           command=self._command(running), command_id=running["id"])
+
+    def GetLastCommandResult(self, request, context):
+        cursor, last = self.store.get("last_result", request, context)
+        if last is None:
+            return pb2.GetLastCommandResultResponse(metadata=self._meta(cursor))
+        return pb2.GetLastCommandResultResponse(
+            metadata=self._meta(cursor), command=self._command(last), command_id=last["id"],
+            result=pb2.Result(success=last["success"], error_code=last["error_code"]))
+
+    def Proceed(self, request, context):
+        return pb2.ProceedResponse(result=pb2.Result(success=True))
+
+    # --- layout ---------------------------------------------------------------
+    def GetLocations(self, request, context):
+        cursor, _ = self.store.get("locations", request, context)
+        return pb2.GetLocationsResponse(metadata=self._meta(cursor), locations=self._locations(),
+                                        default_location_id=CHARGER_ID if self.charger is not None else "")
+
+    def GetLocationsDigest(self, request, context):
+        cursor, _ = self.store.get("locations", request, context)
+        return pb2.GetLocationsDigestResponse(metadata=self._meta(cursor), locations=[
+            pb2.LocationDigest(id=loc.id, name=loc.name, type=loc.type) for loc in self._locations()])
+
+    def GetShelves(self, request, context):
+        cursor, _ = self.store.get("shelves", request, context)
+        return pb2.GetShelvesResponse(metadata=self._meta(cursor), shelves=self._shelves())
+
+    def GetShelvesDigest(self, request, context):
+        cursor, _ = self.store.get("shelves", request, context)
+        return pb2.GetShelvesDigestResponse(metadata=self._meta(cursor), shelves=[
+            pb2.ShelfDigest(id=s.id, name=s.name) for s in self._shelves()])
+
+    def GetMovingShelfId(self, request, context):
+        cursor, shelf_id = self.store.get("moving_shelf", request, context)
+        return pb2.GetMovingShelfIdResponse(metadata=self._meta(cursor), shelf_id=shelf_id)
+
+    # --- manual control and settings ----------------------------------------
+    def SetManualControlEnabled(self, request, context):
+        self.sim.manual_control_enabled = request.enable
+        self.store.set("manual_control", request.enable)
+        if not request.enable:
+            self.vel_pub.publish(self._twist())
+        return pb2.SetManualControlEnabledResponse(result=pb2.Result(success=True))
+
+    def GetManualControlEnabled(self, request, context):
+        cursor, enabled = self.store.get("manual_control", request, context)
+        return pb2.GetManualControlEnabledResponse(metadata=self._meta(cursor), enabled=enabled)
+
+    def SetRobotVelocity(self, request, context):
+        # Like the real robot: only with manual control enabled. The velocity
+        # goes out on manual_control/cmd_vel, so the simulator and the
+        # auto-homing idle timer see it as they see ROS commands.
+        if not self.sim.manual_control_enabled:
+            return pb2.SetRobotVelocityResponse(
+                result=pb2.Result(success=False, error_code=ERROR_MANUAL_CONTROL_DISABLED))
+        t = self._twist()
+        t.linear.x = max(-1.0, min(1.0, request.linear)) * MAX_LINEAR
+        t.angular.z = max(-1.0, min(1.0, request.angular)) * MAX_ANGULAR
+        self.vel_pub.publish(t)
+        return pb2.SetRobotVelocityResponse(result=pb2.Result(success=True))
+
+    def SetAutoHomingEnabled(self, request, context):
+        if not self.auto_homing_client.wait_for_service(timeout_sec=2.0):
+            return pb2.SetAutoHomingEnabledResponse(
+                result=pb2.Result(success=False, error_code=ERROR_SERVER_UNAVAILABLE))
+        future = self.auto_homing_client.call_async(SetBool.Request(data=request.enable))
+        deadline = time.monotonic() + 5.0
+        while not future.done() and time.monotonic() < deadline:  # the sim loop spins the node
+            time.sleep(0.02)
+        ok = future.done() and future.result().success
+        if ok:
+            self.auto_homing = request.enable
+            self.store.set("auto_homing", request.enable)
+        return pb2.SetAutoHomingEnabledResponse(
+            result=pb2.Result(success=ok, error_code=0 if ok else ERROR_SERVER_UNAVAILABLE))
+
+    def GetAutoHomingEnabled(self, request, context):
+        cursor, enabled = self.store.get("auto_homing", request, context)
+        return pb2.GetAutoHomingEnabledResponse(metadata=self._meta(cursor), enabled=enabled)
+
+    def SetFrontTorchIntensity(self, request, context):
+        return pb2.SetFrontTorchIntensityResponse(result=pb2.Result(success=True))
+
+    def SetBackTorchIntensity(self, request, context):
+        return pb2.SetBackTorchIntensityResponse(result=pb2.Result(success=True))
+
+    def GetSpeakerVolume(self, request, context):
+        cursor, volume = self.store.get("volume", request, context)
+        return pb2.GetSpeakerVolumeResponse(metadata=self._meta(cursor), volume=volume)
+
+    def SetSpeakerVolume(self, request, context):
+        self.volume = max(0, min(10, request.volume))
+        self.store.set("volume", self.volume)
+        return pb2.SetSpeakerVolumeResponse(result=pb2.Result(success=True))
