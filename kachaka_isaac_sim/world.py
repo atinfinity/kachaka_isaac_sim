@@ -120,7 +120,8 @@ def add_shelf(stage: Usd.Stage, path: str, stl: Path, x: float, y: float, yaw: f
     mesh.CreateFaceVertexCountsAttr([3] * (len(v) // 3))
     mesh.CreateFaceVertexIndicesAttr(list(range(len(v))))
     mesh.CreateSubdivisionSchemeAttr("none")
-    mesh.CreateDisplayColorAttr([Gf.Vec3f(0.85, 0.85, 0.83)])
+    # Matte charcoal steel and boards, as on the real shelf (linear RGB).
+    mesh.CreateDisplayColorAttr([Gf.Vec3f(0.11, 0.113, 0.12)])
     xf = UsdGeom.Xformable(mesh.GetPrim())
     xf.AddTranslateOp().Set(Gf.Vec3d(x, y, z0))
     xf.AddRotateZOp().Set(math.degrees(yaw))
