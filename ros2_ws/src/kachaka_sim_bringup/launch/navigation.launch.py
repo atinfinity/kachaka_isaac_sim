@@ -47,6 +47,13 @@ def generate_launch_description():
             parameters=[{"use_sim_time": use_sim_time}],
             condition=IfCondition(LaunchConfiguration("command_server")),
         ),
+        Node(
+            package="kachaka_sim_bringup",
+            executable="shelf_markers",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+            condition=IfCondition(LaunchConfiguration("command_server")),
+        ),
         IncludeLaunchDescription(
             PathJoinSubstitution([pkg, "launch", "shelf_docking.launch.py"]),
             launch_arguments={"use_sim_time": use_sim_time, "params_file": params}.items(),

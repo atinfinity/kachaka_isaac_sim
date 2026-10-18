@@ -22,5 +22,6 @@ setup(
     entry_points={"console_scripts": [
         f"nav_bridge = {package_name}.nav_bridge:main",
         f"command_server = {package_name}.command_server:main",
+        f"shelf_markers = {package_name}.shelf_markers:main",
     ]},
 )

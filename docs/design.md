@@ -163,6 +163,11 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
 - **Undocking** lowers the pin and drives 0.40 m forward at 0.15 m/s on
   `manual_control/cmd_vel`. It refuses (error −9) when the LiDAR sees
   something in that path, since the robot does not reverse.
+- **RViz.** `robot_description` stays the official URDF without the shelf, as
+  on the real robot. `shelf_markers` draws the shelves as a MarkerArray on
+  `/shelf_markers`: standing shelves in the map frame from
+  `layout/shelves/list`, the towed one in `base_footprint` from
+  `sim/shelf_detection`, so it moves with the robot.
 - **Not modelled.** The real robot finds shelves with its cameras and shows
   each shelf's speed mode; here detection is handed over by the simulator and
   speed mode is always the default.
