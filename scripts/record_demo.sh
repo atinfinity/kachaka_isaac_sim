@@ -61,5 +61,9 @@ sleep 1
 kill -INT "$FFMPEG_PID"; wait "$FFMPEG_PID" || true
 FFMPEG_PID=
 
+# Stop the simulator so every frame and its frames.csv row are on disk.
+pgrep -f "^\S*/bin/python \S*run_sim.py" | xargs -r kill -INT
+for _ in $(seq 60); do grep -q "\[kachaka\] recorded" "$OUT/sim.log" && break; sleep 1; done
+
 echo "[demo] composing $GIF"
 .venv/bin/python scripts/make_demo_gif.py "$OUT" "$GIF" --rviz-crop ${RVIZ_CROP:-470 90 920 750}
