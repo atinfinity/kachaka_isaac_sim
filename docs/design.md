@@ -12,8 +12,8 @@ applications. Synthetic data generation is a secondary use.
 - **MVP**: differential drive, odometry/TF, LiDAR, front/back RGB cameras,
   ToF depth, IMU, and stubs (battery, version, `set_enabled` services,
   `robot_description`, `joint_states`). Kachaka Shelf placed as a static obstacle.
-- **Phase 2**: `goal_pose` and the other `kachaka_command/execute` commands.
-  Charger, battery, RETURN_HOME and shelf docking/carrying are done.
+- **Phase 2** (done): `goal_pose` and the `kachaka_command/execute` commands,
+  charger, battery, RETURN_HOME and shelf docking/carrying.
 - One robot; namespace and frame prefix are parameters.
 
 ## Runtime
@@ -56,7 +56,7 @@ generic names (`/cmd_vel`, `/scan`, `/odom`).
 | `sim/layout`, `sim/shelf_poses`, `sim/shelf_detection`, `sim/shelf_docked`, `sim/shelf_dock` (srv) | | sim-only, see Kachaka Shelf below |
 
 `kachaka_sim_bringup`'s `command_server` adds the parts the real robot runs
-itself: `kachaka_command/execute` (RETURN_HOME and the shelf commands),
+itself: `kachaka_command/execute` (all command types, see Commands below), `goal_pose`,
 `layout/locations/list` (charger id `home`, shelf homes `<shelf>_home`),
 `layout/shelves/list` and `auto_homing/set_enabled`.
 | `robot_description`, `joint_states` | | |
@@ -129,6 +129,22 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   without velocity commands, or below 15 % battery. Retries wait 60 s.
 - Result error codes of `kachaka_command/execute` are the simulator's own
   (negative); the real ones are not published.
+
+## Commands
+- **Moving.** MOVE_TO_POSE is a Nav2 `navigate_to_pose` goal in the map
+  frame. MOVE_TO_LOCATION uses the location's pose; for the charger it runs
+  RETURN_HOME, since driving forward onto the charger would hit it. A towed
+  shelf comes along with its footprint.
+- **SPEAK** has no audio. The text and `tts_on_success` go to the log and the
+  simulator-only `sim/speech` topic, so tests can check them.
+- **Queue.** As on the real robot (kachaka-api docs), `cancel_all` stops the
+  running command and drops queued ones; without it the command waits for the
+  earlier ones. The ROS action leaves `cancel_all` false by default, and
+  `goal_pose` sends MOVE_TO_POSE that way, as the real bridge does.
+- **Canceling** a Nav2 or docking goal waits until the goal has ended. Nav2
+  servers take a new goal as a preemption, and a late cancel request then
+  stopped the next command's goal.
+- Error −10: navigation failed.
 
 ## Kachaka Shelf
 - **Model.** The 3-layer shelf mesh from `GAI-313/kachaka_shelf_description`

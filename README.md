@@ -22,10 +22,31 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
   Nav2 never drives backwards, since Kachaka has no rear range sensor.
-- `kachaka_command/execute` with RETURN_HOME, auto homing and the Kachaka Shelf commands
-  (DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF), built on Nav2's docking server.
+- `kachaka_command/execute` with every command type of the real bridge: MOVE_TO_POSE,
+  MOVE_TO_LOCATION, RETURN_HOME, SPEAK (text only) and the Kachaka Shelf commands
+  (DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF), built on Nav2. Also
+  `goal_pose` and auto homing.
 
-The other commands are planned ([#2](https://github.com/atinfinity/kachaka_isaac_sim/issues/2)).
+### Commands
+
+```bash
+ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action/ExecKachakaCommand \
+    "{kachaka_command: {command_type: 13, move_to_pose_command_x: 1.0, move_to_pose_command_y: 0.5,
+      move_to_pose_command_yaw: 1.57}, cancel_all: true}"   # MOVE_TO_POSE_COMMAND
+ros2 topic pub --once /kachaka/goal_pose geometry_msgs/PoseStamped \
+    "{header: {frame_id: map}, pose: {position: {x: 1.0, y: 0.5}, orientation: {w: 1.0}}}"
+```
+
+| Command | What it does |
+|---|---|
+| MOVE_TO_POSE | Nav2 goal in the map frame |
+| MOVE_TO_LOCATION | Nav2 goal to a location from `layout/locations/list`; the charger (`home`) runs RETURN_HOME |
+| SPEAK | no audio: the text goes to the log and to `sim/speech` |
+
+As on the real robot, `cancel_all: true` stops the running command; without
+it a command waits until the earlier ones finish. `tts_on_success` is sent to
+`sim/speech` after a successful command. `goal_pose` sends MOVE_TO_POSE
+without `cancel_all`, like the real bridge.
 
 ### Returning to the charger
 
@@ -149,6 +170,7 @@ Namespace `/kachaka`, as on the real robot.
 | Topic | Type | Rate |
 |---|---|---|
 | `manual_control/cmd_vel` | `geometry_msgs/Twist` (subscribed) | |
+| `goal_pose` | `geometry_msgs/PoseStamped` (subscribed): MOVE_TO_POSE | |
 | `odometry/odometry` | `nav_msgs/Odometry` | 20 Hz |
 | `wheel_odometry/wheel_odometry` | `nav_msgs/Odometry` | 20 Hz |
 | `lidar/scan` | `sensor_msgs/LaserScan` | 10 Hz |
@@ -166,11 +188,12 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/shelf_detection` | `geometry_msgs/PoseArray`, shelves relative to the robot (simulator only) | 20 Hz |
 | `sim/shelf_docked` | `std_msgs/String`, id of the towed shelf or empty (simulator only, latched) | |
 | `sim/shelf_dock` | `std_srvs/SetBool` service: raise or lower the pin (simulator only) | |
+| `sim/speech` | `std_msgs/String`, text of SPEAK and `tts_on_success` (simulator only) | |
 
 `kachaka_sim_bringup`'s `command_server` provides what the real robot does
-itself: the `kachaka_command/execute` action (RETURN_HOME and the shelf
-commands; others abort), `layout/locations/list` and `layout/shelves/list`,
-and the `auto_homing/set_enabled` service. Do not run it with a real Kachaka
+itself: the `kachaka_command/execute` action, `goal_pose`,
+`layout/locations/list` and `layout/shelves/list`, and the
+`auto_homing/set_enabled` service. Do not run it with a real Kachaka
 (`command_server:=false`).
 
 `/clock` and `/tf` are published at the top level; use `use_sim_time:=true` on
@@ -219,6 +242,7 @@ python3 /tests/ros_camera_check.py /tmp/images
 python3 /tests/ros_nav_check.py      # Nav2 goals (needs slam.launch.py nav:=true)
 python3 /tests/ros_dock_check.py     # charger, battery and RETURN_HOME (same)
 python3 /tests/ros_shelf_check.py    # shelf docking, towing and placing (same)
+python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, goal_pose, cancel_all (same)
 ```
 
 `scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf).
