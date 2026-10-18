@@ -162,6 +162,7 @@ class RecordCamera:
         self.count += 1
         self._queue.put((name, np.ascontiguousarray(data[:, :, :3])))
         self._csv.writerow([name, f"{time.time():.3f}", f"{sim_time:.3f}"])
+        self._csv_file.flush()  # readable while the simulator still runs
 
     def close(self) -> None:
         self._queue.put(None)
