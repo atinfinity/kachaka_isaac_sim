@@ -58,7 +58,7 @@ def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78)) -
     UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("convexHull")
 
 
-def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, height: float = 0.8) -> None:
+def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, height: float = 2.4) -> None:
     """A walled room with a couple of obstacles, enough to test teleop and SLAM."""
     t = 0.05
     root = "/World/Room"

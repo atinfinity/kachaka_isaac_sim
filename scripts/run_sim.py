@@ -33,12 +33,30 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--y", type=float, default=0.0, help="spawn y [m]")
     p.add_argument("--yaw", type=float, default=0.0, help="spawn yaw [rad]")
     p.add_argument("--physics-hz", type=int, default=120)
-    p.add_argument("--render-hz", type=float, default=30.0, help="render and main-loop rate")
+    p.add_argument("--render-hz", type=float, default=10.0,
+                   help="render and main-loop rate; keep it a multiple of the camera rate")
     p.add_argument("--realtime", type=float, default=1.0,
                    help="target real-time factor; 0 runs as fast as possible")
     p.add_argument("--max-sim-time", type=float, default=0.0, help="exit after this many sim seconds (0: never)")
-    p.add_argument("--seed", type=int, default=None, help="seed for odometry noise")
+    p.add_argument("--seed", type=int, default=None, help="seed for sensor and odometry noise")
+    p.add_argument("--no-cameras", action="store_true", help="skip RGB and ToF cameras (faster)")
     return p.parse_args()
+
+
+def publish_cameras(node, cameras, t: float) -> None:
+    for cam in cameras:
+        if not cam.due(t):
+            continue
+        data = cam.read()
+        if data is None:
+            continue
+        if cam.kind == "rgb":
+            node.publish_image(t, cam.name, cam.cfg.frame_id, data, "rgb8", cam.fx)
+        elif cam.cfg.encoding == "16UC1":
+            mm = (data * 1000.0).round().clip(0, 65535).astype("uint16")
+            node.publish_image(t, cam.name, cam.cfg.frame_id, mm, "16UC1", cam.fx)
+        else:
+            node.publish_image(t, cam.name, cam.cfg.frame_id, data, "32FC1", cam.fx)
 
 
 def main() -> int:
@@ -60,6 +78,8 @@ def main() -> int:
     from isaacsim.core.simulation_manager import SimulationManager
 
     app_utils.enable_extension("isaacsim.ros2.bridge")  # also makes the bundled rclpy importable
+    if not args.no_cameras:
+        app_utils.enable_extension("omni.replicator.core")
     app.update()
     SimulationManager.switch_physics_engine("physx")
 
@@ -75,6 +95,12 @@ def main() -> int:
         world.load_world_usd(stage, args.world)
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
+    cameras = []
+    if not args.no_cameras:
+        from kachaka_isaac_sim.cameras import create_cameras
+        from kachaka_isaac_sim.urdf_tools import read_joints
+
+        cameras = create_cameras(stage, cfg, world.BASE_LINK, read_joints(ROBOT_URDF))
     app.update()
 
     from isaacsim.core.rendering_manager import RenderingManager
@@ -84,11 +110,19 @@ def main() -> int:
 
     # Render (and run the main loop) slower than physics: rendering costs far
     # more than a physics step, and sensors need at most 30 Hz.
-    RenderingManager.set_dt(1.0 / args.render_hz)
+    render_dt = 1.0 / args.render_hz
+    RenderingManager.set_dt(render_dt)
+    # PhysX caps the substeps per update by a minimum frame rate; lower it so
+    # every update advances the full render_dt at a fixed physics step.
+    import carb
+
+    carb.settings.get_settings().set_int("/persistent/simulation/minFrameRate", 1)
     app_utils.play()
     app.update()
 
     node = KachakaSimNode(cfg, ROBOT_URDF)
+    for cam in cameras:
+        node.add_camera(cam.name)
     sim_start = SimulationManager.get_simulation_time()
     robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed)
     callbacks = [
@@ -96,12 +130,19 @@ def main() -> int:
         SimulationManager.register_callback(lambda dt, ctx: robot.post_step(dt), SimulationEvent.PHYSICS_POST_STEP),
     ]
 
+    timing = [0.0, 0.0, 0]  # update seconds, camera seconds, loop count
     wall_start = time.monotonic()
     print(f"[kachaka] running: ROS namespace '{node.ns}', world '{args.world}'", flush=True)
     try:
         while app.is_running():
+            t0 = time.perf_counter()
             node.spin_once()
             app.update()
+            t1 = time.perf_counter()
+            publish_cameras(node, cameras, robot.t)
+            timing[0] += t1 - t0
+            timing[1] += time.perf_counter() - t1
+            timing[2] += 1
             sim = robot.t - sim_start
             if args.max_sim_time and sim >= args.max_sim_time:
                 break
@@ -116,6 +157,9 @@ def main() -> int:
     wall = time.monotonic() - wall_start
     sim = robot.t - sim_start
     print(f"[kachaka] stopped: {sim:.1f} s sim in {wall:.1f} s wall (RTF {sim / max(wall, 1e-6):.2f})", flush=True)
+    if timing[2]:
+        print(f"[kachaka] per loop: update {timing[0] / timing[2] * 1e3:.1f} ms, "
+              f"cameras {timing[1] / timing[2] * 1e3:.1f} ms", flush=True)
     node.shutdown()
     # SimulationApp.close() can abort on Isaac Sim 6.1; nothing is left to save.
     os._exit(0)

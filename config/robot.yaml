@@ -38,25 +38,32 @@ lidar:
 
 cameras:
   front:
+    enabled: true
     frame_id: camera_front
-    width: 1280             # (est.)
-    height: 720
+    width: 640              # (est.; real camera may be larger)
+    height: 480
     hfov_deg: 90.0          # (est.)
+    near_clip: 0.025        # m, lens is just behind the body shell
     rate: 10.0
   back:
+    enabled: true
     frame_id: camera_back
-    width: 1280
-    height: 720
+    width: 640
+    height: 480
     hfov_deg: 90.0
+    near_clip: 0.025
     rate: 10.0
 
 tof:
+  enabled: true
   frame_id: tof_camera
+  encoding: 16UC1           # depth in mm (16UC1) or m (32FC1); real format unknown
   width: 160                # (est.)
   height: 120
   hfov_deg: 70.0            # (est.)
   min_range: 0.01
   max_range: 5.0
+  near_clip: 0.01
   rate: 10.0
 
 imu:

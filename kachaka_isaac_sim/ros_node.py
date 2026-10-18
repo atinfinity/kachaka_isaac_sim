@@ -19,7 +19,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
-from sensor_msgs.msg import BatteryState, Imu, JointState, LaserScan
+from sensor_msgs.msg import BatteryState, CameraInfo, Image, Imu, JointState, LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 from tf2_msgs.msg import TFMessage
@@ -71,6 +71,7 @@ class KachakaSimNode:
         self.scan_pub = n.create_publisher(LaserScan, f"{ns}/lidar/scan", sensor)
         self.generic_scan_pub = n.create_publisher(LaserScan, "/scan", sensor) if self.generic else None
         self.imu_pub = n.create_publisher(Imu, f"{ns}/imu/imu", sensor)
+        self.image_pubs: dict[str, tuple] = {}
         self.joint_pub = n.create_publisher(JointState, f"{ns}/joint_states", 10)
         self.tf_pub = n.create_publisher(TFMessage, "/tf", 100)
         self.tf_static_pub = n.create_publisher(TFMessage, "/tf_static", LATCHED)
@@ -227,6 +228,40 @@ class KachakaSimNode:
             msg.angular_velocity_covariance[i] = float(cfg.gyro_noise) ** 2
             msg.linear_acceleration_covariance[i] = float(cfg.accel_noise) ** 2
         self.imu_pub.publish(msg)
+
+    def add_camera(self, name: str) -> None:
+        n, base = self.node, f"{self.ns}/{name}"
+        sensor = qos_profile_sensor_data
+        self.image_pubs[name] = (
+            n.create_publisher(Image, f"{base}/image_raw", sensor),
+            n.create_publisher(CameraInfo, f"{base}/camera_info", sensor),
+            n.create_publisher(CameraInfo, f"{base}/image_raw/camera_info", sensor),
+        )
+
+    def publish_image(self, t: float, name: str, frame_id: str, data, encoding: str, fx: float) -> None:
+        img_pub, info_pub, info_pub2 = self.image_pubs[name]
+        h, w = data.shape[:2]
+        img = Image()
+        img.header.stamp = to_time(t)
+        img.header.frame_id = self.frame(frame_id)
+        img.height, img.width = h, w
+        img.encoding = encoding
+        img.is_bigendian = 0
+        img.step = int(data.strides[0])
+        img.data = data.tobytes()
+        img_pub.publish(img)
+
+        info = CameraInfo()
+        info.header = img.header
+        info.height, info.width = h, w
+        info.distortion_model = "plumb_bob"
+        info.d = [0.0] * 5
+        cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
+        info.k = [fx, 0.0, cx, 0.0, fx, cy, 0.0, 0.0, 1.0]
+        info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        info.p = [fx, 0.0, cx, 0.0, 0.0, fx, cy, 0.0, 0.0, 0.0, 1.0, 0.0]
+        info_pub.publish(info)
+        info_pub2.publish(info)
 
     def publish_battery(self, t: float, percentage: float) -> None:
         msg = BatteryState()
