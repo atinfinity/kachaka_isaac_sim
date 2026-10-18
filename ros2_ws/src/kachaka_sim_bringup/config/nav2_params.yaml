@@ -2,6 +2,9 @@
 # Changes: base_footprint frames, Kachaka footprint, /kachaka/lidar/scan,
 # speed limits of the real bridge (0.3 m/s, 1.57 rad/s), smaller inflation,
 # and a collision-monitor height range that includes the LiDAR (z = 0.105 m).
+# Nav2 never drives backwards: the LiDAR covers only 240 deg to the front and
+# Kachaka has no rear range sensor (MPPI vx_min 0, smoother min x 0, and
+# behavior trees without the BackUp recovery).
 # /odom and /cmd_vel are relayed to the Kachaka namespace by nav_bridge.
 amcl:
   ros__parameters:
@@ -57,10 +60,8 @@ bt_navigator:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
     navigate_through_poses:
       plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
-    # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
+    default_nav_to_pose_bt_xml: $(find-pkg-share kachaka_sim_bringup)/behavior_trees/navigate_to_pose_no_backup.xml
+    default_nav_through_poses_bt_xml: $(find-pkg-share kachaka_sim_bringup)/behavior_trees/navigate_through_poses_no_backup.xml
 
     # plugin_lib_names is used to add custom BT plugins to the executor (vector of strings).
     # Built-in plugins are added automatically
@@ -113,7 +114,7 @@ controller_server:
       vy_std: 0.2
       wz_std: 0.4
       vx_max: 0.3
-      vx_min: -0.2
+      vx_min: 0.0
       vy_max: 0.5
       wz_max: 1.57
       iteration_count: 1
@@ -307,11 +308,9 @@ behavior_server:
     local_footprint_topic: local_costmap/published_footprint
     global_footprint_topic: global_costmap/published_footprint
     cycle_frequency: 10.0
-    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    behavior_plugins: ["spin", "drive_on_heading", "assisted_teleop", "wait"]
     spin:
       plugin: "nav2_behaviors::Spin"
-    backup:
-      plugin: "nav2_behaviors::BackUp"
     drive_on_heading:
       plugin: "nav2_behaviors::DriveOnHeading"
     wait:
@@ -368,7 +367,7 @@ velocity_smoother:
     scale_velocities: False
     feedback: "OPEN_LOOP"
     max_velocity: [0.3, 0.0, 1.57]
-    min_velocity: [-0.3, 0.0, -1.57]
+    min_velocity: [0.0, 0.0, -1.57]
     max_accel: [2.0, 0.0, 3.0]
     max_decel: [-2.0, 0.0, -3.0]
     odom_topic: "odom"

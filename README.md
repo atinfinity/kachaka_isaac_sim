@@ -20,6 +20,7 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Same topic names, message types and QoS as the real bridge.
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
+  Nav2 never drives backwards, since Kachaka has no rear range sensor.
 
 Shelf docking is planned (phase 2).
 

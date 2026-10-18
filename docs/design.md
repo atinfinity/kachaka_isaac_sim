@@ -82,6 +82,10 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
 - **QoS.** Odometry, wheel odometry, scan, IMU and cameras use SensorDataQoS
   like the real bridge. Nav2 expects reliable `/odom`, so `kachaka_sim_bringup`
   relays it (`nav_bridge`), together with `/cmd_vel` → `manual_control/cmd_vel`.
+- **No reversing in Nav2.** The LiDAR covers 240° to the front and nothing
+  senses range behind the robot, so MPPI `vx_min` and the velocity smoother's
+  minimum x are 0, and the behavior trees drop the `BackUp` recovery.
+  `tests/ros_nav_check.py` fails on any backward `cmd_vel`.
 - **DDS buffers.** Receiving 640×480 RGB at 10 Hz needs larger socket buffers
   on the client: `FASTDDS_BUILTIN_TRANSPORTS=UDPv4?sockets_size=4194304`.
 - **ToF camera** points 45° upward, as in the official URDF.

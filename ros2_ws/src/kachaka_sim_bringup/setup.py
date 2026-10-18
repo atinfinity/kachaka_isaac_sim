@@ -13,6 +13,7 @@ setup(
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/launch", glob("launch/*.py")),
         (f"share/{package_name}/config", glob("config/*")),
+        (f"share/{package_name}/behavior_trees", glob("behavior_trees/*.xml")),
         (f"share/{package_name}/maps", glob("maps/*")),
     ],
     install_requires=["setuptools"],

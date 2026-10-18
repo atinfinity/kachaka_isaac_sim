@@ -19,7 +19,8 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - オドメトリ（統合・車輪）、TF、`joint_states`、`robot_description`、バッテリー・バージョンのスタブ
 - topic 名・メッセージ型・QoS は実機ブリッジと同じ
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
-- カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ
+- カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
+  カチャカには後方の距離センサーがないので、Nav2 は後退しない設定です
 
 シェルフのドッキングは今後対応予定です（フェーズ 2）。
 

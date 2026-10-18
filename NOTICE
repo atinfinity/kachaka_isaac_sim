@@ -18,3 +18,11 @@ in this repository):
 
 - NVIDIA Isaac Sim and its scene assets are subject to the NVIDIA Isaac Sim
   license (https://docs.isaacsim.omniverse.nvidia.com/latest/common/NVIDIA_Omniverse_License_Agreement.html).
+
+Third-party material included in this repository, modified:
+
+- Nav2 (https://github.com/ros-navigation/navigation2), Jazzy.
+  Copyright the Nav2 contributors. Apache License 2.0.
+  ros2_ws/src/kachaka_sim_bringup/config/nav2_params.yaml and
+  ros2_ws/src/kachaka_sim_bringup/behavior_trees/*.xml are adapted from the
+  nav2_bringup and nav2_bt_navigator defaults.

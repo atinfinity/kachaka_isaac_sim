@@ -1,7 +1,8 @@
 """Send Nav2 goals in the default room and check the robot reaches them.
 
 Run against the simulator with SLAM + Nav2 up (slam.launch.py nav:=true).
-Success is judged on /kachaka/sim/ground_truth. The SLAM map frame starts at
+Success is judged on /kachaka/sim/ground_truth. The check also fails if Nav2
+ever commands a backward speed: Kachaka has no rear range sensor. The SLAM map frame starts at
 the spawn pose, which is the world origin, so goals and ground truth line up.
 
     python3 tests/ros_nav_check.py
@@ -13,6 +14,7 @@ import sys
 import rclpy
 from action_msgs.msg import GoalStatus
 from nav2_msgs.action import NavigateToPose
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -30,6 +32,8 @@ class NavCheck(Node):
         self.client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.gt = None
         self.create_subscription(Odometry, "/kachaka/sim/ground_truth", self.on_gt, qos_profile_sensor_data)
+        self.min_vx = 0.0
+        self.create_subscription(Twist, "/kachaka/manual_control/cmd_vel", self.on_cmd, 10)
         self.map_info = None
         latched = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(OccupancyGrid, "/map", lambda m: setattr(self, "map_info", m.info), latched)
@@ -51,6 +55,9 @@ class NavCheck(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
         print(f"  map bounds {self.map_bounds()} do not cover ({x}, {y})", flush=True)
         return False
+
+    def on_cmd(self, msg):
+        self.min_vx = min(self.min_vx, msg.linear.x)
 
     def on_gt(self, msg):
         p = msg.pose.pose.position
@@ -92,6 +99,9 @@ def main():
         ok = ok and err < TOLERANCE
         ok_all &= ok
         print(f"goal ({x:+.1f}, {y:+.1f}): {'OK' if ok else 'FAIL'} ({why}, error {err:.2f} m, {dt:.0f} s)", flush=True)
+    backward = node.min_vx < -0.01
+    ok_all &= not backward
+    print(f"backward motion: {'FAIL' if backward else 'OK'} (min cmd_vel x {node.min_vx:+.2f} m/s)", flush=True)
     node.destroy_node()
     rclpy.shutdown()
     return 0 if ok_all else 1
