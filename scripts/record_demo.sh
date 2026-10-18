@@ -16,7 +16,7 @@ case "$DEMO" in
         RUN="python3 /tests/ros_nav_check.py" ;;
     dock)
         GIF=docs/dock.gif
-        VIEW=(-1.2 1.5 1.3 -1.8 0.0 0.0)  # oblique, close to the charger, clear of box_b
+        VIEW=(-2.1 -1.7 2.0 -1.7 0.0 0.0)  # from the south like RViz (+x right), over box_b
         RUN="python3 /tests/ros_dock_check.py --demo" ;;
     *) echo "usage: $0 [nav|dock]" >&2; exit 2 ;;
 esac
@@ -61,9 +61,9 @@ sleep 1
 kill -INT "$FFMPEG_PID"; wait "$FFMPEG_PID" || true
 FFMPEG_PID=
 
-# Stop the simulator so every frame and its frames.csv row are on disk.
+# Stop the simulator so the frame writer finishes the last PNGs.
 pgrep -f "^\S*/bin/python \S*run_sim.py" | xargs -r kill -INT
-for _ in $(seq 60); do grep -q "\[kachaka\] recorded" "$OUT/sim.log" && break; sleep 1; done
+for _ in $(seq 60); do pgrep -f "^\S*/bin/python \S*run_sim.py" >/dev/null || break; sleep 1; done
 
 echo "[demo] composing $GIF"
 .venv/bin/python scripts/make_demo_gif.py "$OUT" "$GIF" --rviz-crop ${RVIZ_CROP:-470 90 920 750}
