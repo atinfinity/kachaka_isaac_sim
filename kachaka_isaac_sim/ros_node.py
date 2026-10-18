@@ -19,7 +19,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
-from sensor_msgs.msg import BatteryState, JointState
+from sensor_msgs.msg import BatteryState, Imu, JointState, LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 from tf2_msgs.msg import TFMessage
@@ -62,10 +62,15 @@ class KachakaSimNode:
 
         # --- outputs --------------------------------------------------------
         self.clock_pub = n.create_publisher(Clock, "/clock", 10)
-        self.odom_pub = n.create_publisher(Odometry, f"{ns}/odometry/odometry", 10)
-        self.wheel_odom_pub = n.create_publisher(Odometry, f"{ns}/wheel_odometry/wheel_odometry", 10)
-        self.gt_pub = n.create_publisher(Odometry, f"{ns}/sim/ground_truth", 10)
+        # The real bridge publishes all sensor streams with SensorDataQoS.
+        sensor = qos_profile_sensor_data
+        self.odom_pub = n.create_publisher(Odometry, f"{ns}/odometry/odometry", sensor)
+        self.wheel_odom_pub = n.create_publisher(Odometry, f"{ns}/wheel_odometry/wheel_odometry", sensor)
+        self.gt_pub = n.create_publisher(Odometry, f"{ns}/sim/ground_truth", sensor)
         self.generic_odom_pub = n.create_publisher(Odometry, "/odom", 10) if self.generic else None
+        self.scan_pub = n.create_publisher(LaserScan, f"{ns}/lidar/scan", sensor)
+        self.generic_scan_pub = n.create_publisher(LaserScan, "/scan", sensor) if self.generic else None
+        self.imu_pub = n.create_publisher(Imu, f"{ns}/imu/imu", sensor)
         self.joint_pub = n.create_publisher(JointState, f"{ns}/joint_states", 10)
         self.tf_pub = n.create_publisher(TFMessage, "/tf", 100)
         self.tf_static_pub = n.create_publisher(TFMessage, "/tf_static", LATCHED)
@@ -189,6 +194,39 @@ class KachakaSimNode:
                 quat = _quat_mul(j["quat"], _axis_angle(ax, q))
             tfs.append(self._transform(t, j["parent"], j["child"], xyz, quat))
         self.tf_pub.publish(TFMessage(transforms=tfs))
+
+    def publish_scan(self, t: float, lidar, scan_time: float) -> None:
+        cfg = self.cfg.lidar
+        msg = LaserScan()
+        msg.header.stamp = to_time(t)
+        msg.header.frame_id = self.frame(cfg.frame_id)
+        msg.angle_min = float(lidar.angle_min)
+        msg.angle_max = float(lidar.angle_max)
+        msg.angle_increment = float(lidar.angle_increment)
+        msg.time_increment = 0.0
+        msg.scan_time = float(scan_time)
+        msg.range_min = float(cfg.min_range)
+        msg.range_max = float(cfg.max_range)
+        msg.ranges = lidar.ranges
+        self.scan_pub.publish(msg)
+        if self.generic_scan_pub:
+            self.generic_scan_pub.publish(msg)
+
+    def publish_imu(self, t: float, imu) -> None:
+        cfg = self.cfg.imu
+        msg = Imu()
+        msg.header.stamp = to_time(t)
+        msg.header.frame_id = self.frame(cfg.frame_id)
+        o = msg.orientation
+        o.w, o.x, o.y, o.z = (float(c) for c in imu.orientation)
+        av, la = msg.angular_velocity, msg.linear_acceleration
+        av.x, av.y, av.z = (float(c) for c in imu.angular_velocity)
+        la.x, la.y, la.z = (float(c) for c in imu.linear_acceleration)
+        for i in (0, 4, 8):
+            msg.orientation_covariance[i] = 1e-3
+            msg.angular_velocity_covariance[i] = float(cfg.gyro_noise) ** 2
+            msg.linear_acceleration_covariance[i] = float(cfg.accel_noise) ** 2
+        self.imu_pub.publish(msg)
 
     def publish_battery(self, t: float, percentage: float) -> None:
         msg = BatteryState()

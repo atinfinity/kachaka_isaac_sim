@@ -15,7 +15,7 @@ n = Node("teleop_check", parameter_overrides=[Parameter("use_sim_time", value=Tr
 st = {}
 for k, t in [("odom", "/kachaka/odometry/odometry"), ("wheel", "/kachaka/wheel_odometry/wheel_odometry"),
              ("gt", "/kachaka/sim/ground_truth")]:
-    n.create_subscription(Odometry, t, lambda m, k=k: st.__setitem__(k, m), 10)
+    n.create_subscription(Odometry, t, lambda m, k=k: st.__setitem__(k, m), qos_profile_sensor_data)
 pub = n.create_publisher(Twist, "/kachaka/manual_control/cmd_vel", qos_profile_sensor_data)
 while len(st) < 3:
     rclpy.spin_once(n, timeout_sec=0.1)

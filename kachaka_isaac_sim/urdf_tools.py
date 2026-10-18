@@ -208,3 +208,45 @@ def read_joints(urdf_path: Path) -> list[dict]:
             "axis": axis,
         })
     return joints
+
+
+def _qmul(a, b):
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return (
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    )
+
+
+def _qrot(q, v):
+    w, x, y, z = q
+    _, rx, ry, rz = _qmul(_qmul(q, (0.0, *v)), (w, -x, -y, -z))
+    return rx, ry, rz
+
+
+def frame_pose(joints: list[dict], frame: str, root: str = "base_link"):
+    """Pose (xyz, quat w-x-y-z) of `frame` in `root`, through fixed joints."""
+    by_child = {j["child"]: j for j in joints}
+    xyz, quat = (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0)
+    while frame != root:
+        j = by_child[frame]
+        if j["type"] != "fixed":
+            raise ValueError(f"{frame} is not rigidly attached to {root}")
+        # T = T_joint * T
+        r = _qrot(j["quat"], xyz)
+        xyz = tuple(a + b for a, b in zip(j["xyz"], r))
+        quat = _qmul(j["quat"], quat)
+        frame = j["parent"]
+    return xyz, quat
+
+
+def read_com(urdf_path: Path, link: str = "base_link") -> tuple[float, float, float]:
+    for el in ET.parse(urdf_path).getroot().iter("link"):
+        if el.get("name") == link:
+            origin = el.find("inertial/origin")
+            if origin is not None:
+                return tuple(float(v) for v in origin.get("xyz", "0 0 0").split())
+    return (0.0, 0.0, 0.0)

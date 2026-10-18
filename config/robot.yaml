@@ -62,6 +62,8 @@ tof:
 imu:
   frame_id: imu_link
   rate: 100.0               # Hz (est.)
+  gyro_noise: 0.002         # rad/s stddev (est.)
+  accel_noise: 0.02         # m/s^2 stddev (est.)
 
 stubs:
   version: "kachaka-isaac-sim 0.1.0"

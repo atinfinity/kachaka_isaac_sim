@@ -90,7 +90,7 @@ def main() -> int:
 
     node = KachakaSimNode(cfg, ROBOT_URDF)
     sim_start = SimulationManager.get_simulation_time()
-    robot = SimRobot(world.BASE_LINK, cfg, node, sim_start, args.seed)
+    robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed)
     callbacks = [
         SimulationManager.register_callback(lambda dt, ctx: robot.pre_step(dt), SimulationEvent.PHYSICS_PRE_STEP),
         SimulationManager.register_callback(lambda dt, ctx: robot.post_step(dt), SimulationEvent.PHYSICS_POST_STEP),
