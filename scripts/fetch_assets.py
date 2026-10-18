@@ -19,7 +19,7 @@ THIRD_PARTY = ROOT / "third_party"
 SOURCES = {
     # name: (url, commit)
     "kachaka-api": ("https://github.com/pf-robotics/kachaka-api.git", "4370c3d"),
-    "kachaka_shelf_description": ("https://github.com/GAI-313/kachaka_shelf_description.git", None),
+    "kachaka_shelf_description": ("https://github.com/GAI-313/kachaka_shelf_description.git", "149c891"),
 }
 
 

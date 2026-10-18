@@ -22,6 +22,7 @@ from kachaka_isaac_sim.config import DEFAULT_CONFIG, load_config  # noqa: E402
 
 ROBOT_USD = ROOT / "assets/generated/kachaka/kachaka.usda"
 ROBOT_URDF = ROOT / "build/kachaka.urdf"
+SHELF_STL = ROOT / "third_party/kachaka_shelf_description/meshes/kachaka_shelf_3layer.stl"
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,7 +91,7 @@ def main() -> int:
     world.setup_stage(stage, args.physics_hz)
     world.add_ground(stage)
     if args.world == "room":
-        world.add_simple_room(stage)
+        world.add_simple_room(stage, shelf_stl=SHELF_STL)
     elif args.world != "empty":
         world.load_world_usd(stage, args.world)
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)

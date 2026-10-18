@@ -1,4 +1,4 @@
-"""Stage building: physics scene, floor, simple room, robot and contact materials.
+"""Stage building: physics scene, floor, simple room, shelf, robot and contact materials.
 
 Import only after SimulationApp has started.
 """
@@ -58,7 +58,8 @@ def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78)) -
     UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("convexHull")
 
 
-def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, height: float = 2.4) -> None:
+def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, height: float = 2.4,
+                    shelf_stl: Path | None = None) -> None:
     """A walled room with a couple of obstacles, enough to test teleop and SLAM."""
     t = 0.05
     root = "/World/Room"
@@ -70,6 +71,36 @@ def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, 
     add_box(stage, f"{root}/box_a", (1.4, 1.0, 0.25), (0.4, 0.4, 0.5), (0.55, 0.4, 0.3))
     add_box(stage, f"{root}/box_b", (-1.2, -0.9, 0.35), (0.6, 0.3, 0.7), (0.3, 0.45, 0.6))
     add_box(stage, f"{root}/pillar", (-0.6, 1.1, 0.4), (0.2, 0.2, 0.8), (0.6, 0.6, 0.6))
+    if shelf_stl is not None and shelf_stl.exists():
+        add_shelf(stage, f"{root}/shelf", shelf_stl, 1.3, -1.2, math.pi / 2)
+
+
+def read_stl(path: Path, scale: float = 1.0):
+    """Binary STL -> (N*3, 3) float32 vertices, one triangle per 3 rows."""
+    import numpy as np
+
+    data = path.read_bytes()
+    count = int(np.frombuffer(data[80:84], np.uint32)[0])
+    tri = np.dtype([("n", "<f4", 3), ("v", "<f4", (3, 3)), ("attr", "<u2")])
+    return np.frombuffer(data[84:84 + count * 50], dtype=tri)["v"].reshape(-1, 3) * scale
+
+
+def add_shelf(stage: Usd.Stage, path: str, stl: Path, x: float, y: float, yaw: float = 0.0) -> None:
+    """Kachaka Shelf as a static obstacle (triangle-mesh collider, so the
+    robot-sized gap under it stays open)."""
+    v = read_stl(stl, 0.001)
+    z0 = -float(v[:, 2].min())  # stand on the floor
+    mesh = UsdGeom.Mesh.Define(stage, path)
+    mesh.CreatePointsAttr([Gf.Vec3f(*map(float, p)) for p in v])
+    mesh.CreateFaceVertexCountsAttr([3] * (len(v) // 3))
+    mesh.CreateFaceVertexIndicesAttr(list(range(len(v))))
+    mesh.CreateSubdivisionSchemeAttr("none")
+    mesh.CreateDisplayColorAttr([Gf.Vec3f(0.85, 0.85, 0.83)])
+    xf = UsdGeom.Xformable(mesh.GetPrim())
+    xf.AddTranslateOp().Set(Gf.Vec3d(x, y, z0))
+    xf.AddRotateZOp().Set(math.degrees(yaw))
+    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+    UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("none")
 
 
 def add_robot(stage: Usd.Stage, usd_path: Path, x: float = 0.0, y: float = 0.0, yaw: float = 0.0) -> Usd.Prim:
