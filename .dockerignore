@@ -1,0 +1,5 @@
+# The image only needs the ROS packages; keep the build context small.
+*
+!docker/entrypoint.sh
+!ros2_ws/src/
+!third_party/kachaka-api/ros2/kachaka_description/
