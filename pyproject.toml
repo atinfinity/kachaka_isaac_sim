@@ -1,0 +1,23 @@
+[project]
+name = "kachaka-isaac-sim"
+version = "0.1.0"
+description = "Kachaka robot simulator on NVIDIA Isaac Sim with a ROS 2 interface compatible with the official kachaka-api bridge"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "isaacsim[all,extscache]==6.1.0.0",
+    # Isaac Sim pins this pre-release; naming it here lets uv accept it.
+    "tinyobjloader==2.0.0rc13",
+    "pyyaml",
+]
+
+[tool.uv]
+package = false
+# Isaac Sim wheels exist for Linux and Windows only.
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+index-strategy = "unsafe-best-match"
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"

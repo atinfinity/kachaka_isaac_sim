@@ -1,0 +1,70 @@
+# Kachaka simulation parameters.
+# (est.) = not published by Preferred Robotics; taken from the community Gazebo
+# model (CyberAgentAILab/kachaka_ros2_dev_kit) or chosen for the simulator.
+
+ros:
+  namespace: kachaka
+  frame_prefix: ""          # same role as FRAME_PREFIX on the real bridge
+  remap_generic: false      # also use /cmd_vel, /scan, /odom style names
+
+drive:
+  wheel_radius: 0.045       # m, official URDF
+  wheel_separation: 0.200   # m, official URDF
+  max_linear_vel: 0.3       # m/s, full scale of the real bridge (spec top speed 0.8)
+  max_angular_vel: 1.57     # rad/s, full scale of the real bridge
+  max_linear_vel_towing: 0.5  # m/s, spec top speed with a Kachaka Shelf (phase 2)
+  max_linear_accel: 2.0     # m/s^2 (est.)
+  max_angular_accel: 3.0    # rad/s^2 (est.)
+  wheel_max_torque: 2.0     # Nm per wheel, Kachaka Pro max motor torque
+  wheel_damping: 10.0       # Nm*s/rad, velocity drive gain
+  wheel_friction: 1.0       # (est.)
+  caster_friction: 0.02
+  cmd_vel_timeout: 0.5      # s, stop if no command arrives
+
+odometry:
+  rate: 20.0                # Hz (est.)
+  # Noise added to the fused odometry (per sqrt(second) random walk).
+  fused_noise_xy: 0.002
+  fused_noise_yaw: 0.002
+
+lidar:
+  frame_id: laser_frame
+  rate: 10.0                # Hz (est.)
+  samples: 400              # (est.)
+  fov_deg: 240.0            # (est.)
+  min_range: 0.1            # m (est.)
+  max_range: 10.0           # m (spec says 12 m on Kachaka Pro)
+  noise_stddev: 0.03        # m (est.)
+
+cameras:
+  front:
+    frame_id: camera_front
+    width: 1280             # (est.)
+    height: 720
+    hfov_deg: 90.0          # (est.)
+    rate: 10.0
+  back:
+    frame_id: camera_back
+    width: 1280
+    height: 720
+    hfov_deg: 90.0
+    rate: 10.0
+
+tof:
+  frame_id: tof_camera
+  width: 160                # (est.)
+  height: 120
+  hfov_deg: 70.0            # (est.)
+  min_range: 0.01
+  max_range: 5.0
+  rate: 10.0
+
+imu:
+  frame_id: imu_link
+  rate: 100.0               # Hz (est.)
+
+stubs:
+  version: "kachaka-isaac-sim 0.1.0"
+  battery_percentage: 1.0
+  battery_drain_per_hour: 0.5   # fraction per hour of sim time
+  battery_voltage: 25.2
