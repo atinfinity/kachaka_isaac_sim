@@ -43,6 +43,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-sim-time", type=float, default=0.0, help="exit after this many sim seconds (0: never)")
     p.add_argument("--seed", type=int, default=None, help="seed for sensor and odometry noise")
     p.add_argument("--no-cameras", action="store_true", help="skip RGB and ToF cameras (faster)")
+    p.add_argument("--record", metavar="DIR", help="save bird's-eye PNG frames to DIR (for demo videos)")
+    p.add_argument("--record-hz", type=float, default=10.0, help="frame rate for --record")
+    p.add_argument("--record-view", type=float, nargs=6, default=[0.0, -2.4, 7.5, 0.0, -0.1, 0.0],
+                   metavar=("EX", "EY", "EZ", "TX", "TY", "TZ"), help="--record camera position and target [m]")
     return p.parse_args()
 
 
@@ -81,7 +85,7 @@ def main() -> int:
     from isaacsim.core.simulation_manager import SimulationManager
 
     app_utils.enable_extension("isaacsim.ros2.bridge")  # also makes the bundled rclpy importable
-    if not args.no_cameras:
+    if not args.no_cameras or args.record:
         app_utils.enable_extension("omni.replicator.core")
     app.update()
     SimulationManager.switch_physics_engine("physx")
@@ -105,6 +109,12 @@ def main() -> int:
         from kachaka_isaac_sim.urdf_tools import read_joints
 
         cameras = create_cameras(stage, cfg, world.BASE_LINK, read_joints(ROBOT_URDF))
+    recorder = None
+    if args.record:
+        from kachaka_isaac_sim.cameras import RecordCamera
+
+        v = args.record_view
+        recorder = RecordCamera(stage, args.record, v[:3], v[3:], args.record_hz)
     app.update()
 
     from isaacsim.core.rendering_manager import RenderingManager
@@ -144,6 +154,8 @@ def main() -> int:
             app.update()
             t1 = time.perf_counter()
             publish_cameras(node, cameras, robot.t)
+            if recorder:
+                recorder.capture(robot.t - sim_start)
             timing[0] += t1 - t0
             timing[1] += time.perf_counter() - t1
             timing[2] += 1
@@ -164,6 +176,9 @@ def main() -> int:
     if timing[2]:
         print(f"[kachaka] per loop: update {timing[0] / timing[2] * 1e3:.1f} ms, "
               f"cameras {timing[1] / timing[2] * 1e3:.1f} ms", flush=True)
+    if recorder:
+        recorder.close()
+        print(f"[kachaka] recorded {recorder.count} frames to {args.record}", flush=True)
     node.shutdown()
     # SimulationApp.close() can abort on Isaac Sim 6.1; nothing is left to save.
     os._exit(0)
