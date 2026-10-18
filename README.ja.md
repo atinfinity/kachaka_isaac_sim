@@ -22,10 +22,29 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
   カチャカには後方の距離センサーがないので、Nav2 は後退しない設定です
-- Nav2 のドッキングサーバーを使った `kachaka_command/execute` の RETURN_HOME、自動充電、
-  カチャカシェルフのコマンド（DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF）
+- 実機ブリッジの全コマンドに対応した `kachaka_command/execute`（Nav2 ベース）: MOVE_TO_POSE、
+  MOVE_TO_LOCATION、RETURN_HOME、SPEAK（テキストのみ）、カチャカシェルフのコマンド
+  （DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF）。`goal_pose` と自動充電にも対応
 
-ほかのコマンドは今後対応予定です（[#2](https://github.com/atinfinity/kachaka_isaac_sim/issues/2)）。
+### コマンド
+
+```bash
+ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action/ExecKachakaCommand \
+    "{kachaka_command: {command_type: 13, move_to_pose_command_x: 1.0, move_to_pose_command_y: 0.5,
+      move_to_pose_command_yaw: 1.57}, cancel_all: true}"   # MOVE_TO_POSE_COMMAND
+ros2 topic pub --once /kachaka/goal_pose geometry_msgs/PoseStamped \
+    "{header: {frame_id: map}, pose: {position: {x: 1.0, y: 0.5}, orientation: {w: 1.0}}}"
+```
+
+| コマンド | 動作 |
+|---|---|
+| MOVE_TO_POSE | map 座標で Nav2 のゴールを送る |
+| MOVE_TO_LOCATION | `layout/locations/list` の場所へ Nav2 で移動。充電器（`home`）なら RETURN_HOME |
+| SPEAK | 音声なし。テキストをログと `sim/speech` に出す |
+
+実機と同じく、`cancel_all: true` なら実行中のコマンドを止めます。付けなければ前のコマンドが
+終わるまで待ちます。`tts_on_success` はコマンド成功後に `sim/speech` に出ます。`goal_pose` は
+実機ブリッジと同じく `cancel_all` なしで MOVE_TO_POSE を送ります。
 
 ### 充電器に戻る
 
@@ -146,6 +165,7 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | Topic | 型 | 周期 |
 |---|---|---|
 | `manual_control/cmd_vel` | `geometry_msgs/Twist`（購読） | |
+| `goal_pose` | `geometry_msgs/PoseStamped`（購読）: MOVE_TO_POSE | |
 | `odometry/odometry` | `nav_msgs/Odometry` | 20 Hz |
 | `wheel_odometry/wheel_odometry` | `nav_msgs/Odometry` | 20 Hz |
 | `lidar/scan` | `sensor_msgs/LaserScan` | 10 Hz |
@@ -163,9 +183,10 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/shelf_detection` | `geometry_msgs/PoseArray`、ロボットから見たシェルフ位置（シミュレータのみ） | 20 Hz |
 | `sim/shelf_docked` | `std_msgs/String`、牽引中のシェルフ ID か空文字（シミュレータのみ、latched） | |
 | `sim/shelf_dock` | `std_srvs/SetBool` サービス、ピンの上げ下げ（シミュレータのみ） | |
+| `sim/speech` | `std_msgs/String`、SPEAK と `tts_on_success` のテキスト（シミュレータのみ） | |
 
 実機が自分で提供している機能は `kachaka_sim_bringup` の `command_server` が提供します。
-`kachaka_command/execute` action（RETURN_HOME とシェルフのコマンド。ほかは abort）、
+`kachaka_command/execute` action、`goal_pose`、
 `layout/locations/list` と `layout/shelves/list`、`auto_homing/set_enabled` サービスです。実機と一緒には起動しないでください
 （`command_server:=false`）。
 
@@ -211,6 +232,7 @@ python3 /tests/ros_camera_check.py /tmp/images
 python3 /tests/ros_nav_check.py      # Nav2 のゴール（slam.launch.py nav:=true が必要）
 python3 /tests/ros_dock_check.py     # 充電器、バッテリー、RETURN_HOME（同上）
 python3 /tests/ros_shelf_check.py    # シェルフのドッキング、牽引、設置（同上）
+python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK、goal_pose、cancel_all（同上）
 ```
 
 上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`）。

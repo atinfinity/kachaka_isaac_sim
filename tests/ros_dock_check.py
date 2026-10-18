@@ -19,14 +19,18 @@ import sys
 import time
 
 import rclpy
-from geometry_msgs.msg import PoseStamped
 from kachaka_interfaces.action import ExecKachakaCommand
 from kachaka_interfaces.msg import KachakaCommand, Location, LocationList
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import BatteryState
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
@@ -121,7 +125,7 @@ def main():
 
     # 2. Unsupported commands abort.
     if not demo:
-        res = n.run_action(n.command, n.command_goal(KachakaCommand.SPEAK_COMMAND), 10.0)
+        res = n.run_action(n.command, n.command_goal(KachakaCommand.COMMAND_TYPE_OTHER), 10.0)
         check("unsupported command aborts", res is not None and not res.result.success,
               res.result.message if res else "")
 

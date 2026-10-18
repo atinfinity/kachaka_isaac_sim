@@ -12,7 +12,15 @@
   - MOVE_SHELF docks with a shelf (if needed), takes it to a location and
     puts it down there precisely by "docking" at the location; it undocks if
     asked to. RETURN_SHELF moves a shelf to its home and undocks.
-  Other commands abort.
+  - MOVE_TO_POSE sends a Nav2 NavigateToPose goal in the map frame.
+    MOVE_TO_LOCATION does the same with a location's pose; for the charger
+    it runs RETURN_HOME, since the robot backs onto it.
+  - SPEAK has no audio: the text goes to the log and to the simulator-only
+    topic `sim/speech`, as does `tts_on_success` after a successful command.
+  - `cancel_all` stops the running command and drops queued ones; without
+    it the command waits until the earlier ones finish, as on the real robot.
+- Topic `/kachaka/goal_pose` (PoseStamped): sends MOVE_TO_POSE through the
+  action without `cancel_all`, like the real bridge.
 - Topic `/kachaka/layout/locations/list`: the charger, the shelves' homes and
   the world's other locations. Topic `/kachaka/layout/shelves/list`: the
   shelves with their current poses. Both come from simulator topics
@@ -35,17 +43,30 @@ import time
 from dataclasses import dataclass
 
 import rclpy
+from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import Point32, Polygon, Pose2D, PoseArray, PoseStamped, Twist
 from kachaka_interfaces.action import ExecKachakaCommand
-from kachaka_interfaces.msg import KachakaCommand, Location, LocationList, Shelf, ShelfList, ShelfSize
-from nav2_msgs.action import DockRobot
+from kachaka_interfaces.msg import (
+    KachakaCommand,
+    Location,
+    LocationList,
+    Shelf,
+    ShelfList,
+    ShelfSize,
+)
+from nav2_msgs.action import DockRobot, NavigateToPose
 from nav2_msgs.srv import ClearEntireCostmap
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from rclpy.time import Time
 from sensor_msgs.msg import BatteryState, LaserScan
 from std_msgs.msg import String
@@ -66,6 +87,7 @@ ERROR_SERVER_UNAVAILABLE = -6
 ERROR_NO_SHELF = -7
 ERROR_UNKNOWN_LOCATION = -8
 ERROR_BLOCKED = -9
+ERROR_NAVIGATION_FAILED = -10
 ERROR_OTHER_SHELF_DOCKED = -11
 
 CHARGER_ID = "home"  # the id the real robot gives its charger
@@ -165,7 +187,7 @@ class CommandServer(Node):
         self.costmap: OccupancyGrid | None = None
         self.last_activity = self.get_clock().now()
         self.lock = threading.Lock()  # one command at a time
-        self.request_id = 0  # bumped by each new request; older ones stop
+        self.request_id = 0  # bumped by each command that cancels the others; older ones stop
         self.auto_retry_at = 0.0  # monotonic time; wait after a failed auto homing
         self.shelf_target = None  # what the shelf docking server should see (see _relay_shelf)
         self.dock_error = 0  # DockRobot error code of the last failed docking
@@ -182,6 +204,7 @@ class CommandServer(Node):
         self.clear_clients = [self.create_client(ClearEntireCostmap, f"{c}/clear_entirely_{c}", callback_group=group)
                               for c in ("local_costmap", "global_costmap")]
         self.cmd_pub = self.create_publisher(Twist, f"{prefix}/manual_control/cmd_vel", 10)
+        self.speech_pub = self.create_publisher(String, f"{prefix}/sim/speech", 10)
         self.create_subscription(PoseStamped, f"{prefix}/sim/charger_pose", self._on_charger, LATCHED,
                                  callback_group=group)
         self.create_subscription(String, f"{prefix}/sim/layout", self._on_layout, LATCHED, callback_group=group)
@@ -212,6 +235,11 @@ class CommandServer(Node):
                             callback_group=group)
         self.dock_client = ActionClient(self, DockRobot, "dock_robot", callback_group=group)
         self.shelf_client = ActionClient(self, DockRobot, "shelf_dock_robot", callback_group=group)
+        self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose", callback_group=group)
+        # The real bridge's goal_pose: MOVE_TO_POSE through the action, queued.
+        self.self_client = ActionClient(self, ExecKachakaCommand, f"{prefix}/kachaka_command/execute",
+                                        callback_group=group)
+        self.create_subscription(PoseStamped, f"{prefix}/goal_pose", self._on_goal_pose, 5, callback_group=group)
         self.action_server = ActionServer(
             self, ExecKachakaCommand, f"{prefix}/kachaka_command/execute",
             execute_callback=self._execute,
@@ -261,6 +289,16 @@ class CommandServer(Node):
     def _on_cmd_vel(self, msg: Twist) -> None:
         if msg.linear.x or msg.angular.z:
             self.last_activity = self.get_clock().now()
+
+    def _on_goal_pose(self, msg: PoseStamped) -> None:
+        goal = ExecKachakaCommand.Goal()
+        goal.kachaka_command.command_type = KachakaCommand.MOVE_TO_POSE_COMMAND
+        p = _from_pose(msg.pose)
+        goal.kachaka_command.move_to_pose_command_x = p.x
+        goal.kachaka_command.move_to_pose_command_y = p.y
+        goal.kachaka_command.move_to_pose_command_yaw = p.yaw
+        self.self_client.send_goal_async(goal)
+        self.get_logger().info(f"sent goal_pose ({p.x:.3f}, {p.y:.3f}, {p.yaw:.3f})")
 
     def _on_set_auto_homing(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
         self.auto_homing = req.data
@@ -357,6 +395,11 @@ class CommandServer(Node):
                 cmd.move_shelf_command_undock_on_destination),
             KachakaCommand.RETURN_SHELF_COMMAND:
                 lambda stopped: self._return_shelf(stopped, cmd.return_shelf_command_target_shelf_id),
+            KachakaCommand.MOVE_TO_POSE_COMMAND: lambda stopped: self._move_to_pose(
+                stopped, P2(cmd.move_to_pose_command_x, cmd.move_to_pose_command_y, cmd.move_to_pose_command_yaw)),
+            KachakaCommand.MOVE_TO_LOCATION_COMMAND:
+                lambda stopped: self._move_to_location(stopped, cmd.move_to_location_command_target_location_id),
+            KachakaCommand.SPEAK_COMMAND: lambda stopped: self._speak(cmd.speak_command_text),
         }
         handler = handlers.get(cmd.command_type)
         if handler is None:
@@ -364,9 +407,11 @@ class CommandServer(Node):
             self.get_logger().warn(msg)
             goal_handle.abort()
             return ExecKachakaCommand.Result(success=False, error_code=ERROR_UNSUPPORTED, message=msg)
-        code, msg = self.run(handler, goal_handle)
+        code, msg = self.run(handler, goal_handle, goal_handle.request.cancel_all)
         if code != OK:
             self.get_logger().warn(f"command {cmd.command_type} failed: {msg} ({code})")
+        elif goal_handle.request.tts_on_success:
+            self._speak(goal_handle.request.tts_on_success)
         result = ExecKachakaCommand.Result(success=code == OK, error_code=code, message=msg)
         if code == OK:
             goal_handle.succeed()
@@ -376,15 +421,20 @@ class CommandServer(Node):
             goal_handle.abort()
         return result
 
-    def run(self, handler, goal_handle=None) -> tuple[int, str]:
-        """Run one command; a newer one stops it. Blocks."""
-        self.request_id += 1
+    def run(self, handler, goal_handle=None, cancel_all=True) -> tuple[int, str]:
+        """Run one command and block until it ends. With cancel_all it stops
+        the running command and the queued ones; without, it waits its turn.
+        Either way a later command with cancel_all stops it."""
+        if cancel_all:
+            self.request_id += 1
         my_id = self.request_id
 
         def stopped() -> bool:
             return my_id != self.request_id or (goal_handle is not None and goal_handle.is_cancel_requested)
 
         with self.lock:
+            if stopped():
+                return ERROR_CANCELED, "canceled before it started"
             self.last_activity = self.get_clock().now()
             try:
                 return handler(stopped)
@@ -439,7 +489,7 @@ class CommandServer(Node):
             return ERROR_CANCELED if stopped() else ERROR_DOCKING_FAILED, "docking goal not accepted"
         result_future = handle.get_result_async()
         if self._wait(result_future, stopped) is None:
-            handle.cancel_goal_async()
+            self._cancel(handle, result_future)
             return ERROR_CANCELED, "canceled"
         res = result_future.result().result
         if not res.success:
@@ -447,13 +497,52 @@ class CommandServer(Node):
             return ERROR_DOCKING_FAILED, f"docking failed: error {res.error_code} {res.error_msg}".strip()
         return OK, ""
 
+    def _cancel(self, handle, result_future) -> None:
+        """Cancel a goal and wait until it has ended, so a late cancel cannot
+        hit the next command's goal (Nav2 servers take a new goal as a preemption)."""
+        self._wait(handle.cancel_goal_async(), lambda: False, timeout=5.0)
+        self._wait(result_future, lambda: False, timeout=5.0)
+
     @staticmethod
-    def _wait(future, stopped):
+    def _wait(future, stopped, timeout=None):
+        deadline = None if timeout is None else time.monotonic() + timeout
         while not future.done():
-            if stopped():
+            if stopped() or (deadline is not None and time.monotonic() > deadline):
                 return None
             time.sleep(0.05)
         return future.result()
+
+    # --- moving and speaking -----------------------------------------------------
+    def _move_to_pose(self, stopped, target: P2) -> tuple[int, str]:
+        """A Nav2 goal in the map frame. A towed shelf comes along."""
+        if not self.nav_client.wait_for_server(timeout_sec=5.0):
+            return ERROR_SERVER_UNAVAILABLE, "Nav2 (navigate_to_pose) is not running"
+        goal = NavigateToPose.Goal(pose=_stamped(self.map_frame, Time().to_msg(), target))
+        self.get_logger().info(f"moving to ({target.x:.2f}, {target.y:.2f}, {target.yaw:.2f})")
+        handle = self._wait(self.nav_client.send_goal_async(goal), stopped)
+        if handle is None or not handle.accepted:
+            return ERROR_CANCELED if stopped() else ERROR_NAVIGATION_FAILED, "navigation goal not accepted"
+        result_future = handle.get_result_async()
+        if self._wait(result_future, stopped) is None:
+            self._cancel(handle, result_future)
+            return ERROR_CANCELED, "canceled"
+        res = result_future.result()
+        if res.status != GoalStatus.STATUS_SUCCEEDED:
+            return ERROR_NAVIGATION_FAILED, f"navigation failed: error {res.result.error_code}"
+        return OK, ""
+
+    def _move_to_location(self, stopped, location_id: str) -> tuple[int, str]:
+        loc = self.locations().get(location_id)
+        if loc is None:
+            return ERROR_UNKNOWN_LOCATION, f"unknown location {location_id!r}"
+        if loc[1] == Location.LOCATION_TYPE_CHARGER:
+            return self._return_home(stopped)
+        return self._move_to_pose(stopped, loc[2])
+
+    def _speak(self, text: str) -> tuple[int, str]:
+        self.get_logger().info(f"speak: {text}")
+        self.speech_pub.publish(String(data=text))
+        return OK, ""
 
     # --- shelves ----------------------------------------------------------------
     def _set_pin(self, up: bool) -> tuple[bool, str]:
@@ -649,7 +738,7 @@ class CommandServer(Node):
 def main():
     rclpy.init()
     node = CommandServer()
-    executor = MultiThreadedExecutor(num_threads=4)
+    executor = MultiThreadedExecutor(num_threads=8)  # queued commands each hold a thread
     executor.add_node(node)
     try:
         executor.spin()
