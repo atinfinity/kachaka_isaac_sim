@@ -89,6 +89,17 @@ simulator applies the stop where it limits the velocity (`robot.py`,
   MOVE_BY_VELOCITY_WITH_MUTED_SENSORS and MOVE_FORWARD with `mute_sensors`,
   and fails a drive with −9 after the stop holds it for 1 s.
 
+### Torch lights
+
+`torches.py` puts a USD SphereLight (radius 1 cm) with a cone (`ShapingAPI`)
+at `camera_front` and `camera_back`, turned like the USD cameras so it shines
+along the optical axis; the URDF has no torch frame. The lights cast no
+shadows, otherwise the body shell in front of the lenses would block them.
+`SetFrontTorchIntensity` / `SetBackTorchIntensity` arrive on gRPC threads, so
+`KachakaSimNode.set_torch` changes the intensity in the simulation loop
+(`run_in_sim`) and publishes the levels on `sim/torch`. Level 255 maps to
+`torch.max_intensity`, linearly; brightness, cone and colour are estimates.
+
 TF follows the real robot: URDF frames plus `laser_link`, `camera_front`,
 `camera_back`, `tof_camera` (placed at the URDF sensor poses until real values
 are known).

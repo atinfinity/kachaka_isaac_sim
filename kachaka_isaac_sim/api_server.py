@@ -880,9 +880,11 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         return pb2.GetAutoHomingEnabledResponse(metadata=self._meta(cursor), enabled=enabled)
 
     def SetFrontTorchIntensity(self, request, context):
+        self.sim.set_torch("front", request.intensity)
         return pb2.SetFrontTorchIntensityResponse(result=pb2.Result(success=True))
 
     def SetBackTorchIntensity(self, request, context):
+        self.sim.set_torch("back", request.intensity)
         return pb2.SetBackTorchIntensityResponse(result=pb2.Result(success=True))
 
     def GetSpeakerVolume(self, request, context):

@@ -20,7 +20,7 @@ WHEEL_LINKS = ("base_l_drive_wheel_link", "base_r_drive_wheel_link")
 CASTER_SHAPES = ("caster_front_left", "caster_front_right", "caster_rear")  # spheres on base_link
 
 
-def setup_stage(stage: Usd.Stage, physics_hz: int) -> None:
+def setup_stage(stage: Usd.Stage, physics_hz: int, dome_intensity: float = 800.0) -> None:
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     UsdPhysics.SetStageKilogramsPerUnit(stage, 1.0)
@@ -36,7 +36,7 @@ def setup_stage(stage: Usd.Stage, physics_hz: int) -> None:
     px.CreateBroadphaseTypeAttr("MBP")
 
     light = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
-    light.CreateIntensityAttr(800.0)
+    light.CreateIntensityAttr(dome_intensity)
 
 
 def resolve_world(name: str) -> str:
