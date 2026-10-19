@@ -7,6 +7,7 @@
 #   scripts/record_demo.sh scene office  # Nav2 route in an Isaac Sim scene -> build/scene_office.mp4
 #                                        # (both views follow the robot)
 #   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
+#   scripts/record_demo.sh front_stop  # front obstacle stop on/off at a wall -> build/front_stop.mp4
 #
 # Needs the ROS image (docker compose -f docker/compose.yaml build) and
 # ffmpeg on the host. Runs headless: RViz draws into Xvfb inside the container.
@@ -18,6 +19,7 @@ RVIZ_SED=""  # sed script applied to demo.rviz
 LABEL="RViz: slam_toolbox + Nav2"
 COMPOSE_ARGS=()
 RUN=""       # run in the ROS container
+EXEC_ARGS=()  # docker exec options for RUN
 HOST_RUN=""  # or on the host
 case "$DEMO" in
     nav)
@@ -55,7 +57,15 @@ case "$DEMO" in
         LABEL="RViz: slam_toolbox + Nav2 (driven by kachaka-api)"
         COMPOSE_ARGS=(--height 540)
         HOST_RUN="uv run --no-project --with kachaka-api==3.17.5.0 python scripts/api_demo.py $PWD/build/api/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|scene <world>|api]" >&2; exit 2 ;;
+    front_stop)
+        GIF=build/front_stop.mp4
+        VIEW=(1.9 -1.7 0.9 1.9 0.0 0.05)  # from the south, side-on to the path at the east wall
+        LABEL="RViz: front obstacle stop"
+        COMPOSE_ARGS=(--height 540)
+        # Captions go to the host's build/ directory, written as the host user.
+        EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
+        RUN="python3 /tests/ros_front_stop_demo.py /build/front_stop/captions.csv" ;;
+    *) echo "usage: $0 [nav|dock|shelf|scene <world>|api|front_stop]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 DISPLAY_NUM=99
@@ -78,7 +88,7 @@ echo "[demo] starting SLAM, Nav2 and RViz (Xvfb :$DISPLAY_NUM)"
 docker run -d --rm --name kachaka-demo-ros --network host --ipc host \
     -e FASTDDS_BUILTIN_TRANSPORTS="UDPv4?sockets_size=4194304" \
     -e DISPLAY=":$DISPLAY_NUM" -e LIBGL_ALWAYS_SOFTWARE=1 \
-    -v /tmp/.X11-unix:/tmp/.X11-unix:rw -v "$PWD/tests:/tests:ro" \
+    -v /tmp/.X11-unix:/tmp/.X11-unix:rw -v "$PWD/tests:/tests:ro" -v "$PWD/build:/build" \
     kachaka-isaac-sim-ros:jazzy bash -c "
         Xvfb :$DISPLAY_NUM -screen 0 1440x900x24 -nolisten tcp -ac &
         sleep 2
@@ -95,7 +105,7 @@ FFMPEG_PID=$!
 if [[ -n "$HOST_RUN" ]]; then
     $HOST_RUN | tee "$OUT/run.log"
 else
-    docker exec kachaka-demo-ros bash -c "source /ws/install/setup.bash && $RUN" | tee "$OUT/run.log"
+    docker exec "${EXEC_ARGS[@]}" kachaka-demo-ros bash -c "source /ws/install/setup.bash && $RUN" | tee "$OUT/run.log"
 fi
 date +%s.%N > "$OUT/end.txt"
 sleep 1

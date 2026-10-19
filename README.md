@@ -60,6 +60,8 @@ without `cancel_all`, like the real bridge.
 
 ### Front obstacle stop
 
+![The robot halts 5 cm short of the wall with the stop on, backs up and turns, drives into the wall with it off, and halts again once it is back on](docs/front_stop.gif)
+
 The real Kachaka stops by itself when something is just in front of it; its
 smartphone app turns this off. The simulator does the same for every velocity
 command, whatever sends it (teleop, Nav2, `set_robot_velocity`, commands):
@@ -443,7 +445,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 map; its docstring gives the steps (save the SLAM map, then restart the ROS 2
 side with `navigation.launch.py`).
 
-`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf).
+`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop).
 
 ## License
 

@@ -59,6 +59,8 @@ ros2 topic pub --once /kachaka/goal_pose geometry_msgs/PoseStamped \
 
 ### 前方障害物での停止
 
+![ON では壁の 5 cm 手前で止まり、後退と旋回はでき、OFF では壁まで進み、ON に戻すとまた止まる様子](docs/front_stop.gif)
+
 実機のカチャカは、すぐ前に障害物があると自動で止まります（スマホアプリで OFF にできます）。
 シミュレータも、teleop・Nav2・`set_robot_velocity`・コマンドのどこから来た速度指令にも同じように効きます。
 
@@ -408,7 +410,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 `tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
 （SLAM の地図を保存し、ROS 2 側を `navigation.launch.py` で起動し直す）は docstring にあります。
 
-上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`）。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。
 
 ## ライセンス
 
