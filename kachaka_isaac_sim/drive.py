@@ -43,11 +43,14 @@ class VelocityCommand:
         )
         self.last_cmd_time = now
 
-    def update(self, now: float, dt: float) -> tuple[float, float]:
+    def update(self, now: float, dt: float, forward_blocked: bool = False) -> tuple[float, float]:
+        """`forward_blocked` brakes forward motion (front obstacle stop) without
+        dropping the command: the robot goes on once the way is clear."""
         lim = self.limits
         if self.last_cmd_time is None or now - self.last_cmd_time > lim.cmd_vel_timeout:
             self.target = (0.0, 0.0)
-        v = _approach(self.current[0], self.target[0], lim.max_linear_accel * dt)
+        target_v = min(0.0, self.target[0]) if forward_blocked else self.target[0]
+        v = _approach(self.current[0], target_v, lim.max_linear_accel * dt)
         w = _approach(self.current[1], self.target[1], lim.max_angular_accel * dt)
         self.current = (v, w)
         return self.current

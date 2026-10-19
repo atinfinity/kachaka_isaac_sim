@@ -59,6 +59,7 @@
 A real Kachaka provides all of this itself, so do not run this node with one.
 """
 
+import contextlib
 import json
 import math
 import threading
@@ -144,6 +145,7 @@ MIN_ROTATE_SPEED = 0.15  # rad/s
 ROTATE_TOLERANCE = 0.01  # rad
 ROTATE_DECEL = 0.8  # rad/s^2, planned deceleration: slow near the end
 ROTATE_LAG = 0.35  # s, the robot still turns this long at its rate after a stop
+FRONT_STOP_WAIT = 1.0  # s, MOVE_FORWARD gives up after the front obstacle stop holds the robot this long
 DEPART_DISTANCE = 0.30  # m, driven forward off the charger
 SHELF_AT_LOCATION = 0.5  # m, a shelf this close to a location stands at it
 
@@ -233,6 +235,7 @@ class CommandServer(Node):
         self.scan: LaserScan | None = None
         self.odom: P2 | None = None
         self.odom_turn_rate = 0.0  # rad/s, from odometry
+        self.front_blocked = False  # the simulator's front obstacle stop holds the robot
         self.costmap: OccupancyGrid | None = None
         self.last_activity = self.get_clock().now()
         self.lock = threading.Lock()  # one command at a time
@@ -269,6 +272,9 @@ class CommandServer(Node):
         self.create_subscription(String, f"{prefix}/sim/shelf_docked", self._on_shelf_docked, LATCHED,
                                  callback_group=group)
         self.shelf_dock_client = self.create_client(SetBool, f"{prefix}/sim/shelf_dock", callback_group=group)
+        self.mute_client = self.create_client(SetBool, f"{prefix}/sim/front_stop/mute", callback_group=group)
+        self.create_subscription(String, f"{prefix}/sim/front_stop/state", self._on_front_stop, LATCHED,
+                                 callback_group=group)
         # docking_server subscribes reliable, so the relays cannot use sensor QoS.
         detection_pub = self.create_publisher(PoseStamped, "detected_dock_pose", 1)
         self.create_subscription(PoseStamped, f"{prefix}/sim/charger_detection", detection_pub.publish,
@@ -344,6 +350,9 @@ class CommandServer(Node):
                     client.call_async(ClearEntireCostmap.Request())
         if changed:
             self.get_logger().info(f"towing {self.docked_id}" if self.docked_id else "not towing")
+
+    def _on_front_stop(self, msg: String) -> None:
+        self.front_blocked = bool(json.loads(msg.data).get("blocked"))
 
     def _on_battery(self, msg: BatteryState) -> None:
         self.battery = msg
@@ -868,6 +877,7 @@ class CommandServer(Node):
         speed = min(abs(speed), MAX_SPEED)
         start = self.odom
         deadline = self._now() + 3.0 * abs(distance) / speed + 2.0
+        blocked_since = None
         cmd = Twist()
         try:
             while True:
@@ -880,15 +890,42 @@ class CommandServer(Node):
                     return ERROR_BLOCKED, "could not drive the whole distance"
                 if look_ahead and distance > 0 and self._path_blocked(min(left, LOOK_AHEAD), STOP_CLEARANCE):
                     return ERROR_BLOCKED, "something is in front of the robot"
+                if distance > 0 and self.front_blocked:
+                    blocked_since = blocked_since or self._now()
+                    if self._now() - blocked_since > FRONT_STOP_WAIT:
+                        return ERROR_BLOCKED, "the front obstacle stop halted the robot"
+                else:
+                    blocked_since = None
                 cmd.linear.x = math.copysign(min(speed, max(MIN_SPEED, 1.5 * left)), distance)
                 self.cmd_pub.publish(cmd)
                 time.sleep(0.05)
         finally:
             self.cmd_pub.publish(Twist())
 
+    @contextlib.contextmanager
+    def _muted_sensors(self):
+        """Turn the simulator's front obstacle stop off for the block."""
+        def mute(on: bool) -> bool:
+            if not self.mute_client.wait_for_service(timeout_sec=1.0):
+                return False
+            res = self._wait(self.mute_client.call_async(SetBool.Request(data=on)), lambda: False, timeout=5.0)
+            return bool(res and res.success)
+
+        muted = mute(True)
+        if not muted:
+            self.get_logger().warn("sim/front_stop/mute failed; the front obstacle stop stays on")
+        try:
+            yield
+        finally:
+            if muted:
+                mute(False)
+
     def _move_forward(self, stopped, distance: float, speed: float, mute_sensors: bool) -> tuple[int, str]:
-        self.get_logger().info(f"moving forward {distance:.2f} m")
-        return self._drive(stopped, distance, speed or MOVE_SPEED, look_ahead=not mute_sensors)
+        self.get_logger().info(f"moving forward {distance:.2f} m{' (sensors muted)' if mute_sensors else ''}")
+        if not mute_sensors:
+            return self._drive(stopped, distance, speed or MOVE_SPEED, look_ahead=True)
+        with self._muted_sensors():
+            return self._drive(stopped, distance, speed or MOVE_SPEED)
 
     def _on_odom(self, msg: Odometry) -> None:
         self.odom = _from_pose(msg.pose.pose)
@@ -936,15 +973,16 @@ class CommandServer(Node):
     def _move_by_velocity(self, stopped, velocity: float, duration: float) -> tuple[int, str]:
         cmd = Twist()
         cmd.linear.x = max(-MAX_SPEED, min(MAX_SPEED, velocity))
-        end = self._now() + duration
-        try:
-            while self._now() < end:
-                if stopped():
-                    return ERROR_CANCELED, "canceled"
-                self.cmd_pub.publish(cmd)
-                time.sleep(0.05)
-        finally:
-            self.cmd_pub.publish(Twist())
+        with self._muted_sensors():
+            end = self._now() + duration
+            try:
+                while self._now() < end:
+                    if stopped():
+                        return ERROR_CANCELED, "canceled"
+                    self.cmd_pub.publish(cmd)
+                    time.sleep(0.05)
+            finally:
+                self.cmd_pub.publish(Twist())
         return OK, ""
 
     def _lock(self, stopped, duration: float) -> tuple[int, str]:

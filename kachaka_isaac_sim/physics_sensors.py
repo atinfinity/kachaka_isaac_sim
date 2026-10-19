@@ -63,6 +63,10 @@ class Lidar:
         self.angles = self.angle_min + self.angle_increment * np.arange(n)
         self.local_dirs = np.stack([np.cos(self.angles), np.sin(self.angles), np.zeros(n)], axis=1)
         self.ranges: list[float] = [math.inf] * n
+        # Exact hit distances, without noise or the min_range cut-off: the
+        # front obstacle stop uses them. On the real robot the ToF camera
+        # covers the LiDAR's blind range in front.
+        self.raw = np.full(n, math.inf)
 
     @property
     def angle_max(self) -> float:
@@ -82,11 +86,12 @@ class Lidar:
                 best[0] = hit.distance
             return True  # hits are not sorted, so look at all of them
 
-        ranges = self.ranges
+        ranges, raw = self.ranges, self.raw
         for i, d in enumerate(dirs):
             best[0] = math.inf
             self.query.raycast_all(o, (float(d[0]), float(d[1]), float(d[2])), cfg.max_range, on_hit)
             r = best[0]
+            raw[i] = r
             if r < math.inf:
                 r += self.rng.gauss(0.0, cfg.noise_stddev)
                 if r < cfg.min_range or r > cfg.max_range:

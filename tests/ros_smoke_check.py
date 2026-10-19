@@ -2,9 +2,11 @@
 the origin). Run by scripts/smoke_test.sh inside the ROS 2 container.
 
 Checks topic presence and rates, LiDAR ranges against the room walls, IMU
-gravity, camera images, TF, robot_description, and driving with speed limits.
+gravity, camera images, TF, robot_description, driving with speed limits,
+and the front obstacle stop at the east wall (on, muted, off).
 """
 
+import json
 import math
 import sys
 import time
@@ -17,6 +19,7 @@ from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import Image, Imu, LaserScan
 from std_msgs.msg import String
+from std_srvs.srv import SetBool
 from tf2_msgs.msg import TFMessage
 
 NS = "/kachaka"
@@ -39,6 +42,10 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+EAST_WALL = 2.5  # m, inner face of the room's east wall
+FRONT_X = 0.23  # m, config/robot.yaml front_stop.front_x
+
+
 class Smoke(Node):
     def __init__(self):
         super().__init__("smoke_check", parameter_overrides=[Parameter("use_sim_time", value=True)])
@@ -55,6 +62,23 @@ class Smoke(Node):
         self.create_subscription(String, f"{NS}/robot_description", lambda m: setattr(self, "description", m.data),
                                  latched)
         self.cmd = self.create_publisher(Twist, f"{NS}/manual_control/cmd_vel", 10)
+        self.front_stop = {}
+        self.create_subscription(String, f"{NS}/sim/front_stop/state",
+                                 lambda m: setattr(self, "front_stop", json.loads(m.data)), latched)
+
+    def call(self, service, value):
+        client = self.create_client(SetBool, service)
+        try:
+            if not client.wait_for_service(timeout_sec=5.0):
+                return False
+            future = client.call_async(SetBool.Request(data=value))
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            return bool(future.result() and future.result().success)
+        finally:
+            self.destroy_client(client)
+
+    def x(self):
+        return self.gt.pose.pose.position.x
 
     def on_msg(self, topic, msg):
         self.last[topic] = msg
@@ -141,6 +165,31 @@ def main():
     n.drive(1.0)
     v = n.gt.twist.twist.linear.x
     check("stops", abs(v) < 0.02, f"v = {v:.3f} m/s")
+
+    # Front obstacle stop: full speed at the east wall, then muted and off.
+    fs = f"{NS}/sim/front_stop"
+    check("front stop on by default", n.front_stop.get("enabled") is True, json.dumps(n.front_stop))
+    n.drive(8.0, 0.3)
+    gap = EAST_WALL - n.x() - FRONT_X
+    v = n.gt.twist.twist.linear.x
+    check("front stop halts at the wall", 0.0 < gap < 0.08 and abs(v) < 0.02, f"gap {gap:.3f} m, v = {v:.3f} m/s")
+    check("front stop state blocked", n.front_stop.get("blocked") is True, json.dumps(n.front_stop))
+    n.drive(0.5)
+    for label, service, on, off in (("muted", "mute", True, False), ("off", "set_enabled", False, True)):
+        x0 = n.x()
+        ok = n.call(f"{fs}/{service}", on)
+        n.drive(0.6, 0.05)
+        moved = n.x() - x0
+        check(f"front stop {label}: drives on", ok and moved > 0.01, f"moved {moved:.3f} m")
+        n.drive(1.5, -0.2)  # back off the wall
+        n.call(f"{fs}/{service}", off)
+        n.drive(3.0, 0.2)  # and up to it again
+    x0 = n.x()
+    n.drive(1.0, 0.1)
+    moved = n.x() - x0
+    check("front stop back on: holds", abs(moved) < 0.01 and n.front_stop.get("blocked") is True,
+          f"moved {moved:.3f} m, {json.dumps(n.front_stop)}")
+    n.drive(2.0, -0.2)
 
     print(f"\n{'ALL PASSED' if not failures else f'{len(failures)} FAILED: {failures}'}", flush=True)
     n.destroy_node()
