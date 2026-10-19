@@ -420,6 +420,8 @@ asyncio.run(main())
 `set_*_callback` の形でも使えます。kachaka-api 3.17.5.0 では `set_*_callback(None)` でコールバックは止まりますが、
 その後クライアントライブラリが `TypeError: 'NoneType' object is not callable`
 （"Task exception was never retrieved"）を 1 回出力します。動作に影響はありません。
+また、止めた直後に別のコールバックを登録すると古いループも動き続け、コールバックが 1 つの値につき 2 回呼ばれます。
+登録し直すのは次の値が届いてからにしてください。どちらもクライアント側のバグです（kachaka-api 3.18.1 でも同じ）。
 
 ### 地図
 

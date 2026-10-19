@@ -454,7 +454,10 @@ They follow the server's cursor long-poll:
 The `set_*_callback` form works too. With kachaka-api 3.17.5.0,
 `set_*_callback(None)` stops it but then logs one `TypeError: 'NoneType'
 object is not callable` from the client library ("Task exception was never
-retrieved"). It is harmless.
+retrieved"). It is harmless. Setting a new callback right after stopping one
+leaves the old loop running too, so the callback runs twice per value; wait for
+the next value before setting it again. Both are client-side bugs (still in
+kachaka-api 3.18.1).
 
 ### Maps
 
