@@ -7,6 +7,10 @@
 #                                  # shelf and command checks, one simulator run;
 #                                  # each check starts with sim/reset
 #
+# Both end with tests/ros_hazard_check.py (step sensors, collisions) in a
+# second simulator run with a drop in the floor. With --nav, collisions seen
+# during the Nav2 checks are logged to build/smoke_collisions.log.
+#
 # Needs the ROS image: docker compose -f docker/compose.yaml build
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,11 +18,13 @@ mkdir -p build
 LOG=build/smoke_sim.log
 NAV_LOG=build/smoke_nav.log
 NAV_CONTAINER=kachaka-smoke-nav
+COLLISION_CONTAINER=kachaka-smoke-collisions
+COLLISION_LOG=build/smoke_collisions.log
 NAV=false
 [[ "${1:-}" == "--nav" ]] && NAV=true
 
 cleanup() {
-    docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
+    docker rm -f "$NAV_CONTAINER" "$COLLISION_CONTAINER" >/dev/null 2>&1 || true
     pgrep -f "^\S*/bin/python \S*run_sim.py" | xargs -r kill 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -29,14 +35,19 @@ ros() {
         -v "$PWD/tests:/tests:ro" "$@"
 }
 
-echo "[smoke] starting the simulator (log: $LOG)"
-scripts/run_sim.sh --headless > "$LOG" 2>&1 &
-SIM=$!
-until grep -q "\[kachaka\] running" "$LOG"; do
-    kill -0 "$SIM" 2>/dev/null || { echo "[smoke] simulator exited; see $LOG"; exit 1; }
-    sleep 2
-done
+start_sim() {
+    echo "[smoke] starting the simulator $* (log: $LOG)"
+    scripts/run_sim.sh --headless "$@" > "$LOG" 2>&1 &
+    SIM=$!
+    until grep -q "\[kachaka\] running" "$LOG"; do
+        kill -0 "$SIM" 2>/dev/null || { echo "[smoke] simulator exited; see $LOG"; exit 1; }
+        sleep 2
+    done
+}
 
+start_sim
+
+FAILED=()
 echo "[smoke] running checks"
 ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_smoke_check.py
 
@@ -54,13 +65,24 @@ if $NAV; then
         || { echo "[smoke] Nav2 did not become active; see $NAV_LOG"; exit 1; }
     # Each check resets the simulator first, so one failure does not spoil the
     # next: run them all and report the failures at the end.
-    FAILED=()
+    ros --name "$COLLISION_CONTAINER" kachaka-isaac-sim-ros:jazzy \
+        ros2 topic echo /kachaka/sim/collision std_msgs/msg/String > "$COLLISION_LOG" 2>&1 &
     for check in ros_nav_check ros_dock_check ros_shelf_check ros_command_check ros_detection_check; do
         echo "[smoke] running $check"
         ros kachaka-isaac-sim-ros:jazzy python3 "/tests/$check.py" || FAILED+=("$check")
     done
-    if ((${#FAILED[@]})); then
-        echo "[smoke] failed: ${FAILED[*]}"
-        exit 1
-    fi
+    docker rm -f "$NAV_CONTAINER" "$COLLISION_CONTAINER" >/dev/null 2>&1 || true
+    echo "[smoke] collisions during the Nav2 checks: $(grep -c '^data:' "$COLLISION_LOG" || true) (see $COLLISION_LOG)"
+fi
+
+# Step sensors and collisions need a drop in the floor: restart the simulator.
+pgrep -f "^\S*/bin/python \S*run_sim.py" | xargs -r kill 2>/dev/null || true
+wait "$SIM" 2>/dev/null || true
+LOG=build/smoke_sim_drop.log
+start_sim --drop 1.0 0.0 0.4 0.8
+echo "[smoke] running ros_hazard_check"
+ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_hazard_check.py || FAILED+=(ros_hazard_check)
+if ((${#FAILED[@]})); then
+    echo "[smoke] failed: ${FAILED[*]}"
+    exit 1
 fi

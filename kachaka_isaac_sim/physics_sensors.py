@@ -128,3 +128,77 @@ class Imu:
         self.angular_velocity = to_imu @ ang_vel + np.array([self.rng.gauss(0, g) for _ in range(3)])
         self.linear_acceleration = to_imu @ (acc + self.GRAVITY) + np.array([self.rng.gauss(0, a) for _ in range(3)])
         self.orientation = matrix_to_quat(base_rot @ self.mount_rot)
+
+
+class CliffSensors:
+    """Downward rays from the step sensors under the front of the body. A
+    sensor sees a drop when no floor is within `height + threshold`."""
+
+    def __init__(self, cfg: SimpleNamespace, robot_path: str, base_height: float):
+        from omni.physx import get_physx_scene_query_interface
+
+        self.query = get_physx_scene_query_interface()
+        self.robot_prefix = robot_path + "/"
+        self.ignore: set[str] = set()  # rigid bodies to see through (a towed shelf)
+        # Sensor origins in the base link frame, `height` above the floor.
+        self.points = [np.array([float(x), float(y), float(cfg.height) - base_height]) for x, y in cfg.sensors]
+        self.reach = float(cfg.height) + float(cfg.threshold)
+
+    def read(self, base_pos: np.ndarray, base_rot: np.ndarray) -> list[bool]:
+        down = base_rot @ np.array([0.0, 0.0, -1.0])
+        d = (float(down[0]), float(down[1]), float(down[2]))
+        prefix, ignore = self.robot_prefix, self.ignore
+        floor = [False]
+
+        def on_hit(hit) -> bool:
+            if not hit.rigid_body.startswith(prefix) and hit.rigid_body not in ignore:
+                floor[0] = True
+                return False
+            return True
+
+        out = []
+        for p in self.points:
+            o = base_pos + base_rot @ p
+            floor[0] = False
+            self.query.raycast_all((float(o[0]), float(o[1]), float(o[2])), d, self.reach, on_hit)
+            out.append(not floor[0])
+        return out
+
+
+class ContactSensor:
+    """PhysX contact reports of the base link with other objects.
+
+    `take()` returns the new events as (other prim path, found) pairs, found
+    for a new contact. Contacts of `skip_colliders` (the casters, which always
+    touch the floor) are left out. The body needs world.enable_contact_report
+    before the simulation starts."""
+
+    def __init__(self, base_link: str, skip_colliders: tuple[str, ...]):
+        from omni.physx import get_physx_simulation_interface
+        from omni.physx.bindings._physx import ContactEventType
+        from pxr import PhysicsSchemaTools
+
+        self.base_link = base_link
+        self.skip = {f"{base_link}/{name}" for name in skip_colliders}
+        self.found = ContactEventType.CONTACT_FOUND
+        self.lost = ContactEventType.CONTACT_LOST
+        self.to_path = PhysicsSchemaTools.intToSdfPath
+        self.events: list[tuple[str, bool]] = []
+        self.sub = get_physx_simulation_interface().subscribe_contact_report_events(self._on_contact)
+
+    def _on_contact(self, headers, data) -> None:
+        for h in headers:
+            a0, a1 = str(self.to_path(h.actor0)), str(self.to_path(h.actor1))
+            if a0 == self.base_link:
+                other, mine = a1, str(self.to_path(h.collider0))
+            elif a1 == self.base_link:
+                other, mine = a0, str(self.to_path(h.collider1))
+            else:
+                continue
+            if mine in self.skip or any(mine.startswith(s + "/") for s in self.skip):
+                continue
+            self.events.append((other, h.type == self.found))
+
+    def take(self) -> list[tuple[str, bool]]:
+        events, self.events = self.events, []
+        return events

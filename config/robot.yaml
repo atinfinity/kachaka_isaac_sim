@@ -95,6 +95,39 @@ front_stop:
   half_width: 0.15          # m, watched lane: body 240 mm wide plus 3 cm a side; clears shelf legs (+-0.172 m)
   margin: 0.03              # m (est.)
 
+# Step (cliff) sensors. The real robot has two step sensors at the front
+# (secondary sources; their positions and range are not published, so all
+# numbers here are assumed). A downward ray from each sensor that finds no
+# floor within height + threshold sees a drop: the robot stops at once,
+# cancels its command and pauses with errors 21052 "Step detected" and 21051
+# "paused" (GetError) until the power button (sim/power_button, or
+# RestartRobot) is pressed. After that, forward motion stays blocked while a
+# sensor still sees the drop; backing up and turning are allowed.
+cliff:
+  enabled: true
+  sensors:                  # [x, y] in base_footprint, just ahead of the front casters (assumed)
+    - [0.215, 0.075]
+    - [0.215, -0.075]
+  height: 0.02              # m, sensor height above the floor (assumed)
+  threshold: 0.02           # m, a drop deeper than this counts (est.)
+
+# Collisions of the body with other objects (PhysX contact reports). The real
+# robot has no published bumper, so by default contacts are only counted and
+# published on sim/collision. stop: true makes a collision stop the robot,
+# cancel its command and report simulator error -18 until the power button
+# (sim/power_button, RestartRobot) or sim/reset (assumed behaviour).
+collision:
+  stop: false
+  debounce: 0.5             # s without contact before the same object counts again
+  ignore:                   # prim path prefixes that never count
+    - /World/GroundPlane
+    - /World/Floor
+
+# Floors with drops (scripts/run_sim.py --drop X Y SX SY): the floor is built
+# from tiles around the holes, and the ground under them is this much lower.
+drop:
+  depth: 0.15               # m
+
 # Object detection (GetObjectDetection, /kachaka/object_detection/result).
 # People, shelves and the charger are detected in the front camera image from
 # the renderer's ground truth: only their visible pixels count, so whatever
