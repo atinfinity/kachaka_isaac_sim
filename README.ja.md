@@ -159,7 +159,35 @@ scripts/run_sim.sh --help
 [`config/robot.yaml`](config/robot.yaml) にあります。Preferred Robotics が公開していない値には
 *(est.)* と書いてあります。
 
-Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込みます。office シーンの初回読み込みには数分かかります。
+### Isaac Sim のシーン
+
+Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み、初回以降はローカルのキャッシュを使います。
+シーンごとに床の空いた場所に既定のスポーン位置があり、`--x`、`--y`、`--yaw` を省略するとそこに置きます
+（`room`、`empty`、USD のパスでは 0）。SLAM の map 座標系の原点はスポーン位置です。
+
+| `--world` | スポーン (x, y, yaw) | 初回読み込み | 起動（キャッシュ後） | 実時間比（カメラあり / `--no-cameras`） |
+|---|---|---|---|---|
+| `office` | 0, 0, 1.5708（ロビー、北向き） | 数分 | 22 秒 | 1.2 / 1.9 |
+| `hospital` | 0, 0, 0（病棟の南のロビー） | 7 分 | 21 秒 | 1.3 / 2.0 |
+| `warehouse` | −13, 11, 1.5708（ラックの間の通路） | — | 40 秒 | 1.2 / 1.9 |
+| `simple_room` | −2.5, 0, 0（テーブルの横） | 数秒 | 15 秒 | 1.4 / 2.0 |
+
+初回読み込みでは Isaac Sim のアセットサーバーからシーンを取得します。起動時間は、アセットがキャッシュされた状態で起動してから `[kachaka] running` が出るまでです。実時間比はシミュレーション時間 / 実時間で、`--realtime 0`、ロボット静止、RTX 2080 Ti での値です。デフォルトの `--realtime 1` では 1 で頭打ちになります。
+
+`tests/ros_nav_check.py --world <名前>` で、各シーンのルートを SLAM と Nav2 で走らせて確認できます。シーンの注意点:
+
+- **低い家具・細い家具。** LiDAR は床から 10.5 cm の 1 平面だけを測り、Nav2 はそこに見えるものしか知りません。
+  simple_room のテーブルの脚（高さ 5 cm の板）、hospital の椅子の脚、office の机の脚は小さな点になるか、まったく映りません。
+  こうした家具は避けるルートにしてください。
+- **LiDAR の到達距離より長い空間。** 10 m 以内で反射のない光線は地図に残らないため、長い廊下やホールの中央は未知領域になります。
+  NavFn は 8 m ほどの未知領域を越える経路を作れません。遠いゴールはテストのルートのように経由点を挟んでください。
+- **ドアの段差。** office の y = 12 と y = 24 の出入口には 4〜5 mm の段差があります。ロボットは 6 mm 程度までの段差を越えられます。
+  車体は剛体なので、前側が乗り上げるときの傾きの上限を後輪キャスターと床の 6 mm のすき間が決めます（車体の箱と床のすき間は 8 mm）。
+  Preferred Robotics は段差の上限を公表しておらず、段差のない床を推奨しています。
+- office の**ガラス扉**は開いた状態で、枠には当たり判定があります。
+- **warehouse のラック**は LiDAR の高さでは脚しか映らないため、コストマップ上は壁ではなく柱の列になり、
+  Nav2 が棚の下の脚の間を通ろうとすることがあります。テストは 1 本の通路（x = −13）の中だけを走ります。
+  ラックの北のホール（y > 25）は通路から LiDAR が届かず、近づくまで地図に載りません。
 
 ## ROS 2 インターフェース
 
@@ -281,6 +309,7 @@ python3 /tests/ros_teleop_check.py   # ロボットを走らせてオドメト�
 python3 /tests/ros_sensor_check.py   # topic の周期、部屋の壁に対する LiDAR の距離、IMU
 python3 /tests/ros_camera_check.py /tmp/images
 python3 /tests/ros_nav_check.py      # Nav2 のゴール（slam.launch.py nav:=true が必要）
+python3 /tests/ros_nav_check.py --world office   # Isaac のシーンのルート（シミュレータも同じ --world で起動）
 python3 /tests/ros_dock_check.py     # 充電器、バッテリー、RETURN_HOME（同上）
 python3 /tests/ros_shelf_check.py    # シェルフのドッキング、牽引、設置（同上）
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK、goal_pose、cancel_all（同上）

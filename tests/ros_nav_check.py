@@ -1,29 +1,55 @@
-"""Send Nav2 goals in the default room and check the robot reaches them.
+"""Send Nav2 goals and check the robot reaches them.
 
-Run against the simulator with SLAM + Nav2 up (slam.launch.py nav:=true).
-Success is judged on /kachaka/sim/ground_truth. The check also fails if Nav2
-ever commands a backward speed: Kachaka has no rear range sensor. The SLAM map frame starts at
-the spawn pose, which is the world origin, so goals and ground truth line up.
+Run against the simulator with SLAM + Nav2 up (slam.launch.py nav:=true),
+started with the same `--world` and its default spawn pose. Goals are in the
+world frame; the SLAM map frame starts at the spawn pose, so they are moved
+into it. Success is judged on /kachaka/sim/ground_truth (world frame). The
+check also fails if Nav2 ever commands a backward speed: Kachaka has no rear
+range sensor.
 
-    python3 tests/ros_nav_check.py
+    python3 tests/ros_nav_check.py                  # default room
+    python3 tests/ros_nav_check.py --world office   # simulator started with --world office
 """
 
+import argparse
 import math
 import sys
 
 import rclpy
 from action_msgs.msg import GoalStatus
-from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import Twist
+from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, qos_profile_sensor_data
 
-# The first goal turns the robot around: the area behind it at the start is
-# outside the LiDAR field of view, so it is not on the SLAM map yet.
-GOALS = [(1.6, -0.3, math.pi), (-1.8, 1.3, math.pi / 2), (0.2, -1.5, 0.0), (0.0, 0.0, 0.0)]
+# Per world: spawn pose (as in kachaka_isaac_sim/scenes.py) and goals
+# (x, y, yaw), world frame. In the room the first goal turns the robot around:
+# the area behind it at the start is outside the LiDAR field of view, so it is
+# not on the SLAM map yet.
+WORLDS = {
+    "room": ((0.0, 0.0, 0.0), [(1.6, -0.3, math.pi), (-1.8, 1.3, math.pi / 2), (0.2, -1.5, 0.0), (0.0, 0.0, 0.0)]),
+    "office": ((0.0, 0.0, 1.5708), [(0.0, 6.0, math.pi / 2), (-3.0, 10.0, math.pi / 2), (-3.0, 17.0, math.pi / 2),
+                                    (-3.0, 22.0, math.pi / 2), (-3.0, 30.0, math.pi / 2), (0.0, 0.0, -math.pi / 2)]),
+    "hospital": ((0.0, 0.0, 0.0), [(8.0, 3.0, math.pi / 2), (6.0, 10.5, math.pi), (-2.0, 10.5, math.pi),
+                                   (-8.0, 10.5, math.pi), (0.0, 0.0, 0.0)]),
+    # Warehouse: stay in one aisle. Racks show only their legs at the LiDAR
+    # height, so a route across a rack row tries to squeeze between legs.
+    "warehouse": ((-13.0, 11.0, 1.5708), [(-13.0, 18.0, math.pi / 2), (-13.0, 24.0, -math.pi / 2),
+                                          (-13.0, 11.0, math.pi / 2)]),
+    "simple_room": ((-2.5, 0.0, 0.0), [(-2.5, 2.5, 0.0), (2.5, 2.5, -math.pi / 2), (2.5, -2.5, math.pi),
+                                       (-2.5, -2.5, math.pi / 2), (-2.5, 0.0, 0.0)]),
+}
 TOLERANCE = 0.35  # m, Nav2 goal checker 0.25 plus SLAM drift
+
+
+def to_map(spawn, x, y, yaw):
+    """World pose -> SLAM map frame (origin at the spawn pose)."""
+    sx, sy, syaw = spawn
+    dx, dy = x - sx, y - sy
+    c, s = math.cos(syaw), math.sin(syaw)
+    return c * dx + s * dy, -s * dx + c * dy, yaw - syaw
 
 
 class NavCheck(Node):
@@ -45,7 +71,7 @@ class NavCheck(Node):
         x0, y0 = i.origin.position.x, i.origin.position.y
         return x0, y0, x0 + i.width * i.resolution, y0 + i.height * i.resolution
 
-    def wait_map_covers(self, x, y, timeout=15.0):
+    def wait_map_covers(self, x, y, timeout=30.0):
         """SLAM grows the map as the robot sees more; Nav2 rejects goals outside it."""
         end = self.get_clock().now().nanoseconds * 1e-9 + timeout
         while self.get_clock().now().nanoseconds * 1e-9 < end:
@@ -63,7 +89,7 @@ class NavCheck(Node):
         p = msg.pose.pose.position
         self.gt = (p.x, p.y)
 
-    def go(self, x, y, yaw, timeout=120.0):
+    def go(self, x, y, yaw, timeout=300.0):
         goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = "map"
         goal.pose.pose.position.x, goal.pose.pose.position.y = x, y
@@ -82,16 +108,21 @@ class NavCheck(Node):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--world", default="room", choices=sorted(WORLDS))
+    args = ap.parse_args()
+    spawn, goals = WORLDS[args.world]
     rclpy.init()
     node = NavCheck()
     if not node.client.wait_for_server(timeout_sec=60.0):
         print("navigate_to_pose action server not found")
         return 1
     ok_all = True
-    for x, y, yaw in GOALS:
-        node.wait_map_covers(x, y)
+    for x, y, yaw in goals:
+        mx, my, myaw = to_map(spawn, x, y, yaw)
+        node.wait_map_covers(mx, my)
         start = node.get_clock().now()
-        ok, why = node.go(x, y, yaw)
+        ok, why = node.go(mx, my, myaw)
         for _ in range(5):
             rclpy.spin_once(node, timeout_sec=0.1)
         dt = (node.get_clock().now() - start).nanoseconds * 1e-9
@@ -102,6 +133,7 @@ def main():
     backward = node.min_vx < -0.01
     ok_all &= not backward
     print(f"backward motion: {'FAIL' if backward else 'OK'} (min cmd_vel x {node.min_vx:+.2f} m/s)", flush=True)
+    print("ALL PASSED" if ok_all else "FAILED", flush=True)
     node.destroy_node()
     rclpy.shutdown()
     return 0 if ok_all else 1

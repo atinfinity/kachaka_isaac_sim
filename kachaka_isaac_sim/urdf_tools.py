@@ -111,12 +111,18 @@ def _add_fixed_link(robot: ET.Element, name: str, parent: str, xyz=(0, 0, 0), rp
 
 
 # Caster spheres. The official URDF has none. Front pair follows the community
-# Gazebo model; the rear one sits 1 mm above the floor and only stops tipping.
+# Gazebo model; the rear one sits REAR_CASTER_GAP above the floor and only
+# stops tipping. The body is rigid, so the gap sets the highest step (door
+# sill) it can cross: climbing pivots on the wheel axle, and once the rear
+# caster touches down the drive wheels lift off and lose traction. At 1 mm the
+# 4-5 mm sills in the office scene stopped it; at 6 mm it crosses them, and the
+# body (BODY_CLEARANCE) limits it to steps below 8 mm.
+REAR_CASTER_GAP = 0.006
 CASTER_RADIUS = 0.01
 CASTERS = {
     "caster_front_left": (0.19, 0.075, CASTER_RADIUS),
     "caster_front_right": (0.19, -0.075, CASTER_RADIUS),
-    "caster_rear": (-0.12, 0.0, CASTER_RADIUS + 0.001),
+    "caster_rear": (-0.12, 0.0, CASTER_RADIUS + REAR_CASTER_GAP),
 }
 # Real-robot frames that the official URDF lacks. They sit at their parent's
 # pose until values from a real unit are known.

@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
+from kachaka_isaac_sim.scenes import ISAAC_WORLDS
+
 ROBOT_PATH = "/World/kachaka"
 BASE_LINK = f"{ROBOT_PATH}/Geometry/base_footprint/base_link"
 WHEEL_LINKS = ("base_l_drive_wheel_link", "base_r_drive_wheel_link")
@@ -34,15 +36,6 @@ def setup_stage(stage: Usd.Stage, physics_hz: int) -> None:
 
     light = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
     light.CreateIntensityAttr(800.0)
-
-
-# Indoor scenes shipped with Isaac Sim (streamed from the Isaac asset server).
-ISAAC_WORLDS = {
-    "office": "Isaac/Environments/Office/office.usd",
-    "hospital": "Isaac/Environments/Hospital/hospital.usd",
-    "warehouse": "Isaac/Environments/Simple_Warehouse/full_warehouse.usd",
-    "simple_room": "Isaac/Environments/Simple_Room/simple_room.usd",
-}
 
 
 def resolve_world(name: str) -> str:
