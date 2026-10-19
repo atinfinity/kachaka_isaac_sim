@@ -11,8 +11,6 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
-
 from isaacsim.core.experimental.prims import Articulation
 
 from .drive import (

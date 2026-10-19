@@ -362,6 +362,33 @@ export FASTDDS_BUILTIN_TRANSPORTS=UDPv4?sockets_size=4194304
 
 ## Tests
 
+### Without the simulator
+
+These run in CI (`.github/workflows/ci.yml`) on every push and pull request:
+
+```bash
+uvx ruff@0.17.1 check                                   # lint
+uv run --no-project --with pytest --with numpy --with pyyaml --with pillow python -m pytest
+                                                        # tests/unit: config, drive, power, IMU, URDF, STL, maps
+docker run --rm kachaka-isaac-sim-ros:jazzy bash -c \
+    'colcon test --packages-select kachaka_sim_bringup && colcon test-result --verbose'
+docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/nav2_config_check.py
+```
+
+The unit tests on the URDF need `scripts/fetch_assets.py` first.
+`tests/nav2_config_check.py` starts slam.launch.py (with Nav2) and then
+navigation.launch.py on the saved map, with `fake_robot` (a point robot in an
+empty room, `ros2 run kachaka_sim_bringup fake_robot`) in place of the
+simulator. It checks that every lifecycle manager comes up and that Nav2
+goals succeed.
+
+`scripts/smoke_test.sh --nav` starts the simulator headless and runs
+`tests/ros_smoke_check.py` and `tests/ros_nav_check.py`. CI runs it on a
+self-hosted GPU runner (labels `self-hosted, linux, gpu`) when the workflow is
+started by hand with `gpu` checked.
+
+### With the simulator
+
 With the simulator running, from the ROS 2 container
 (`docker compose -f docker/compose.yaml run --rm -v $PWD/tests:/tests shell`):
 

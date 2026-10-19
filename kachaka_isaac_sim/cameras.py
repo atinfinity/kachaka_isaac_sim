@@ -136,7 +136,7 @@ class RecordCamera:
         self.annotator = rep.AnnotatorRegistry.get_annotator("rgb")
         self.annotator.attach([self.render_product])
 
-        self._csv_file = open(self.out / "frames.csv", "w", newline="")
+        self._csv_file = open(self.out / "frames.csv", "w", newline="")  # noqa: SIM115 (closed in close())
         self._csv = csv.writer(self._csv_file)
         self._csv.writerow(["file", "wall_time", "sim_time"])
         self._queue: queue.Queue = queue.Queue(maxsize=64)

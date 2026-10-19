@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
+from kachaka_isaac_sim.meshes import read_stl
 from kachaka_isaac_sim.scenes import ISAAC_WORLDS
 
 ROBOT_PATH = "/World/kachaka"
@@ -89,16 +90,6 @@ def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, 
     add_box(stage, f"{root}/box_a", (1.4, 1.0, 0.25), (0.4, 0.4, 0.5), (0.55, 0.4, 0.3))
     add_box(stage, f"{root}/box_b", (-1.2, -0.9, 0.35), (0.6, 0.3, 0.7), (0.3, 0.45, 0.6))
     add_box(stage, f"{root}/pillar", (-0.6, 1.1, 0.4), (0.2, 0.2, 0.8), (0.6, 0.6, 0.6))
-
-
-def read_stl(path: Path, scale: float = 1.0):
-    """Binary STL -> (N*3, 3) float32 vertices, one triangle per 3 rows."""
-    import numpy as np
-
-    data = path.read_bytes()
-    count = int(np.frombuffer(data[80:84], np.uint32)[0])
-    tri = np.dtype([("n", "<f4", 3), ("v", "<f4", (3, 3)), ("attr", "<u2")])
-    return np.frombuffer(data[84:84 + count * 50], dtype=tri)["v"].reshape(-1, 3) * scale
 
 
 # Kachaka Shelf colliders, measured from the 3-layer mesh (metres, shelf frame,

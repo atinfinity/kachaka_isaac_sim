@@ -336,6 +336,30 @@ export FASTDDS_BUILTIN_TRANSPORTS=UDPv4?sockets_size=4194304
 
 ## テスト
 
+### シミュレータなし
+
+以下は push と pull request のたびに CI（`.github/workflows/ci.yml`）で実行されます:
+
+```bash
+uvx ruff@0.17.1 check                                   # lint
+uv run --no-project --with pytest --with numpy --with pyyaml --with pillow python -m pytest
+                                                        # tests/unit: config、drive、power、IMU、URDF、STL、地図
+docker run --rm kachaka-isaac-sim-ros:jazzy bash -c \
+    'colcon test --packages-select kachaka_sim_bringup && colcon test-result --verbose'
+docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/nav2_config_check.py
+```
+
+URDF の単体テストには先に `scripts/fetch_assets.py` が必要です。
+`tests/nav2_config_check.py` はシミュレータの代わりに `fake_robot`（何もない部屋の中の点ロボット、
+`ros2 run kachaka_sim_bringup fake_robot`）を使い、slam.launch.py（Nav2 付き）、続いて保存した地図で
+navigation.launch.py を起動します。すべての lifecycle manager が active になり、Nav2 のゴールが成功することを確かめます。
+
+`scripts/smoke_test.sh --nav` はシミュレータをヘッドレスで起動し、`tests/ros_smoke_check.py` と
+`tests/ros_nav_check.py` を実行します。CI ではワークフローを手動で `gpu` にチェックを入れて起動すると、
+セルフホストの GPU ランナー（ラベル `self-hosted, linux, gpu`）で実行されます。
+
+### シミュレータあり
+
 シミュレータを起動した状態で、ROS 2 コンテナ
 （`docker compose -f docker/compose.yaml run --rm -v $PWD/tests:/tests shell`）から:
 

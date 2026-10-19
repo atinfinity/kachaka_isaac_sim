@@ -39,7 +39,7 @@ LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, relia
 
 
 def to_time(t: float) -> Time:
-    sec = int(math.floor(t))
+    sec = math.floor(t)
     return Time(sec=sec, nanosec=int((t - sec) * 1e9))
 
 

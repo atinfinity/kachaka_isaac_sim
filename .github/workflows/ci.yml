@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      gpu:
+        description: "Also run the simulator smoke test on a self-hosted GPU runner"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ROS_IMAGE: kachaka-isaac-sim-ros:jazzy
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx ruff@0.17.1 check --output-format github
+
+  unit-tests:
+    # The modules that need neither Isaac Sim nor ROS (tests/unit).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Fetch the Kachaka description
+        run: python3 scripts/fetch_assets.py
+      - run: uv run --no-project --with pytest --with numpy --with pyyaml --with pillow python -m pytest -v
+
+  ros:
+    # The ROS 2 image: colcon test, then Nav2 and slam_toolbox with fake_robot
+    # standing in for the simulator.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the Kachaka description
+        run: python3 scripts/fetch_assets.py
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the ROS 2 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: ${{ env.ROS_IMAGE }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: colcon test
+        run: |
+          docker run --rm "$ROS_IMAGE" bash -c \
+            'colcon test --packages-select kachaka_sim_bringup --event-handlers console_direct+ \
+             && colcon test-result --verbose'
+      - name: Nav2 and slam_toolbox config check
+        run: |
+          mkdir -p build/nav2_check
+          docker run --rm -v "$PWD:/repo" -e CHECK_LOG_DIR=/repo/build/nav2_check "$ROS_IMAGE" \
+            python3 /repo/tests/nav2_config_check.py
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nav2-check-logs
+          path: build/nav2_check
+          if-no-files-found: ignore
+
+  gpu-smoke:
+    # Manual only: needs a self-hosted runner with an NVIDIA GPU, Docker and uv
+    # (labels: self-hosted, linux, gpu). The Isaac Sim .venv is kept between runs.
+    if: github.event_name == 'workflow_dispatch' && inputs.gpu
+    runs-on: [self-hosted, linux, gpu]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Install Isaac Sim and build the robot USD
+        run: |
+          uv sync
+          uv run python scripts/fetch_assets.py
+          uv run python scripts/build_usd.py
+      - name: Build the ROS 2 image
+        run: docker compose -f docker/compose.yaml build
+      - name: Smoke test (sensors, driving, Nav2)
+        run: scripts/smoke_test.sh --nav
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-smoke-logs
+          path: |
+            build/smoke_sim.log
+            build/smoke_nav.log
+          if-no-files-found: ignore
