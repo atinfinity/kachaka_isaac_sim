@@ -206,6 +206,7 @@ function draw() {
     label(l.pose.x, l.pose.y, l.type === "charger" ? `⚡ ${l.name}` : l.name, c);
   }
   for (const s of layout.shelves) {
+    if (state?.shelf_poses?.[s.id]) s.pose = state.shelf_poses[s.id];
     const towed = state?.moving_shelf === s.name;
     box(s.pose.x, s.pose.y, s.pose.theta, s.size.depth || 0.4, s.size.width || 0.4,
         shelfC + (towed ? "aa" : "44"), shelfC);

@@ -117,6 +117,7 @@ def test_state_and_history():
     assert s["command"]["command"]["args"]["target_shelf_id"] == "shelf"
     assert s["last_result"]["error"] == [{"code": 10253, "title": "Navigation failed"}]
     assert s["moving_shelf"] == "shelf"
+    assert s["shelf_poses"] == {"S01": {"x": 2.0, "y": 0.0, "theta": 0.0}}
     assert s["errors"] == [{"code": 14605, "title": "ja"}]
     h = d.history()
     assert [x["id"] for x in h] == ["b", "a"]  # newest first

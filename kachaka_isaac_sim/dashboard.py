@@ -154,6 +154,9 @@ class Dashboard:
             "last_result": {"command": command_dict(last, names), "success": bool(result.success),
                             "error": self.error_list([result.error_code]) if result.error_code else []},
             "moving_shelf": names.get(shelf, shelf) or None,
+            # Shelf poses change while towed, so they come with every poll,
+            # not with the cached layout.
+            "shelf_poses": {s.id: pose_dict(s.pose) for s in c.get_shelves()},
             "errors": self.error_list(c.get_error()),
             "manual_control": bool(c.get_manual_control_enabled()),
         }
