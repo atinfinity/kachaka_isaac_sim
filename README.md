@@ -31,6 +31,8 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
   (MOVE_FORWARD, ROTATE_IN_PLACE, …), built on Nav2. Also `goal_pose` and auto homing.
 - The [kachaka-api](https://github.com/pf-robotics/kachaka-api) gRPC API on port 26400,
   with every RPC, so the official Python client (`KachakaApiClient`) works without a robot.
+- A web dashboard (off by default): the map with the robot, shelves and charger, the robot's
+  state and command buttons, all through kachaka-api, so it also works with a real Kachaka.
 
 ### Commands
 
@@ -341,6 +343,9 @@ client.return_shelf("S01")
 client.return_home()
 ```
 
+The asyncio client (`kachaka_api.aio.KachakaApiClient`) works too, including
+its streams such as `client.robot_pose.stream()`.
+
 Commands and the locations need the ROS 2 side (`slam.launch.py nav:=true`
 or `navigation.launch.py`), since `command_server` runs them. The robot pose
 is in the map frame of slam_toolbox or AMCL.
@@ -398,6 +403,37 @@ the file name. The yaml may also hold `name` (shown by `get_map_list`) and
   `import_image_as_map` takes a PNG (Kachaka's palette, or any image: dark is
   occupied, light free, mid gray unknown) with the origin at its bottom-left
   corner.
+
+### Web dashboard
+
+![The web dashboard moving a shelf to the kitchen, returning it and going home](docs/dashboard.gif)
+
+A small web page that shows the robot on the map and sends commands. It is a
+separate process on the host that only talks kachaka-api, so it needs no ROS
+and works with a real Kachaka too. It is off by default; start it next to
+the simulator:
+
+```bash
+uv run --no-project --with kachaka-api==3.17.5.0 python scripts/dashboard.py
+# then open http://127.0.0.1:8080/
+# options: --target <robot>:26400 (default 127.0.0.1:26400), --host 0.0.0.0 to reach it
+# from other machines, --port 8080
+```
+
+- **Map**: the robot's map (`GetPngMap`, reloaded every 10 s so a SLAM map
+  grows), the robot, the shelves (dark while towed), the charger and the
+  locations. Wheel to zoom, drag to pan. kachaka-api has no path RPC, so the
+  blue line is the trail of poses the page has seen, not the planned path.
+- **State**: battery and charging, pose, the towed shelf, the running
+  command, the last result and the active errors, with their titles from
+  `get_robot_error_code`; the command history below.
+- **Commands**: move to a location, move a shelf to a location, return the
+  shelf, undock it, return home, "Goal on map" (click a point and drag to set
+  the heading, sent as `move_to_pose`) and cancel. They need the ROS 2 side
+  with Nav2, as for any kachaka-api client.
+
+There is no login: anyone who can open the page can drive the robot, so keep
+the default `--host 127.0.0.1` unless the network is trusted.
 
 ## Performance
 
@@ -475,7 +511,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 map; its docstring gives the steps (save the SLAM map, then restart the ROS 2
 side with `navigation.launch.py`).
 
-`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights.
+`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights; `scripts/record_dashboard_demo.py docs/dashboard.gif` records the web dashboard (with the simulator, Nav2 and the dashboard running, and Chromium on the host).
 
 ## License
 

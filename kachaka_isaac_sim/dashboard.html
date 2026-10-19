@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kachaka Dashboard</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #6b7280; --line: #d9dde3;
+  --accent: #2563eb; --ok: #16a34a; --warn: #d97706; --bad: #dc2626; --map-bg: #e5e7eb;
+  --robot: #2563eb; --trail: rgba(37, 99, 235, .45); --shelf: #b45309; --charger: #16a34a; --loc: #7c3aed;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111318; --panel: #1b1e25; --text: #e5e7eb; --muted: #9ca3af; --line: #2d323c;
+    --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --map-bg: #0b0d11;
+    --robot: #60a5fa; --trail: rgba(96, 165, 250, .5); --shelf: #f59e0b; --charger: #4ade80; --loc: #a78bfa;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+         padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0 8px 0 0; }
+.pill { padding: 2px 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line);
+        font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
+       background: var(--muted); vertical-align: middle; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px; }
+@media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+           margin: 0 0 8px; }
+.side { display: flex; flex-direction: column; gap: 12px; }
+#mapwrap { position: relative; padding: 0; overflow: hidden; }
+canvas { display: block; width: 100%; height: min(70vh, 640px); background: var(--map-bg);
+         border-radius: 10px; cursor: grab; touch-action: none; }
+canvas.picking { cursor: crosshair; }
+.legend { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 10px; flex-wrap: wrap;
+          font-size: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+          padding: 3px 8px; opacity: .92; }
+.legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px;
+            border-radius: 2px; }
+.row { display: flex; gap: 6px; margin: 6px 0; }
+.row > select { flex: 1; min-width: 0; }
+select, button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+                 border-radius: 6px; padding: 5px 8px; }
+button { cursor: pointer; white-space: nowrap; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+button.on { outline: 2px solid var(--accent); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; }
+dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+.ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+#toast { min-height: 1.4em; font-size: 13px; }
+ol { margin: 0; padding: 0; list-style: none; max-height: 240px; overflow: auto; }
+ol li { padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+ol li:last-child { border-bottom: 0; }
+.bar { height: 6px; width: 70px; background: var(--line); border-radius: 3px; display: inline-block;
+       vertical-align: middle; margin-left: 6px; overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kachaka Dashboard</h1>
+  <span class="pill"><span id="conn" class="dot"></span><span id="connText">connecting</span></span>
+  <span class="pill">Battery <span id="battery">-</span><span class="bar"><span id="batteryBar" style="width:0"></span></span></span>
+  <span class="pill" id="pose">x - y - θ -</span>
+  <span class="pill" id="shelfPill">No shelf</span>
+</header>
+<main>
+  <section class="card" id="mapwrap">
+    <canvas id="map"></canvas>
+    <div class="legend">
+      <span><i style="background:var(--robot)"></i>Robot</span>
+      <span><i style="background:var(--shelf)"></i>Shelf</span>
+      <span><i style="background:var(--charger)"></i>Charger</span>
+      <span><i style="background:var(--loc)"></i>Location</span>
+    </div>
+  </section>
+  <aside class="side">
+    <section class="card">
+      <h2>Command</h2>
+      <dl>
+        <dt>Running</dt><dd id="running">-</dd>
+        <dt>Last</dt><dd id="last">-</dd>
+        <dt>Errors</dt><dd id="errors">-</dd>
+      </dl>
+    </section>
+    <section class="card">
+      <h2>Send</h2>
+      <div class="row"><select id="loc"></select><button class="primary" data-cmd="move_to_location">Go</button></div>
+      <div class="row"><select id="shelf"></select><select id="shelfDest"></select>
+        <button class="primary" data-cmd="move_shelf">Move</button></div>
+      <div class="grid2">
+        <button data-cmd="return_shelf">Return shelf</button>
+        <button data-cmd="undock_shelf">Undock shelf</button>
+        <button data-cmd="return_home">Return home</button>
+        <button id="pick">Goal on map</button>
+      </div>
+      <div class="row"><button class="danger" data-cmd="cancel" style="flex:1">Cancel command</button></div>
+      <div id="toast" class="muted"></div>
+    </section>
+    <section class="card">
+      <h2>History</h2>
+      <ol id="history"><li class="muted">-</li></ol>
+    </section>
+  </aside>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const canvas = $("map"), ctx = canvas.getContext("2d");
+const ROBOT = { length: 0.387, width: 0.24 };  // Kachaka body [m]
+let mapMeta = null, mapImg = null, layout = { locations: [], shelves: [] }, state = null;
+let trail = [], picking = false, pick = null;
+// view: world point at the canvas centre, and pixels per metre
+let view = null, drag = null;
+
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmt = (v, d = 2) => (v === undefined || v === null) ? "-" : Number(v).toFixed(d);
+
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts);
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
+
+function describe(cmd) {
+  if (!cmd) return "-";
+  const a = Object.entries(cmd.args).map(([k, v]) =>
+    typeof v === "object" ? `${k}=(${Object.values(v).map((x) => fmt(x)).join(", ")})` : `${k}=${v}`);
+  return cmd.type + (a.length ? ` ${a.join(" ")}` : "");
+}
+const errText = (es) => es.map((e) => `${e.code}${e.title ? " " + e.title : ""}`).join(", ");
+
+// ---- map drawing ----
+function fit() {
+  const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  canvas.width = r.width * dpr; canvas.height = r.height * dpr;
+  if (!view && mapMeta) {
+    const w = mapMeta.width * mapMeta.resolution, h = mapMeta.height * mapMeta.resolution;
+    view = { cx: mapMeta.origin.x + w / 2, cy: mapMeta.origin.y + h / 2,
+             scale: 0.92 * Math.min(r.width / w, r.height / h) };
+  }
+  draw();
+}
+const toPx = (x, y) => [canvas.width / 2 + (x - view.cx) * view.scale * dpr(),
+                        canvas.height / 2 - (y - view.cy) * view.scale * dpr()];
+const toWorld = (px, py) => [view.cx + (px * dpr() - canvas.width / 2) / (view.scale * dpr()),
+                             view.cy - (py * dpr() - canvas.height / 2) / (view.scale * dpr())];
+function dpr() { return window.devicePixelRatio || 1; }
+
+function box(x, y, th, len, wid, fill, stroke) {
+  const [px, py] = toPx(x, y), s = view.scale * dpr();
+  ctx.save(); ctx.translate(px, py); ctx.rotate(-th);
+  ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.rect(-len * s / 2, -wid * s / 2, len * s, wid * s); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function label(x, y, text, color) {
+  const [px, py] = toPx(x, y);
+  ctx.font = `${12 * dpr()}px system-ui, sans-serif`; ctx.fillStyle = color;
+  ctx.textAlign = "center"; ctx.fillText(text, px, py - 12 * dpr());
+}
+function arrow(x, y, th, len, color, width = 3) {
+  const [px, py] = toPx(x, y), [qx, qy] = toPx(x + len * Math.cos(th), y + len * Math.sin(th));
+  ctx.strokeStyle = color; ctx.lineWidth = width * dpr();
+  ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(qx, qy); ctx.stroke();
+  const a = Math.atan2(qy - py, qx - px), h = 8 * dpr();
+  ctx.beginPath(); ctx.moveTo(qx, qy);
+  ctx.lineTo(qx - h * Math.cos(a - 0.5), qy - h * Math.sin(a - 0.5));
+  ctx.lineTo(qx - h * Math.cos(a + 0.5), qy - h * Math.sin(a + 0.5));
+  ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!view) return;
+  if (mapImg && mapMeta) {
+    const [x0, y0] = toPx(mapMeta.origin.x, mapMeta.origin.y + mapMeta.height * mapMeta.resolution);
+    const s = mapMeta.resolution * view.scale * dpr();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mapImg, x0, y0, mapMeta.width * s, mapMeta.height * s);
+  }
+  const shelfC = css("--shelf"), chargerC = css("--charger"), locC = css("--loc"), robotC = css("--robot");
+  const running = state?.command?.command?.args || {};
+  for (const l of layout.locations) {
+    const c = l.type === "charger" ? chargerC : locC;
+    if (l.type === "shelf_home") {  // a small mark; the shelf is drawn on top
+      const [px, py] = toPx(l.pose.x, l.pose.y);
+      ctx.strokeStyle = shelfC; ctx.lineWidth = dpr(); ctx.setLineDash([4 * dpr(), 3 * dpr()]);
+      ctx.strokeRect(px - 8 * dpr(), py - 8 * dpr(), 16 * dpr(), 16 * dpr()); ctx.setLineDash([]);
+      continue;
+    }
+    const target = Object.values(running).includes(l.name);
+    arrow(l.pose.x, l.pose.y, l.pose.theta, 0.25, c, target ? 5 : 2);
+    const [px, py] = toPx(l.pose.x, l.pose.y);
+    ctx.beginPath(); ctx.arc(px, py, (target ? 7 : 5) * dpr(), 0, 2 * Math.PI); ctx.fillStyle = c; ctx.fill();
+    label(l.pose.x, l.pose.y, l.type === "charger" ? `⚡ ${l.name}` : l.name, c);
+  }
+  for (const s of layout.shelves) {
+    if (state?.shelf_poses?.[s.id]) s.pose = state.shelf_poses[s.id];
+    const towed = state?.moving_shelf === s.name;
+    box(s.pose.x, s.pose.y, s.pose.theta, s.size.depth || 0.4, s.size.width || 0.4,
+        shelfC + (towed ? "aa" : "44"), shelfC);
+    label(s.pose.x, s.pose.y - (s.size.width || 0.4) / 2 - 0.15, s.name, shelfC);
+  }
+  if (trail.length > 1) {
+    ctx.strokeStyle = css("--trail"); ctx.lineWidth = 3 * dpr(); ctx.beginPath();
+    trail.forEach((p, i) => { const [px, py] = toPx(p.x, p.y); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    ctx.stroke();
+  }
+  if (pick?.end) {
+    const th = Math.atan2(pick.end[1] - pick.start[1], pick.end[0] - pick.start[0]);
+    arrow(pick.start[0], pick.start[1], th, 0.4, css("--warn"), 4);
+  }
+  if (state) {
+    const p = state.pose;
+    box(p.x, p.y, p.theta, ROBOT.length, ROBOT.width, robotC + "55", robotC);
+    arrow(p.x, p.y, p.theta, 0.35, robotC, 3);
+  }
+}
+
+// ---- pan, zoom and goal picking ----
+canvas.addEventListener("wheel", (e) => {
+  if (!view) return;
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect(), [wx, wy] = toWorld(e.clientX - r.left, e.clientY - r.top);
+  const k = Math.exp(-e.deltaY * 0.0015);
+  view.scale *= k; view.cx = wx - (wx - view.cx) / k; view.cy = wy - (wy - view.cy) / k;
+  draw();
+}, { passive: false });
+canvas.addEventListener("pointerdown", (e) => {
+  if (!view) return;
+  const r = canvas.getBoundingClientRect(), w = toWorld(e.clientX - r.left, e.clientY - r.top);
+  canvas.setPointerCapture(e.pointerId);
+  if (picking) pick = { start: w, end: null };
+  else drag = { x: e.clientX, y: e.clientY, cx: view.cx, cy: view.cy };
+});
+canvas.addEventListener("pointermove", (e) => {
+  const r = canvas.getBoundingClientRect();
+  if (pick) { pick.end = toWorld(e.clientX - r.left, e.clientY - r.top); draw(); }
+  else if (drag) {
+    view.cx = drag.cx - (e.clientX - drag.x) / view.scale;
+    view.cy = drag.cy + (e.clientY - drag.y) / view.scale; draw();
+  }
+});
+canvas.addEventListener("pointerup", (e) => {
+  drag = null;
+  if (!pick) return;
+  const r = canvas.getBoundingClientRect(), end = toWorld(e.clientX - r.left, e.clientY - r.top);
+  const [x, y] = pick.start, moved = Math.hypot(end[0] - x, end[1] - y) > 0.05;
+  const yaw = moved ? Math.atan2(end[1] - y, end[0] - x) : (state ? state.pose.theta : 0);
+  pick = null; setPicking(false);
+  send({ type: "move_to_pose", x, y, yaw });
+});
+function setPicking(on) {
+  picking = on; $("pick").classList.toggle("on", on); canvas.classList.toggle("picking", on);
+  if (on) toast("Click the goal on the map; drag to set the heading.");
+}
+
+// ---- commands ----
+function toast(text, cls = "muted") { const t = $("toast"); t.textContent = text; t.className = cls; }
+async function send(body) {
+  try {
+    const r = await getJSON("/api/command", { method: "POST", headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify(body) });
+    toast(r.success ? `${body.type}: sent` : `${body.type}: error ${errText(r.error)}`, r.success ? "ok" : "bad");
+  } catch (e) { toast(`${body.type}: ${e.message}`, "bad"); }
+  refreshHistory();
+}
+document.querySelectorAll("[data-cmd]").forEach((b) => b.addEventListener("click", () => {
+  const type = b.dataset.cmd, body = { type };
+  if (type === "move_to_location") body.location_id = $("loc").value;
+  if (type === "move_shelf") { body.shelf_id = $("shelf").value; body.location_id = $("shelfDest").value; }
+  if (type === "return_shelf") body.shelf_id = $("shelf").value;
+  send(body);
+}));
+$("pick").addEventListener("click", () => setPicking(!picking));
+
+function fillSelect(sel, items) {
+  const keep = sel.value;
+  sel.replaceChildren(...items.map((i) => new Option(i.name, i.id)));
+  if (items.some((i) => i.id === keep)) sel.value = keep;
+}
+
+// ---- polling ----
+async function refreshMap(force) {
+  try {
+    mapMeta = await getJSON("/api/map" + (force ? "?refresh=1" : ""));
+    const img = new Image();
+    img.onload = () => { mapImg = img; if (!view) fit(); else draw(); };
+    img.src = "/api/map.png?t=" + Date.now();
+  } catch (e) { /* the state poll reports the connection */ }
+}
+async function refreshLayout(force) {
+  try {
+    layout = await getJSON("/api/layout" + (force ? "?refresh=1" : ""));
+    fillSelect($("loc"), layout.locations);
+    fillSelect($("shelfDest"), layout.locations.filter((l) => l.type !== "charger"));
+    fillSelect($("shelf"), layout.shelves);
+  } catch (e) { /* idem */ }
+}
+async function refreshHistory() {
+  try {
+    const h = await getJSON("/api/history");
+    const ol = $("history");
+    if (!h.length) { ol.innerHTML = '<li class="muted">No commands yet</li>'; return; }
+    ol.replaceChildren(...h.slice(0, 30).map((x) => {
+      const li = document.createElement("li"), t = new Date(x.time * 1000);
+      li.innerHTML = `<span class="${x.success ? "ok" : "bad"}">${x.success ? "✓" : "✗"}</span> `;
+      li.append(`${describe(x.command)}${x.error.length ? " — " + errText(x.error) : ""}`);
+      const s = document.createElement("div"); s.className = "muted"; s.textContent = t.toLocaleTimeString();
+      li.append(s); return li;
+    }));
+  } catch (e) { /* idem */ }
+}
+async function refreshState() {
+  try {
+    state = await getJSON("/api/state");
+    $("conn").className = "dot ok"; $("connText").textContent = "connected";
+    const p = state.pose, b = state.battery;
+    $("pose").textContent = `x ${fmt(p.x)}  y ${fmt(p.y)}  θ ${fmt(p.theta * 180 / Math.PI, 0)}°`;
+    $("battery").textContent = `${fmt(b.percentage, 0)}% ${b.status}`;
+    $("batteryBar").style.width = `${Math.max(0, Math.min(100, b.percentage))}%`;
+    $("shelfPill").textContent = state.moving_shelf ? `Towing ${state.moving_shelf}` : "No shelf";
+    const c = state.command;
+    $("running").textContent = c.command ? `${c.state}: ${describe(c.command)}` : "idle";
+    const l = state.last_result;
+    $("last").innerHTML = l.command
+      ? `<span class="${l.success ? "ok" : "bad"}">${l.success ? "success" : "failed"}</span> ` : "-";
+    if (l.command) $("last").append(`${describe(l.command)}${l.error.length ? " — " + errText(l.error) : ""}`);
+    $("errors").textContent = state.errors.length ? errText(state.errors) : "none";
+    $("errors").className = state.errors.length ? "bad" : "";
+    const last = trail[trail.length - 1];
+    if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 0.03) trail.push({ x: p.x, y: p.y });
+    if (trail.length > 600) trail.shift();
+    draw();
+  } catch (e) {
+    $("conn").className = "dot bad"; $("connText").textContent = "no robot: " + e.message;
+  }
+}
+
+window.addEventListener("resize", fit);
+fit();
+refreshLayout(false).then(() => refreshMap(false));
+refreshState(); refreshHistory();
+setInterval(refreshState, 500);
+setInterval(refreshHistory, 3000);
+setInterval(() => { refreshMap(true); refreshLayout(true); }, 10000);  // SLAM grows the map
+</script>
+</body>
+</html>
