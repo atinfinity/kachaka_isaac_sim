@@ -375,9 +375,6 @@ client.return_shelf("S01")
 client.return_home()
 ```
 
-The asyncio client (`kachaka_api.aio.KachakaApiClient`) works too, including
-its streams such as `client.robot_pose.stream()`.
-
 Commands and the locations need the ROS 2 side (`slam.launch.py nav:=true`
 or `navigation.launch.py`), since `command_server` runs them. The robot pose
 is in the map frame of slam_toolbox or AMCL.
@@ -417,6 +414,50 @@ Simulator error codes, shown by `get_robot_error_code` like the robot's own:
 | −15 | map error (unknown id, bad file) |
 | −16 | needs a saved map (`navigation.launch.py`) |
 | −17 | Kachaka Pro only |
+
+### asyncio client
+
+The asyncio client (`kachaka_api.aio.KachakaApiClient`) works too. Create it
+inside the event loop. Commands wait for completion unless
+`wait_for_completion=False`, and the streams yield while a command runs:
+
+```python
+import asyncio
+from kachaka_api.aio import KachakaApiClient
+
+async def main():
+    client = KachakaApiClient("127.0.0.1:26400")
+    await client.update_resolver()
+
+    async def watch():
+        async for pose in client.robot_pose.stream():
+            print(pose.x, pose.y, pose.theta)
+
+    watcher = asyncio.create_task(watch())
+    print(await client.move_to_location("L01"))
+    watcher.cancel()
+
+asyncio.run(main())
+```
+
+`scripts/aio_demo.py` does this with the command state as well.
+
+All of the client's streams work against the simulator: `robot_pose`, `ros_odometry`, `ros_wheel_odometry`, `ros_imu`, `ros_laser_scan`, `front_camera_ros_image`, `front_camera_ros_compressed_image`, `object_detection`, `object_detection_features`, `png_map`, `command_state`, `last_command_result`, `shelves`, `moving_shelf_id`, `locations`, `map_list`, `current_map_id`, `history_list`, `auto_homing_enabled`, `manual_control_enabled`, `error`.
+They follow the server's cursor long-poll:
+
+- The sensor streams and the pose yield at the publishing rate.
+- `png_map` yields whenever slam_toolbox publishes the map.
+- The others yield their current value first, then again on a change.
+  `shelves` and `locations` change only with the layout, not when a shelf
+  is towed; use `moving_shelf_id` or `get_shelves()` for that.
+
+The `set_*_callback` form works too. With kachaka-api 3.17.5.0,
+`set_*_callback(None)` stops it but then logs one `TypeError: 'NoneType'
+object is not callable` from the client library ("Task exception was never
+retrieved"). It is harmless. Setting a new callback right after stopping one
+leaves the old loop running too, so the callback runs twice per value; wait for
+the next value before setting it again. Both are client-side bugs (still in
+kachaka-api 3.18.1).
 
 ### Maps
 
@@ -539,6 +580,7 @@ The kachaka-api check runs on the host with the official client (same setup):
 
 ```bash
 uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
+uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_aio_check.py  # asyncio client and its streams
 ```
 
 `tests/api_map_check.py` checks `switch_map` and `set_robot_pose` on a saved
