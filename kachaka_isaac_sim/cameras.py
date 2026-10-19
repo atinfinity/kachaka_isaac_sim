@@ -91,14 +91,16 @@ def create_cameras(stage, cfg: SimpleNamespace, parent_path: str, joints: list[d
 
 
 class RecordCamera:
-    """A fixed bird's-eye camera that saves PNG frames, for demo videos.
+    """A bird's-eye camera that saves PNG frames, for demo videos. It is
+    fixed, or with `follow` moves with the robot: eye and target are then
+    relative to the robot's position.
 
     Frames are written by a background thread; `frames.csv` lists each file
     with its wall-clock and sim time so it can be synced with other captures.
     """
 
     def __init__(self, stage, out_dir, eye, target, rate: float = 10.0, width: int = 960, height: int = 720,
-                 hfov_deg: float = 48.0):
+                 hfov_deg: float = 48.0, follow: bool = False, near: float = 0.05):
         import csv
         import queue
         import threading
@@ -122,12 +124,14 @@ class RecordCamera:
         y = np.cross(x, f)
         w, qx, qy, qz = matrix_to_quat(np.column_stack([x, y, -f]))  # USD cameras look down -Z
         xf = UsdGeom.Xformable(cam.GetPrim())
-        xf.AddTranslateOp().Set(Gf.Vec3d(*eye))
+        self.eye, self.follow = eye, follow
+        self._translate = xf.AddTranslateOp()
+        self._translate.Set(Gf.Vec3d(*eye))
         xf.AddOrientOp().Set(Gf.Quatf(w, qx, qy, qz))
         cam.CreateFocalLengthAttr(_APERTURE_MM / (2 * math.tan(math.radians(hfov_deg) / 2)))
         cam.CreateHorizontalApertureAttr(_APERTURE_MM)
         cam.CreateVerticalApertureAttr(_APERTURE_MM * height / width)
-        cam.CreateClippingRangeAttr(Gf.Vec2f(0.05, 100.0))
+        cam.CreateClippingRangeAttr(Gf.Vec2f(near, 100.0))  # a far near plane cuts away ceilings
         self.render_product = rep.create.render_product(path, (width, height))
         self.annotator = rep.AnnotatorRegistry.get_annotator("rgb")
         self.annotator.attach([self.render_product])
@@ -149,9 +153,11 @@ class RecordCamera:
             name, rgb = item
             Image.fromarray(rgb).save(self.out / name, compress_level=1)
 
-    def capture(self, sim_time: float) -> None:
+    def capture(self, sim_time: float, robot_xy: tuple[float, float] | None = None) -> None:
         import time
 
+        if self.follow and robot_xy is not None:
+            self._translate.Set(Gf.Vec3d(self.eye[0] + robot_xy[0], self.eye[1] + robot_xy[1], self.eye[2]))
         if sim_time + 1e-9 < self.next_time:
             return
         self.next_time = max(self.next_time + self.period, sim_time)
