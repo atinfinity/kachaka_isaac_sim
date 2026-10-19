@@ -269,6 +269,7 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         self.maps = MapStore(maps_dir, reserved=(SLAM_MAP_ID,))
         self.history: deque = deque(maxlen=HISTORY_SIZE)
         self.started: dict[str, int] = {}  # command id -> start time [ns since the epoch]
+        self.command_reset = None  # the last sim/reset command_server has handled
         self.sounds = dict(BUILTIN_SOUNDS)  # id -> name
         self.sound_data: dict[str, bytes] = {}
         self.map_replies: dict[str, dict] = {}
@@ -356,12 +357,41 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
                 s.set("shelves", None)
         elif name == "shelf_docked":
             s.set("moving_shelf", msg[0])
+        elif name == "reset":
+            self._reset()
         elif name.endswith("_camera"):
             img, info = msg
             s.set(f"{name}/image", img)
             s.set(f"{name}/info", info)
         else:  # imu, wheel_odometry, scan, manual_control
             s.set(name, msg[0])
+
+    def _reset(self) -> None:
+        """sim/reset: forget commands, history and settings made through the
+        API. Runs in the sim loop right after the robot went back to the start."""
+        self._clear_commands()
+        s = self.store
+        s.set("errors", [])
+        s.set("manual_control", True)
+        self.volume = 5
+        s.set("volume", self.volume)
+        self.sounds = dict(BUILTIN_SOUNDS)
+        self.sound_data = {}
+        s.set("sounds", None)
+        self.auto_homing = True  # command_server goes back to its parameter too
+        s.set("auto_homing", self.auto_homing)
+        if self._saved_map_mode():
+            # The robot is back at the odometry origin; tell AMCL so it does
+            # not have to find it.
+            m = self.map_to_odom
+            self._publish_initial_pose(m.x, m.y, m.yaw)
+
+    def _clear_commands(self) -> None:
+        self.history.clear()
+        self.started.clear()
+        self.store.set("command_state", None)
+        self.store.set("last_result", None)
+        self.store.set("history", None)
 
     def _publish_layout(self) -> None:
         self.store.set("locations", None)
@@ -376,6 +406,11 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
 
     def _on_command_state(self, msg: String) -> None:
         state = json.loads(msg.data)
+        if state.get("reset") != self.command_reset:
+            # command_server has dropped its commands for a sim/reset; what it
+            # sent before that belongs to the old run.
+            self.command_reset = state.get("reset")
+            self._clear_commands()
         running, last = state.get("running"), state.get("last")
         prev_running = self.store.peek("command_state")
         if (running or {}).get("id") != (prev_running or {}).get("id"):

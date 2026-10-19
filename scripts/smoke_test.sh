@@ -3,7 +3,9 @@
 # tests/ros_smoke_check.py in the ROS 2 container. Exit code 0 = all passed.
 #
 #   scripts/smoke_test.sh          # topics, TF, driving
-#   scripts/smoke_test.sh --nav    # also SLAM + Nav2 and tests/ros_nav_check.py
+#   scripts/smoke_test.sh --nav    # also SLAM + Nav2: the navigation, docking,
+#                                  # shelf and command checks, one simulator run;
+#                                  # each check starts with sim/reset
 #
 # Needs the ROS image: docker compose -f docker/compose.yaml build
 set -euo pipefail
@@ -50,6 +52,15 @@ if $NAV; then
     done
     grep -q "\[lifecycle_manager_navigation\]: .*Managed nodes are active" "$NAV_LOG" \
         || { echo "[smoke] Nav2 did not become active; see $NAV_LOG"; exit 1; }
-    echo "[smoke] running Nav2 checks"
-    ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_nav_check.py
+    # Each check resets the simulator first, so one failure does not spoil the
+    # next: run them all and report the failures at the end.
+    FAILED=()
+    for check in ros_nav_check ros_dock_check ros_shelf_check ros_command_check; do
+        echo "[smoke] running $check"
+        ros kachaka-isaac-sim-ros:jazzy python3 "/tests/$check.py" || FAILED+=("$check")
+    done
+    if ((${#FAILED[@]})); then
+        echo "[smoke] failed: ${FAILED[*]}"
+        exit 1
+    fi
 fi

@@ -14,6 +14,7 @@ which also starts kachaka_sim_bringup's command_server). Steps:
     python3 tests/ros_dock_check.py --demo   # only turn, dock and leave (for the GIF)
 """
 
+import argparse
 import math
 import sys
 import time
@@ -32,6 +33,7 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 from sensor_msgs.msg import BatteryState
+from sim_reset import add_reset_args, reset_sim
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 CHARGING = BatteryState.POWER_SUPPLY_STATUS_CHARGING
@@ -96,9 +98,15 @@ class DockCheck(Node):
 
 
 def main():
-    demo = "--demo" in sys.argv[1:]
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--demo", action="store_true")
+    add_reset_args(ap)
+    args = ap.parse_args()
+    demo = args.demo
     rclpy.init()
     n = DockCheck()
+    if not args.no_reset:
+        reset_sim(n, args.clear_map)
     failures = []
 
     def check(name, ok, detail=""):

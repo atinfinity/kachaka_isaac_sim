@@ -23,6 +23,7 @@ from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, qos_profile_sensor_data
+from sim_reset import add_reset_args, reset_sim
 
 # Per world: spawn pose (as in kachaka_isaac_sim/scenes.py) and goals
 # (x, y, yaw), world frame. In the room the first goal turns the robot around:
@@ -110,10 +111,14 @@ class NavCheck(Node):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--world", default="room", choices=sorted(WORLDS))
+    add_reset_args(ap)
     args = ap.parse_args()
     spawn, goals = WORLDS[args.world]
     rclpy.init()
     node = NavCheck()
+    if not args.no_reset:
+        reset_sim(node, args.clear_map)
+        node.min_vx = 0.0
     if not node.client.wait_for_server(timeout_sec=60.0):
         print("navigate_to_pose action server not found")
         return 1

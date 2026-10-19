@@ -116,6 +116,34 @@ client.stub.SetFrontTorchIntensity(pb2.SetFrontTorchIntensityRequest(intensity=2
   their own lights).
 - Brightness, beam and colour are guesses (`torch` in `config/robot.yaml`).
 
+### Resetting the simulator
+
+`sim/reset` (simulator only) puts everything back to the start without
+restarting the simulator:
+
+```bash
+ros2 service call /kachaka/sim/reset std_srvs/srv/SetBool "{data: false}"   # data: true also clears the SLAM map
+```
+
+- The robot goes back to its spawn pose at rest, a towed shelf is let go and
+  every shelf goes back home.
+- The SLAM map and the map frame stay valid: the odometry sees the jump back
+  as an exact move. With `data: true` slam_toolbox starts a new map and the
+  odometry starts again at zero.
+- The battery goes back to its initial level, the torches go off, the
+  emergency stop is released and the front obstacle stop goes back to its
+  setting in `config/robot.yaml`.
+- `command_server` drops the running and queued commands without a result,
+  clears the costmaps and goes back to its parameters (auto homing).
+- The gRPC server forgets the command history, the last result, the errors,
+  added sounds and the speaker volume. Under `navigation.launch.py` it also
+  tells AMCL the robot is back at the start.
+- For 1 s after the reset the robot ignores `cmd_vel`, so a controller that
+  is still sending cannot drive it off again.
+
+The ROS checks under `tests/` reset first (`--no-reset` skips it,
+`--clear-map` also clears the map); `python3 /tests/sim_reset.py` resets on its own.
+
 ### Returning to the charger
 
 ![RETURN_HOME: Nav2 drives to the charger and the robot backs onto it](docs/dock.gif)
@@ -301,6 +329,8 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/front_stop/state` | `std_msgs/String`, JSON `{"enabled", "muted", "blocked"}` of the front obstacle stop (simulator only, latched, on change) | |
 | `sim/front_stop/set_enabled`, `sim/front_stop/mute` | `std_srvs/SetBool` services: switch the front obstacle stop (the app setting), or mute it while a command runs (`command_server`) (simulator only) | |
 | `sim/torch` | `std_msgs/String`, JSON `{"front", "back"}`: torch levels 0-255 (simulator only, latched) | |
+| `sim/reset` | `std_srvs/SetBool` service: back to the start state, `data: true` also clears the SLAM map (simulator only, see [Resetting the simulator](#resetting-the-simulator)) | |
+| `sim/reset/event` | `std_msgs/String`, JSON `{"id", "clear_map"}` after each reset (simulator only) | |
 | `sim/command/start`, `sim/command/cancel` | `std_msgs/String`, JSON: commands from the kachaka-api server to `command_server` (simulator only) | |
 | `sim/command/state` | `std_msgs/String`, JSON: running command and last result (simulator only, latched) | |
 
@@ -483,7 +513,9 @@ goals succeed.
 
 CI has no GPU, so the simulator itself is checked locally:
 `scripts/smoke_test.sh --nav` starts it headless and runs
-`tests/ros_smoke_check.py` and `tests/ros_nav_check.py`.
+`tests/ros_smoke_check.py`, then with SLAM + Nav2 the navigation, docking,
+shelf and command checks one after another in the same simulator run (each
+starts with `sim/reset`).
 
 ### With the simulator
 

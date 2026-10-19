@@ -20,3 +20,10 @@ def test_battery_charges_drains_and_clamps():
     assert bat.update(360.0, charging=True) == pytest.approx(0.95)
     assert bat.update(3600.0, charging=True) == 1.0
     assert bat.update(100 * 3600.0, charging=False) == 0.0
+
+
+def test_battery_reset():
+    bat = Battery(0.8, drain_per_hour=0.1, charge_per_hour=0.5)
+    bat.update(3600.0, charging=False)
+    bat.reset()
+    assert bat.level == 0.8

@@ -80,6 +80,12 @@ class WheelOdometry:
         self.w = 0.0
         self._last: tuple[float, float] | None = None
 
+    def reset(self) -> None:
+        """Start again at the origin; the next update takes the wheel angles as they are."""
+        self.pose = Pose2D()
+        self.v = self.w = 0.0
+        self._last = None
+
     def update(self, left_angle: float, right_angle: float, dt: float) -> Pose2D:
         if self._last is None:
             self._last = (left_angle, right_angle)
@@ -114,6 +120,19 @@ class NoisyOdometry:
         self.origin: Pose2D | None = None
         self.drift = Pose2D()
         self._last_gt: Pose2D | None = None
+
+    def reset(self, origin: Pose2D | None = None) -> None:
+        """Start again with no drift. `origin` is the ground-truth pose that
+        reads as zero (default: the next pose seen)."""
+        self.origin = None if origin is None else Pose2D(origin.x, origin.y, origin.yaw)
+        self.drift = Pose2D()
+        self._last_gt = None
+
+    def teleported(self) -> None:
+        """The robot was moved without driving: the jump adds no drift, and the
+        drift so far stays, so the odom frame (and SLAM's map -> odom) still
+        holds."""
+        self._last_gt = None
 
     def update(self, gt: Pose2D) -> Pose2D:
         if self.origin is None:

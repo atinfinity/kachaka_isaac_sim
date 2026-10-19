@@ -112,6 +112,39 @@ def test_noisy_odometry_drift():
     assert a.drift == drift
 
 
+
+def test_odometry_reset():
+    wheel = WheelOdometry(R, SEP)
+    wheel.update(0.0, 0.0, 0.0)
+    drive(wheel, 0.2, 0.0, 1.0)
+    wheel.reset()
+    assert wheel.pose == Pose2D() and wheel.v == 0.0
+    wheel.update(5.0, -3.0, 0.01)  # the wheels have turned since: not a step
+    assert wheel.pose == Pose2D()
+
+    fused = NoisyOdometry(0.01, 0.01, seed=3)
+    for i in range(100):
+        fused.update(Pose2D(0.01 * i, 0.0, 0.0))
+    spawn = Pose2D(1.0, 2.0, math.pi / 2)
+    fused.reset(spawn)
+    assert fused.drift == Pose2D()
+    p = fused.update(Pose2D(1.0, 2.5, math.pi / 2))  # robot teleported back to the spawn, then moved
+    assert (p.x, p.y, p.yaw) == pytest.approx((0.5, 0.0, 0.0), abs=0.05)
+    fused.reset()
+    assert fused.update(Pose2D(3.0, 3.0, 1.0)) == Pose2D()  # no origin: the next pose
+
+
+def test_teleport_keeps_odometry_drift():
+    fused = NoisyOdometry(0.01, 0.01, seed=3)
+    for i in range(100):
+        fused.update(Pose2D(0.01 * i, 0.0, 0.0))
+    drift = Pose2D(fused.drift.x, fused.drift.y, fused.drift.yaw)
+    assert drift != Pose2D()
+    fused.teleported()
+    p = fused.update(Pose2D(0.0, 0.0, 0.0))  # back at the origin, 1 m away
+    assert fused.drift == drift  # the jump added nothing
+    assert (p.x, p.y, p.yaw) == pytest.approx((drift.x, drift.y, drift.yaw))
+
 def test_relative_pose_and_quaternions():
     p = relative_pose(Pose2D(1.0, 1.0, math.pi / 2), Pose2D(1.0, 2.0, 0.0))
     assert (p.x, p.y, p.yaw) == pytest.approx((1.0, 0.0, -math.pi / 2))

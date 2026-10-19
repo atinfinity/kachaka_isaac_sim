@@ -57,6 +57,7 @@ generic names (`/cmd_vel`, `/scan`, `/odom`).
 | `sim/charger_pose`, `sim/charger_detection` | PoseStamped | sim-only, see Charger below |
 | `sim/layout`, `sim/shelf_poses`, `sim/shelf_detection`, `sim/shelf_docked`, `sim/shelf_dock` (srv) | | sim-only, see Kachaka Shelf below |
 | `sim/front_stop/state`, `sim/front_stop/set_enabled` (srv), `sim/front_stop/mute` (srv) | | sim-only, see Front obstacle stop below |
+| `sim/reset` (srv), `sim/reset/event` | SetBool, String | sim-only, see Reset below |
 
 `kachaka_sim_bringup`'s `command_server` adds the parts the real robot runs
 itself: `kachaka_command/execute` (all command types, see Commands below), `goal_pose`,
@@ -102,6 +103,42 @@ shadows, otherwise the body shell in front of the lenses would block them.
 `KachakaSimNode.set_torch` changes the intensity in the simulation loop
 (`run_in_sim`) and publishes the levels on `sim/torch`. Level 255 maps to
 `torch.max_intensity`, linearly; brightness, cone and colour are estimates.
+
+### Reset
+
+Tests used to restart the simulator to get back to the start state, which
+takes about a minute. `sim/reset` (SetBool; `data` = also clear the SLAM map)
+does it in place. The service callback runs in the simulation loop between
+steps, so it changes the stage directly:
+
+- `SimRobot.reset` lets go of a towed shelf, sends every shelf home
+  (`Shelves.reset`), teleports the articulation to the spawn pose with zero
+  root and joint velocities, zeroes the velocity limiter and ignores
+  `cmd_vel` for 1 s (Nav2's controller may still be sending), resets the
+  wheel odometry, the battery and the front stop.
+- The fused odometry (the one SLAM uses) keeps its drift: the teleport is
+  added to it as an exact move, with no new drift. SLAM's map -> odom
+  already corrects that drift, and the robot then stands still, so SLAM has
+  nothing to correct a change with. Zeroing the drift instead left the map
+  pose off by a few cm for good, enough to fail docking (measured). With
+  `data: true` the fused odometry restarts at the spawn pose with no drift,
+  matching slam_toolbox's new map.
+- The node releases the emergency stop, turns the torches off and publishes
+  `sim/reset/event` ({"id", "clear_map"}); the gRPC server hears it through
+  `tap("reset")`.
+- `command_server` on the event: bumps `request_id` (stops the running and
+  queued commands) and `reset_epoch` (their `run()` then publishes no
+  result), publishes `sim/command/state` with `running`/`last` cleared and
+  `"reset": id`, clears the costmaps, and with clear_map calls
+  `slam_toolbox/reset`.
+- The gRPC server clears history, last result, errors, sounds, volume and
+  auto homing. It clears history again when `sim/command/state` first
+  carries the new reset id, which drops a result that command_server sent
+  before it heard of the reset. Under AMCL (`navigation.launch.py`) it
+  publishes `/initialpose` at the last map -> odom, where the robot now is.
+
+No gRPC call: kachaka-api has none for this, and a test can call the ROS
+service from the ROS side.
 
 TF follows the real robot: URDF frames plus `laser_link`, `camera_front`,
 `camera_back`, `tof_camera` (placed at the URDF sensor poses until real values
