@@ -344,9 +344,6 @@ client.return_shelf("S01")
 client.return_home()
 ```
 
-asyncio 版のクライアント（`kachaka_api.aio.KachakaApiClient`）も、`client.robot_pose.stream()`
-などのストリームを含めて使えます。
-
 コマンドと場所の一覧は `command_server` が扱うので、ROS 2 側（`slam.launch.py nav:=true` または
 `navigation.launch.py`）が必要です。ロボットの位置は slam_toolbox または AMCL の map 座標です。
 
@@ -384,6 +381,45 @@ ROS 2 のアクション（`command_type: 23`）からのみ送れます。
 | −15 | 地図のエラー（存在しない ID、壊れたファイル） |
 | −16 | 保存済み地図が必要（`navigation.launch.py`） |
 | −17 | カチャカ Pro 専用 |
+
+### asyncio 版クライアント
+
+asyncio 版のクライアント（`kachaka_api.aio.KachakaApiClient`）も使えます。クライアントはイベントループの中で作ってください。
+コマンドは `wait_for_completion=False` を付けない限り完了まで待ちます。コマンドの実行中もストリームは値を返し続けます。
+
+```python
+import asyncio
+from kachaka_api.aio import KachakaApiClient
+
+async def main():
+    client = KachakaApiClient("127.0.0.1:26400")
+    await client.update_resolver()
+
+    async def watch():
+        async for pose in client.robot_pose.stream():
+            print(pose.x, pose.y, pose.theta)
+
+    watcher = asyncio.create_task(watch())
+    print(await client.move_to_location("L01"))
+    watcher.cancel()
+
+asyncio.run(main())
+```
+
+`scripts/aio_demo.py` は、これにコマンドの状態の表示も加えた例です。
+
+クライアントのストリームはすべてシミュレータで動きます: `robot_pose`, `ros_odometry`, `ros_wheel_odometry`, `ros_imu`, `ros_laser_scan`, `front_camera_ros_image`, `front_camera_ros_compressed_image`, `object_detection`, `object_detection_features`, `png_map`, `command_state`, `last_command_result`, `shelves`, `moving_shelf_id`, `locations`, `map_list`, `current_map_id`, `history_list`, `auto_homing_enabled`, `manual_control_enabled`, `error`。
+サーバのカーソル方式のロングポーリングに従います。
+
+- センサーと位置のストリームは配信レートで値を返します
+- `png_map` は slam_toolbox が地図を配信するたびに値を返します
+- そのほかは、まず現在の値を返し、その後は値が変わったときだけ返します。
+  `shelves` と `locations` が変わるのはレイアウトが変わったときだけで、シェルフを牽引しても変わりません。
+  牽引中のシェルフは `moving_shelf_id` か `get_shelves()` で取得してください
+
+`set_*_callback` の形でも使えます。kachaka-api 3.17.5.0 では `set_*_callback(None)` でコールバックは止まりますが、
+その後クライアントライブラリが `TypeError: 'NoneType' object is not callable`
+（"Task exception was never retrieved"）を 1 回出力します。動作に影響はありません。
 
 ### 地図
 
@@ -493,6 +529,7 @@ kachaka-api のテストはホストで公式クライアントを使って実�
 
 ```bash
 uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
+uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_aio_check.py  # asyncio 版クライアントとストリーム
 ```
 
 `tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
