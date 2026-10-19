@@ -19,6 +19,7 @@ from .drive import (
     Pose2D,
     VelocityCommand,
     WheelOdometry,
+    quat_from_yaw,
     relative_pose,
     wheel_speeds,
     yaw_from_quat,
@@ -65,6 +66,8 @@ class SimRobot:
         self.shelves = shelves  # shelves.Shelves or None
         self.map_origin = map_origin or Pose2D(0.0, 0.0, 0.0)  # world pose of the map frame
         self.gt = Pose2D(0.0, 0.0, 0.0)
+        self.start_z = float(self.art.get_world_poses()[0].numpy()[0][2])
+        self.hold_until = -math.inf  # cmd_vel is ignored until then (after a reset)
         self.next_shelves = start_time
         if shelves is not None:
             node.shelf_dock_handler = self.set_shelf_docked
@@ -100,7 +103,7 @@ class SimRobot:
     # --- physics callbacks ----------------------------------------------------
     def pre_step(self, dt: float) -> None:
         cmd = self.node.take_cmd()
-        if cmd is not None:
+        if cmd is not None and self.t >= self.hold_until:
             self.limiter.set_target(cmd[0], cmd[1], self.t)
         self.front_blocked = self.front_stop.update(self.limiter.current[0])
         v, w = self.limiter.update(self.t, dt, self.front_blocked)
@@ -132,6 +135,43 @@ class SimRobot:
             self.lidar.ignore = {sh.docked_path} if self.towing else set()
             self.node.publish_shelf_docked(sh.specs[sh.docked].id if self.towing else "")
         return ok, msg
+
+    def reset(self, clear_odometry: bool = False, hold: float = 1.0) -> None:
+        """Back to the start: robot at the spawn pose and at rest, shelves
+        home, wheel odometry at zero, battery at its initial level. Called
+        from ROS (sim/reset) between physics steps.
+
+        The fused odometry keeps its drift unless `clear_odometry` (sim/reset
+        that also clears the SLAM map): SLAM's map -> odom has corrected that
+        drift, and a robot standing still gives it nothing to correct a change
+        with.
+
+        cmd_vel is ignored for `hold` seconds, so a controller that has not
+        heard of the reset yet cannot drive the robot off again."""
+        if self.towing:
+            self.set_shelf_docked(False)
+        if self.shelves is not None:
+            self.shelves.reset()
+        o = self.map_origin
+        self.art.set_world_poses([[o.x, o.y, self.start_z]], [list(quat_from_yaw(o.yaw))])
+        self.art.set_velocities([[0.0] * 3], [[0.0] * 3])
+        self.art.set_dof_velocities([[0.0] * len(self.dof_names)])
+        lim = self.limiter
+        lim.target = lim.current = (0.0, 0.0)
+        lim.last_cmd_time = None
+        self.hold_until = self.t + hold
+        self.wheel_odom.reset()
+        if clear_odometry:
+            self.fused_odom.reset(o)  # SLAM starts its new map here, at the spawn pose
+        else:
+            self.fused_odom.teleported()
+        self.gt = Pose2D(o.x, o.y, o.yaw)
+        self.on_charger = self.charger is not None and self.charger.docked(self.gt)
+        self.battery.reset()
+        self.front_stop.enabled = bool(self.cfg.front_stop.enabled)
+        self.front_stop.muted = False
+        self.front_stop.blocked = False
+        self.node.publish_front_stop(False)
 
     def post_step(self, dt: float) -> None:
         self.t += dt

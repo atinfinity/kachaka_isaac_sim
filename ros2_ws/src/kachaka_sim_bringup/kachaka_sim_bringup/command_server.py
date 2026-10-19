@@ -52,6 +52,11 @@
   into Nav2's map_server and answers on `sim/map/loaded` ({"id", "success",
   "message"}), for the gRPC SwitchMap. Only navigation.launch.py runs a
   map_server.
+- `sim/reset/event` (JSON {"id", "clear_map"}, from the simulator's
+  `sim/reset` service): drops the running and queued commands without a
+  result, clears the costmaps, goes back to the default settings and, with
+  clear_map, clears slam_toolbox's map. `sim/command/state` then carries
+  "reset": id.
 - Service `/kachaka/auto_homing/set_enabled`. When enabled the robot returns
   home after `auto_homing_idle_timeout` seconds without velocity commands, or
   when the battery falls below `auto_homing_low_battery`.
@@ -98,6 +103,11 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool
 from tf2_ros import Buffer, TransformException, TransformListener
 from unique_identifier_msgs.msg import UUID
+
+try:
+    from slam_toolbox.srv import Reset as SlamReset
+except ImportError:  # slam_toolbox not installed: sim/reset cannot clear the map
+    SlamReset = None
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 
@@ -248,6 +258,7 @@ class CommandServer(Node):
         self.shelf_target = None  # what the shelf docking server should see (see _relay_shelf)
         self.dock_error = 0  # DockRobot error code of the last failed docking
         self.api_fields: dict[str, dict] = {}  # gRPC command id -> its fields, all of them
+        self.reset_epoch = 0  # bumped by sim/reset; commands from before it report nothing
 
         self.tf = Buffer()
         self.tf_listener = TransformListener(self.tf, self)
@@ -307,6 +318,9 @@ class CommandServer(Node):
         self.load_map_client = self.create_client(LoadMap, "map_server/load_map", callback_group=group)
         self.map_loaded_pub = self.create_publisher(String, f"{prefix}/sim/map/loaded", 10)
         self.create_subscription(String, f"{prefix}/sim/map/load", self._on_map_load, 10, callback_group=group)
+        self.slam_reset_client = (self.create_client(SlamReset, "slam_toolbox/reset", callback_group=group)
+                                  if SlamReset else None)
+        self.create_subscription(String, f"{prefix}/sim/reset/event", self._on_sim_reset, 10, callback_group=group)
         self._set_state()
         self.action_server = ActionServer(
             self, ExecKachakaCommand, f"{prefix}/kachaka_command/execute",
@@ -394,6 +408,30 @@ class CommandServer(Node):
         elif self.state["running"] is not None:
             self.cancel_seq = self.run_seq
             self.get_logger().info("cancel requested")
+
+    def _on_sim_reset(self, msg: String) -> None:
+        """The simulator went back to its start state: forget everything."""
+        event = json.loads(msg.data)
+        self.reset_epoch += 1
+        self.request_id += 1  # stops the running command and the queued ones
+        self.api_fields.clear()
+        self.auto_homing = bool(self.get_parameter("auto_homing_enabled").value)
+        self.last_activity = self.get_clock().now()
+        self.auto_retry_at = 0.0
+        self.shelf_target = None
+        self._set_state(running=None, last=None, reset=event.get("id"))
+        for client in self.clear_clients:
+            if client.service_is_ready():
+                client.call_async(ClearEntireCostmap.Request())
+        cleared = ""
+        if event.get("clear_map"):
+            client = self.slam_reset_client
+            if client is None or not client.wait_for_service(timeout_sec=1.0):
+                self.get_logger().warning("sim/reset: slam_toolbox/reset is not available; the map stays")
+            else:
+                client.call_async(SlamReset.Request(pause_new_measurements=False))
+                cleared = ", SLAM map cleared"
+        self.get_logger().info(f"sim/reset {event.get('id')}: commands dropped{cleared}")
 
     def _on_map_load(self, msg: String) -> None:
         req = json.loads(msg.data)
@@ -573,6 +611,7 @@ class CommandServer(Node):
         if cancel_all:
             self.request_id += 1
         my_id = self.request_id
+        my_epoch = self.reset_epoch
         my_seq = -1
 
         def stopped() -> bool:
@@ -593,8 +632,9 @@ class CommandServer(Node):
             finally:
                 self.shelf_target = None
                 self.last_activity = self.get_clock().now()
-                last = {**info, "success": code == OK, "error_code": code} if info else self.state["last"]
-                self._set_state(running=None, last=last)
+                if my_epoch == self.reset_epoch:  # a sim/reset already cleared the state
+                    last = {**info, "success": code == OK, "error_code": code} if info else self.state["last"]
+                    self._set_state(running=None, last=last)
         return code, msg
 
     def return_home(self) -> tuple[int, str]:

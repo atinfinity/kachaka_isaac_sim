@@ -5,6 +5,10 @@ Needs the simulator, the ROS 2 side with Nav2 and scripts/dashboard.py
 running, and chromium on the host:
 
     uv run --no-project --with websockets --with pillow python scripts/record_dashboard_demo.py docs/dashboard.gif
+
+`--scenario reset` records sim/reset instead (docs/sim_reset.gif): the robot
+tows a shelf away, then the reset puts both back. It runs tests/sim_reset.py
+in the ROS 2 container for that.
 """
 
 import argparse
@@ -24,6 +28,10 @@ import websockets
 from PIL import Image
 
 PORT = 9333
+RESET_CMD = ["docker", "run", "--rm", "--network", "host", "--ipc", "host",
+             "-e", "FASTDDS_BUILTIN_TRANSPORTS=UDPv4?sockets_size=4194304",
+             "-v", f"{Path(__file__).resolve().parents[1] / 'tests'}:/tests:ro",
+             "kachaka-isaac-sim-ros:jazzy", "python3", "/tests/sim_reset.py"]
 
 
 class Page:
@@ -54,7 +62,8 @@ def page_target() -> str:
     return next(t["webSocketDebuggerUrl"] for t in targets if t["type"] == "page" and t["url"] == "about:blank")
 
 
-async def record(ws_url: str, url: str, width: int, height: int, fps: float, speed: float) -> list:
+async def record(ws_url: str, url: str, width: int, height: int, fps: float, speed: float,
+                 scenario: str = "commands") -> list:
     frames = []
     async with websockets.connect(ws_url, max_size=2**26) as ws:
         page = Page(ws)
@@ -81,6 +90,18 @@ async def record(ws_url: str, url: str, width: int, height: int, fps: float, spe
             await capture_for(2.0)
 
         await capture_for(2.0)
+        if scenario == "reset":
+            await page.js("""document.getElementById('shelf').value = 'S01';
+                             document.getElementById('shelfDest').value = 'L01';
+                             document.querySelector("[data-cmd='move_shelf']").click()""")
+            # Until the robot has the shelf and is on its way.
+            await capture_for(90.0, until="document.getElementById('shelfPill').textContent.startsWith('Towing')")
+            await capture_for(12.0)
+            reset = await asyncio.create_subprocess_exec(*RESET_CMD)
+            await capture_for(10.0)
+            await reset.wait()
+            await capture_for(3.0)
+            return frames
         await run("""document.getElementById('shelf').value = 'S01';
                      document.getElementById('shelfDest').value = 'L01';
                      document.querySelector("[data-cmd='move_shelf']").click()""", 120)
@@ -111,6 +132,7 @@ def main() -> None:
     ap.add_argument("--size", type=int, nargs=2, default=(1100, 640))
     ap.add_argument("--fps", type=float, default=5.0, help="GIF frame rate")
     ap.add_argument("--speed", type=float, default=4.0, help="playback speed-up")
+    ap.add_argument("--scenario", choices=("commands", "reset"), default="commands")
     ap.add_argument("--chromium", default=shutil.which("chromium") or "chromium")
     args = ap.parse_args()
     # The snap Chromium can only write below $HOME.
@@ -126,7 +148,8 @@ def main() -> None:
             except OSError:
                 time.sleep(0.2)
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        frames = asyncio.run(record(page_target(), args.url, *args.size, args.fps, args.speed))
+        frames = asyncio.run(record(page_target(), args.url, *args.size, args.fps, args.speed,
+                                    args.scenario))
         encode(frames, args.out, args.fps)
     finally:
         browser.terminate()

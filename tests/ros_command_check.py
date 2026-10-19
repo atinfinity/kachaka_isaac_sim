@@ -15,6 +15,7 @@ which also starts command_server). Steps:
     python3 tests/ros_command_check.py
 """
 
+import argparse
 import math
 import sys
 import time
@@ -33,6 +34,7 @@ from rclpy.qos import (
 )
 from rclpy.time import Time
 from sensor_msgs.msg import BatteryState
+from sim_reset import add_reset_args, reset_sim
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -115,8 +117,13 @@ class CommandCheck(Node):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    add_reset_args(ap)
+    args = ap.parse_args()
     rclpy.init()
     n = CommandCheck()
+    if not args.no_reset:
+        reset_sim(n, args.clear_map)
     failures = []
 
     def check(name, ok, detail=""):

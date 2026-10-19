@@ -112,6 +112,13 @@ class KachakaSimNode:
         # Torch levels (simulator only; the real robot cannot read them back).
         self.torches = None  # torches.Torches, set by the sim
         self.torch_pub = n.create_publisher(String, f"{ns}/sim/torch", LATCHED)
+        # Reset to the start state without restarting (simulator only). The
+        # event tells kachaka_sim_bringup's command_server to drop its
+        # commands; data=true also asks it to clear the SLAM map.
+        self.reset_handler = None  # set by the sim: clear_odometry -> None, runs the reset in the sim loop
+        self.reset_count = 0
+        self.reset_pub = n.create_publisher(String, f"{ns}/sim/reset/event", 10)
+        n.create_service(SetBool, f"{ns}/sim/reset", self._on_reset)
         version_pub = n.create_publisher(String, f"{ns}/robot_info/version", LATCHED)
         desc_pub = n.create_publisher(String, f"{ns}/robot_description", LATCHED)
 
@@ -183,6 +190,27 @@ class KachakaSimNode:
         else:
             setattr(self.front_stop, attr, value)
             res.success = True
+        return res
+
+    def _on_reset(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
+        if self.reset_handler is None:
+            res.success, res.message = False, "the simulator is not running yet"
+            return res
+        # Service callbacks run in the sim loop between steps, so the stage
+        # can be changed right here.
+        self.reset_handler(bool(req.data))
+        self.emergency_stop = False
+        self.manual_control_enabled = True
+        self.cmd = None
+        if self.torches is not None:
+            for name in list(self.torches.levels):
+                self.torches.set(name, 0)
+            self.publish_torch()
+        self.reset_count += 1
+        info = {"id": self.reset_count, "clear_map": bool(req.data)}
+        self.reset_pub.publish(String(data=json.dumps(info)))
+        self.tap("reset", info)
+        res.success, res.message = True, json.dumps(info)
         return res
 
     # --- called from the sim loop --------------------------------------------

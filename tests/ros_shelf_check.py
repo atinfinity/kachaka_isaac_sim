@@ -16,6 +16,7 @@ which also starts command_server and the shelf docking server). Steps:
     python3 tests/ros_shelf_check.py --demo   # dock, tow, turn, undock (for the GIF)
 """
 
+import argparse
 import math
 import sys
 import time
@@ -33,6 +34,7 @@ from rclpy.qos import (
     ReliabilityPolicy,
     qos_profile_sensor_data,
 )
+from sim_reset import add_reset_args, reset_sim
 from std_msgs.msg import String
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
@@ -116,9 +118,15 @@ class ShelfCheck(Node):
 
 
 def main():
-    demo = "--demo" in sys.argv[1:]
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--demo", action="store_true")
+    add_reset_args(ap)
+    args = ap.parse_args()
+    demo = args.demo
     rclpy.init()
     n = ShelfCheck()
+    if not args.no_reset:
+        reset_sim(n, args.clear_map)
     failures = []
 
     def check(name, ok, detail=""):

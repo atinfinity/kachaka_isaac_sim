@@ -108,6 +108,31 @@ client.stub.SetFrontTorchIntensity(pb2.SetFrontTorchIntensityRequest(intensity=2
   デフォルトの部屋の環境光を消せます（Isaac Sim のシーンは独自の照明を持っています）
 - 明るさ・照射角・色は推定です（`config/robot.yaml` の `torch`）
 
+### シミュレータのリセット
+
+シミュレータ専用のサービス `sim/reset` で、シミュレータを再起動せずに開始時の状態へ戻せます。
+
+![シェルフを牽引中に sim/reset：ロボットとシェルフが開始時の位置に戻る様子](docs/sim_reset.gif)
+
+```bash
+ros2 service call /kachaka/sim/reset std_srvs/srv/SetBool "{data: false}"   # data: true なら SLAM の地図も消す
+```
+
+- ロボットはスポーン位置に静止状態で戻ります。牽引中のシェルフは切り離し、すべてのシェルフをホームに戻します
+- オドメトリはスポーン位置へのジャンプを誤差なしの移動として扱うので、SLAM の地図と map フレームはそのまま使えます。
+  `data: true` のときは slam_toolbox が地図を作り直し、オドメトリもゼロから始め直します
+- バッテリーは初期値に戻り、トーチは消え、緊急停止は解除され、前方障害物停止は
+  `config/robot.yaml` の設定に戻ります
+- `command_server` は実行中・待機中のコマンドを結果を出さずに破棄し、コストマップを消去して、
+  パラメータの設定（自動充電）に戻ります
+- gRPC サーバはコマンド履歴・最後の結果・エラー・追加した音声・スピーカー音量を初期化します。
+  `navigation.launch.py` のときは AMCL にロボットが開始位置に戻ったことを伝えます
+- リセット後 1 秒間は `cmd_vel` を無視します。まだ指令を送っているコントローラがロボットを
+  動かしてしまわないようにするためです
+
+`tests/` の ROS チェックは最初にリセットします（`--no-reset` で省略、`--clear-map` で地図も消去）。
+`python3 /tests/sim_reset.py` 単体でもリセットできます。
+
 ### 充電器に戻る
 
 ![RETURN_HOME: Nav2 で充電器の前まで走り、後退して充電器に乗る様子](docs/dock.gif)
@@ -278,6 +303,8 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/speech` | `std_msgs/String`、SPEAK と `tts_on_success` のテキスト（シミュレータのみ） | |
 | `sim/front_stop/state` | `std_msgs/String`、前方障害物停止の状態 JSON `{"enabled", "muted", "blocked"}`（シミュレータのみ、latched、変化時） | |
 | `sim/torch` | `std_msgs/String`、トーチの明るさ 0〜255 の JSON `{"front", "back"}`（シミュレータのみ、latched） | |
+| `sim/reset` | `std_srvs/SetBool` サービス、開始時の状態に戻す。`data: true` で SLAM の地図も消す（シミュレータのみ、[シミュレータのリセット](#シミュレータのリセット)を参照） | |
+| `sim/reset/event` | `std_msgs/String`、リセットのたびに JSON `{"id", "clear_map"}`（シミュレータのみ） | |
 | `sim/front_stop/set_enabled`、`sim/front_stop/mute` | `std_srvs/SetBool` サービス。前方障害物停止の ON/OFF（アプリの設定に相当）と、コマンド実行中の一時無効化（`command_server` が使う）（シミュレータのみ） | |
 | `sim/command/start`、`sim/command/cancel` | `std_msgs/String`、JSON。kachaka-api サーバーから `command_server` へのコマンド（シミュレータのみ） | |
 | `sim/command/state` | `std_msgs/String`、JSON。実行中のコマンドと最後の結果（シミュレータのみ、latched） | |
@@ -443,7 +470,8 @@ URDF の単体テストには先に `scripts/fetch_assets.py` が必要です。
 navigation.launch.py を起動します。すべての lifecycle manager が active になり、Nav2 のゴールが成功することを確かめます。
 
 CI には GPU がないため、シミュレータ自体はローカルで確認します。`scripts/smoke_test.sh --nav` は
-シミュレータをヘッドレスで起動し、`tests/ros_smoke_check.py` と `tests/ros_nav_check.py` を実行します。
+シミュレータをヘッドレスで起動して `tests/ros_smoke_check.py` を実行し、続いて SLAM + Nav2 で
+ナビゲーション・充電・シェルフ・コマンドのチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。
 
 ### シミュレータあり
 
@@ -470,7 +498,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 `tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
 （SLAM の地図を保存し、ROS 2 側を `navigation.launch.py` で起動し直す）は docstring にあります。
 
-上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif`、Web ダッシュボードは `scripts/record_dashboard_demo.py docs/dashboard.gif`（シミュレータ・Nav2・ダッシュボードを起動し、ホストに Chromium が必要）で録画しています。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif`、Web ダッシュボードは `scripts/record_dashboard_demo.py docs/dashboard.gif`（シミュレータ・Nav2・ダッシュボードを起動し、ホストに Chromium が必要）で、`--scenario reset` を付けると `docs/sim_reset.gif` を録画します。
 
 ## ライセンス
 
