@@ -382,10 +382,9 @@ empty room, `ros2 run kachaka_sim_bringup fake_robot`) in place of the
 simulator. It checks that every lifecycle manager comes up and that Nav2
 goals succeed.
 
-`scripts/smoke_test.sh --nav` starts the simulator headless and runs
-`tests/ros_smoke_check.py` and `tests/ros_nav_check.py`. CI runs it on a
-self-hosted GPU runner (labels `self-hosted, linux, gpu`) when the workflow is
-started by hand with `gpu` checked.
+CI has no GPU, so the simulator itself is checked locally:
+`scripts/smoke_test.sh --nav` starts it headless and runs
+`tests/ros_smoke_check.py` and `tests/ros_nav_check.py`.
 
 ### With the simulator
 

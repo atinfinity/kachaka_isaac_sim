@@ -354,9 +354,8 @@ URDF の単体テストには先に `scripts/fetch_assets.py` が必要です。
 `ros2 run kachaka_sim_bringup fake_robot`）を使い、slam.launch.py（Nav2 付き）、続いて保存した地図で
 navigation.launch.py を起動します。すべての lifecycle manager が active になり、Nav2 のゴールが成功することを確かめます。
 
-`scripts/smoke_test.sh --nav` はシミュレータをヘッドレスで起動し、`tests/ros_smoke_check.py` と
-`tests/ros_nav_check.py` を実行します。CI ではワークフローを手動で `gpu` にチェックを入れて起動すると、
-セルフホストの GPU ランナー（ラベル `self-hosted, linux, gpu`）で実行されます。
+CI には GPU がないため、シミュレータ自体はローカルで確認します。`scripts/smoke_test.sh --nav` は
+シミュレータをヘッドレスで起動し、`tests/ros_smoke_check.py` と `tests/ros_nav_check.py` を実行します。
 
 ### シミュレータあり
 

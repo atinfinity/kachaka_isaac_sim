@@ -5,11 +5,6 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      gpu:
-        description: "Also run the simulator smoke test on a self-hosted GPU runner"
-        type: boolean
-        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -74,32 +69,4 @@ jobs:
         with:
           name: nav2-check-logs
           path: build/nav2_check
-          if-no-files-found: ignore
-
-  gpu-smoke:
-    # Manual only: needs a self-hosted runner with an NVIDIA GPU, Docker and uv
-    # (labels: self-hosted, linux, gpu). The Isaac Sim .venv is kept between runs.
-    if: github.event_name == 'workflow_dispatch' && inputs.gpu
-    runs-on: [self-hosted, linux, gpu]
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          clean: false
-      - name: Install Isaac Sim and build the robot USD
-        run: |
-          uv sync
-          uv run python scripts/fetch_assets.py
-          uv run python scripts/build_usd.py
-      - name: Build the ROS 2 image
-        run: docker compose -f docker/compose.yaml build
-      - name: Smoke test (sensors, driving, Nav2)
-        run: scripts/smoke_test.sh --nav
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gpu-smoke-logs
-          path: |
-            build/smoke_sim.log
-            build/smoke_nav.log
           if-no-files-found: ignore

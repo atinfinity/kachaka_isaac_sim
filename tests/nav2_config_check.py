@@ -190,10 +190,14 @@ def main() -> int:
         stack.start("fake_robot", "ros2", "run", "kachaka_sim_bringup", "fake_robot")
         stack.start("slam", "ros2", "launch", "kachaka_sim_bringup", "slam.launch.py", "nav:=true", "rviz:=false")
         run_phase(node, stack, SLAM_MANAGERS, False, check)
-        saver = subprocess.run(["ros2", "run", "nav2_map_server", "map_saver_cli", "-f", str(map_base)],
-                               capture_output=True, text=True, timeout=60, check=False)
-        saved = saver.returncode == 0 and map_base.with_suffix(".yaml").exists()
-        check("map_saver_cli", saved, "" if saved else saver.stderr[-500:])
+        for _ in range(3):  # slow runners can miss the default 2 s map timeout
+            saver = subprocess.run(["ros2", "run", "nav2_map_server", "map_saver_cli", "-f", str(map_base),
+                                    "--ros-args", "-p", "save_map_timeout:=10.0"],
+                                   capture_output=True, text=True, timeout=60, check=False)
+            saved = saver.returncode == 0 and map_base.with_suffix(".yaml").exists()
+            if saved:
+                break
+        check("map_saver_cli", saved, "" if saved else (saver.stdout + saver.stderr)[-1500:])
         if failures:
             stack.tail()
         stack.stop()
