@@ -32,9 +32,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--headless", action="store_true", help="run without a window")
     p.add_argument("--world", default="room",
                    help="'room', 'empty', an Isaac scene (office, hospital, warehouse, simple_room) or a USD path/URL")
-    p.add_argument("--x", type=float, default=0.0, help="spawn x [m]")
-    p.add_argument("--y", type=float, default=0.0, help="spawn y [m]")
-    p.add_argument("--yaw", type=float, default=0.0, help="spawn yaw [rad]")
+    p.add_argument("--x", type=float, help="spawn x [m] (default: the world's spawn pose, else 0)")
+    p.add_argument("--y", type=float, help="spawn y [m]")
+    p.add_argument("--yaw", type=float, help="spawn yaw [rad]")
     p.add_argument("--charger", type=float, nargs=3, metavar=("X", "Y", "YAW"),
                    help="place the charging dock where a docked robot is at X, Y, YAW (world frame). "
                         "Default: on the west wall in 'room', none elsewhere")
@@ -57,7 +57,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--record-hz", type=float, default=10.0, help="frame rate for --record")
     p.add_argument("--record-view", type=float, nargs=6, default=[0.0, -2.4, 7.5, 0.0, -0.1, 0.0],
                    metavar=("EX", "EY", "EZ", "TX", "TY", "TZ"), help="--record camera position and target [m]")
-    return p.parse_args()
+    args = p.parse_args()
+    from kachaka_isaac_sim.scenes import SPAWN
+
+    default = SPAWN.get(args.world, (0.0, 0.0, 0.0))
+    for i, k in enumerate(("x", "y", "yaw")):
+        if getattr(args, k) is None:
+            setattr(args, k, default[i])
+    return args
 
 
 def publish_cameras(node, cameras, t: float, tof_off: bool = False) -> None:

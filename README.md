@@ -163,8 +163,47 @@ Robot parameters (speed limits, sensor resolution and rates, noise) are in
 [`config/robot.yaml`](config/robot.yaml). Values not published by Preferred
 Robotics are marked *(est.)*.
 
-Isaac Sim scenes are streamed from NVIDIA's asset server. The first load of
-the office scene takes several minutes.
+### Isaac Sim scenes
+
+Isaac Sim scenes are streamed from NVIDIA's asset server and cached locally
+after the first load. Each has a default spawn pose in free floor space;
+`--x`, `--y` and `--yaw` default to it (to 0 in `room`, `empty` and USD paths).
+The SLAM map frame starts at the spawn pose.
+
+| `--world` | Spawn (x, y, yaw) | First load | Start, cached | RTF, cameras / `--no-cameras` |
+|---|---|---|---|---|
+| `office` | 0, 0, 1.5708 (lobby, facing north) | minutes | 22 s | 1.2 / 1.9 |
+| `hospital` | 0, 0, 0 (lobby south of the wards) | 7 min | 21 s | 1.3 / 2.0 |
+| `warehouse` | −13, 11, 1.5708 (in an aisle between racks) | — | 40 s | 1.2 / 1.9 |
+| `simple_room` | −2.5, 0, 0 (beside the table) | seconds | 15 s | 1.4 / 2.0 |
+
+First load fetches the scene from the Isaac Sim asset server. Start is from
+launch to `[kachaka] running` once the assets are cached. RTF is simulated
+time over wall time with `--realtime 0` and the robot standing still, on an
+RTX 2080 Ti; the default `--realtime 1` caps it at 1.
+
+`tests/ros_nav_check.py --world <name>` drives a route in each of them with
+SLAM and Nav2. Things to know about the scenes:
+
+- **Low and thin furniture.** The LiDAR scans one plane 10.5 cm above the
+  floor, and Nav2 only knows what it sees there. The 5 cm foot slabs of the
+  simple_room table, chair legs in the hospital and desk legs in the office
+  appear as small dots or not at all. Plan routes around such furniture.
+- **Spaces longer than the LiDAR range.** Rays with no return within 10 m
+  leave the middle of long corridors and halls unknown on the map, and NavFn
+  fails to plan across about 8 m of unknown space. Send far goals through
+  waypoints, as the test routes do.
+- **Door sills.** The office doorways at y = 12 and y = 24 have 4–5 mm
+  sills. The robot crosses steps up to about 6 mm: its body is rigid, and the
+  rear caster's 6 mm gap above the floor sets how far it can tilt while the
+  front climbs (the body box clears the floor by 8 mm). Preferred Robotics
+  publishes no step limit and recommends barrier-free floors.
+- **Glass doors** in the office stand open; their frames are solid.
+- **Warehouse racks** show only their legs at the LiDAR height, so the
+  costmap sees a row of posts rather than a wall, and Nav2 may route between
+  them under the shelves. The test stays in one aisle (x = −13). The hall
+  north of the racks (y > 25) is beyond the LiDAR range from the aisle and
+  stays off the map until the robot gets closer.
 
 ## ROS 2 interface
 
@@ -294,6 +333,7 @@ python3 /tests/ros_teleop_check.py   # drive the robot and print odometry
 python3 /tests/ros_sensor_check.py   # topic rates, LiDAR ranges against the room walls, IMU
 python3 /tests/ros_camera_check.py /tmp/images
 python3 /tests/ros_nav_check.py      # Nav2 goals (needs slam.launch.py nav:=true)
+python3 /tests/ros_nav_check.py --world office   # route in an Isaac scene (sim started with the same --world)
 python3 /tests/ros_dock_check.py     # charger, battery and RETURN_HOME (same)
 python3 /tests/ros_shelf_check.py    # shelf docking, towing and placing (same)
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, goal_pose, cancel_all (same)

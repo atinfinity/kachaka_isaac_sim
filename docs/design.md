@@ -27,7 +27,9 @@ applications. Synthetic data generation is a secondary use.
 - Official URDF from `pf-robotics/kachaka-api` (Apache-2.0), pinned commit,
   fetched by `scripts/fetch_assets.py`, converted to USD by `scripts/build_usd.py`.
   Generated USD is not committed.
-- Added after import: two low-friction caster spheres, sensors, physics params.
+- Added after import: three low-friction caster spheres (two front on the floor,
+  one rear 6 mm above it so the rigid body can tilt over 4–5 mm door sills),
+  sensors, physics params.
   Drive wheels use sphere colliders (smooth rolling on any floor mesh).
 - Wheels are articulation joints driven by velocity; torque limited to a
   realistic value (Kachaka Pro motor max 2 Nm).
