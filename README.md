@@ -21,6 +21,7 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Front obstacle stop, as on the real robot: forward motion brakes in front of an obstacle,
   from any source (teleop, Nav2, kachaka-api). It can be switched off, like in the smartphone app.
 - Front and back torch lights, set through kachaka-api like on the real robot.
+- Object detection (people, shelves, the charger) on the front camera, from the scene's ground truth.
 - Same topic names, message types and QoS as the real bridge.
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
@@ -194,6 +195,39 @@ where SLAM puts the location, a few centimetres off the world.
 `robot_description` is the robot alone, as on the real Kachaka; RViz draws the
 shelves from `/shelf_markers` (MarkerArray, published by `shelf_markers`).
 
+### Object detection
+
+![Turning in place: boxes, labels, scores and distances of the people, the shelf and the charger the front camera sees](docs/object_detection.gif)
+
+*`scripts/detection_demo.py`: one turn in place, drawn from `GetObjectDetection` and the front camera image.*
+
+The real robot runs a detector network on the front camera. The simulator
+takes the objects from the renderer instead: every pixel's instance id and
+distance tell which person, shelf or charger it shows. An object is detected
+from its visible pixels only, so a box in front of a person cuts the person's
+bounding box, as it would for a real detector.
+
+- `roi`: box around the visible pixels, in front camera pixels (640×480), with ±2 px noise.
+- `distance_median`: median distance of the visible pixels.
+- `score`: grows with the visible area (0.5 at 150 px, 0.95 from 20000 px), with a little noise.
+- Nothing farther than 5 m or smaller than 150 px; 2 % of objects are missed in each frame.
+- The results come with every front camera image (10 Hz) and carry its stamp.
+
+The real detector's range, scores and miss rate are not published; these
+numbers are guesses (`object_detection` in `config/robot.yaml`). Doors are
+not detected, and `GetObjectDetectionFeatures` stays empty since there is no
+network.
+
+The room has two people (`people.room` in `config/robot.yaml`), simple
+figures 1.7 m tall with a collider so LiDAR and Nav2 see them; `--person X Y YAW`
+places others and `--no-people` removes them. The Isaac Sim scenes have none
+by default.
+
+The results are on `GetObjectDetection` and on the real bridge's ROS 2 topic
+`/kachaka/object_detection/result` (`kachaka_interfaces/ObjectDetectionListStamped`).
+The simulator publishes JSON on `sim/object_detection` and
+`object_detection_relay` in `bridge.launch.py` converts it.
+
 ## Requirements
 
 - Ubuntu 24.04, x86_64
@@ -252,6 +286,8 @@ scripts/run_sim.sh --charger X Y YAW     # place the charger (default: by the we
 scripts/run_sim.sh --no-charger
 scripts/run_sim.sh --shelf X Y YAW       # place a shelf (repeatable; default: one in the room)
 scripts/run_sim.sh --no-shelves
+scripts/run_sim.sh --person X Y YAW      # place a person (repeatable; default: two in the room)
+scripts/run_sim.sh --no-people
 scripts/run_sim.sh --api-port 26400      # kachaka-api gRPC port (default 26400; 0 turns it off)
 scripts/run_sim.sh --help
 ```
@@ -316,6 +352,7 @@ Namespace `/kachaka`, as on the real robot.
 | `imu/imu` | `sensor_msgs/Imu` | 100 Hz |
 | `front_camera/image_raw`, `back_camera/image_raw` | `sensor_msgs/Image` (rgb8, 640×480) + `camera_info` | 10 Hz |
 | `tof_camera/image_raw` | `sensor_msgs/Image` (16UC1, mm) + `camera_info` | 10 Hz |
+| `object_detection/result` | `kachaka_interfaces/ObjectDetectionListStamped`, see [Object detection](#object-detection) (`object_detection_relay`) | 10 Hz |
 | `joint_states`, `robot_description` | | |
 | `robot_info/battery_state` | `sensor_msgs/BatteryState` (charging or discharging) | 1 Hz |
 | `robot_info/version` | stub | |
@@ -330,6 +367,7 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/speech` | `std_msgs/String`, text of SPEAK and `tts_on_success` (simulator only) | |
 | `sim/front_stop/state` | `std_msgs/String`, JSON `{"enabled", "muted", "blocked"}` of the front obstacle stop (simulator only, latched, on change) | |
 | `sim/front_stop/set_enabled`, `sim/front_stop/mute` | `std_srvs/SetBool` services: switch the front obstacle stop (the app setting), or mute it while a command runs (`command_server`) (simulator only) | |
+| `sim/object_detection` | `std_msgs/String`, JSON detections of each front camera image (simulator only) | 10 Hz |
 | `sim/torch` | `std_msgs/String`, JSON `{"front", "back"}`: torch levels 0-255 (simulator only, latched) | |
 | `sim/reset` | `std_srvs/SetBool` service: back to the start state, `data: true` also clears the SLAM map (simulator only, see [Resetting the simulator](#resetting-the-simulator)) | |
 | `sim/reset/event` | `std_msgs/String`, JSON `{"id", "clear_map"}` after each reset (simulator only) | |
@@ -396,7 +434,8 @@ The client methods are the RPC names in snake_case
 | Safety | `SetEmergencyStop`, `RestartRobot` | the emergency stop halts the wheels, cancels all commands and refuses new ones (−14) until `RestartRobot`, which clears it; the simulator itself does not restart |
 | Sound | `GetSoundList`, `PlaySound`, `StopSound`, `AddSound`, `DeleteSound` | no audio: the sound name goes to `sim/sound`; added sounds live until the simulator stops |
 | Torches | `SetFrontTorchIntensity`, `SetBackTorchIntensity` | a spotlight at each camera, see [Torch lights](#torch-lights); levels are clamped to 0-255 and published on `sim/torch` |
-| No-ops | `ActivateLaserScan`, `GetObjectDetection`, `GetObjectDetectionFeatures` | object detection is always empty |
+| Object detection | `GetObjectDetection`, `GetObjectDetectionFeatures` | people, shelves and the charger from the scene, see [Object detection](#object-detection); features are always empty |
+| No-ops | `ActivateLaserScan` | |
 
 All `StartCommand` commands of kachaka-api 3.17.5.0 are implemented (see
 [Commands](#commands)). DEPART_FROM_CHARGER is newer than that release, so
@@ -557,7 +596,7 @@ goals succeed.
 CI has no GPU, so the simulator itself is checked locally:
 `scripts/smoke_test.sh --nav` starts it headless and runs
 `tests/ros_smoke_check.py`, then with SLAM + Nav2 the navigation, docking,
-shelf and command checks one after another in the same simulator run (each
+shelf, command and object detection checks one after another in the same simulator run (each
 starts with `sim/reset`).
 
 ### With the simulator
@@ -574,6 +613,7 @@ python3 /tests/ros_nav_check.py --world office   # route in an Isaac scene (sim 
 python3 /tests/ros_dock_check.py     # charger, battery and RETURN_HOME (same)
 python3 /tests/ros_shelf_check.py    # shelf docking, towing and placing (same)
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, goal_pose, cancel_all (same)
+python3 /tests/ros_detection_check.py   # object_detection/result while turning in place (same)
 ```
 
 The kachaka-api check runs on the host with the official client (same setup):
@@ -587,7 +627,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_aio_check.py  
 map; its docstring gives the steps (save the SLAM map, then restart the ROS 2
 side with `navigation.launch.py`).
 
-`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights; `scripts/record_dashboard_demo.py docs/dashboard.gif` records the web dashboard (with the simulator, Nav2 and the dashboard running, and Chromium on the host), and with `--scenario reset` it records `docs/sim_reset.gif`.
+`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights; `scripts/record_dashboard_demo.py docs/dashboard.gif` records the web dashboard (with the simulator, Nav2 and the dashboard running, and Chromium on the host), and with `--scenario reset` it records `docs/sim_reset.gif`. `scripts/detection_demo.py --out docs/object_detection.gif` records object detection (kachaka-api only).
 
 ## License
 

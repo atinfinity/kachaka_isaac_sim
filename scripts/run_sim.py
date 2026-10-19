@@ -43,6 +43,10 @@ def parse_args() -> argparse.Namespace:
                    help="place a Kachaka Shelf where a robot docked under it is at X, Y, YAW (world frame; "
                         "repeatable). Default: the shelves in config 'shelf.room' in 'room', none elsewhere")
     p.add_argument("--no-shelves", action="store_true", help="no Kachaka Shelves")
+    p.add_argument("--person", type=float, nargs=3, action="append", metavar=("X", "Y", "YAW"),
+                   help="place a standing person (static) at X, Y facing YAW (world frame; repeatable). "
+                        "Default: the people in config 'people.room' in 'room', none elsewhere")
+    p.add_argument("--no-people", action="store_true", help="no people")
     p.add_argument("--physics-hz", type=int, default=120)
     p.add_argument("--render-hz", type=float, default=10.0,
                    help="render and main-loop rate; keep it a multiple of the camera rate")
@@ -73,7 +77,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def publish_cameras(node, cameras, t: float, tof_off: bool = False) -> None:
+def publish_cameras(node, cameras, t: float, tof_off: bool = False, detector=None) -> None:
     for cam in cameras:
         if not cam.due(t) or (tof_off and cam.kind == "depth"):
             continue
@@ -82,11 +86,35 @@ def publish_cameras(node, cameras, t: float, tof_off: bool = False) -> None:
             continue
         if cam.kind == "rgb":
             node.publish_image(t, cam.name, cam.cfg.frame_id, data, "rgb8", cam.fx)
+            if detector is not None and detector.camera is cam:
+                objects = detector.detect()
+                if objects is not None:
+                    node.publish_object_detection(t, cam.cfg.frame_id, [o.to_dict() for o in objects])
         elif cam.cfg.encoding == "16UC1":
             mm = (data * 1000.0).round().clip(0, 65535).astype("uint16")
             node.publish_image(t, cam.name, cam.cfg.frame_id, mm, "16UC1", cam.fx)
         else:
             node.publish_image(t, cam.name, cam.cfg.frame_id, data, "32FC1", cam.fx)
+
+
+def place_people(args, cfg) -> list[tuple[float, float, float]]:
+    if args.no_people:
+        return []
+    if args.person:
+        return [tuple(p) for p in args.person]
+    if args.world == "room":
+        return [tuple(p) for p in cfg.people.room]
+    return []
+
+
+def detection_targets(people, shelf_specs, charger_pose):
+    from kachaka_isaac_sim.detection import LABEL_CHARGER, LABEL_PERSON, LABEL_SHELF, Target
+
+    targets = [Target(f"/World/People/P{i + 1:02d}", LABEL_PERSON) for i in range(len(people))]
+    targets += [Target(s.path, LABEL_SHELF) for s in shelf_specs]
+    if charger_pose:
+        targets.append(Target("/World/Charger", LABEL_CHARGER))
+    return targets
 
 
 def place_shelves(args, cfg):
@@ -156,6 +184,9 @@ def main() -> int:
     shelf_specs, locations = place_shelves(args, cfg)
     for spec in shelf_specs:
         world.add_shelf(stage, spec.path, SHELF_STL, (spec.home.x, spec.home.y, spec.home.yaw), cfg.shelf)
+    people = place_people(args, cfg)
+    for i, pose in enumerate(people):
+        world.add_person(stage, f"/World/People/P{i + 1:02d}", pose, float(cfg.people.height))
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
     world.disable_pin_collision(stage)
@@ -169,6 +200,15 @@ def main() -> int:
         from kachaka_isaac_sim.cameras import create_cameras
 
         cameras = create_cameras(stage, cfg, world.BASE_LINK, read_joints(ROBOT_URDF))
+    detector = None
+    det_cfg = getattr(cfg, "object_detection", None)
+    front = next((c for c in cameras if c.name == "front_camera"), None)
+    if front and det_cfg and det_cfg.enabled:
+        from kachaka_isaac_sim.cameras import FrontDetector
+        from kachaka_isaac_sim.detection import DetectionParams
+
+        detector = FrontDetector(front, detection_targets(people, shelf_specs, charger_pose),
+                                 DetectionParams.from_config(det_cfg), args.seed)
     recorder = None
     if args.record:
         from kachaka_isaac_sim.cameras import RecordCamera
@@ -198,6 +238,7 @@ def main() -> int:
     node = KachakaSimNode(cfg, ROBOT_URDF)
     for cam in cameras:
         node.add_camera(cam.name)
+    node.object_detection_enabled = detector is not None
     node.torches = torches
     node.publish_torch()
     api = None
@@ -255,7 +296,7 @@ def main() -> int:
             node.run_pending()
             app.update()
             t1 = time.perf_counter()
-            publish_cameras(node, cameras, robot.t, tof_off=robot.sensors_paused)
+            publish_cameras(node, cameras, robot.t, tof_off=robot.sensors_paused, detector=detector)
             if recorder:
                 recorder.capture(robot.t - sim_start, (robot.gt.x, robot.gt.y))
             timing[0] += t1 - t0

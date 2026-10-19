@@ -55,7 +55,7 @@ if $NAV; then
     # Each check resets the simulator first, so one failure does not spoil the
     # next: run them all and report the failures at the end.
     FAILED=()
-    for check in ros_nav_check ros_dock_check ros_shelf_check ros_command_check; do
+    for check in ros_nav_check ros_dock_check ros_shelf_check ros_command_check ros_detection_check; do
         echo "[smoke] running $check"
         ros kachaka-isaac-sim-ros:jazzy python3 "/tests/$check.py" || FAILED+=("$check")
     done

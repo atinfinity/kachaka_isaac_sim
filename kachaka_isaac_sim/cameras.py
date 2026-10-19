@@ -174,3 +174,35 @@ class RecordCamera:
         self._queue.put(None)
         self._thread.join(timeout=30)
         self._csv_file.close()
+
+
+class FrontDetector:
+    """Ground truth for simulated object detection (kachaka_isaac_sim.detection)
+    from the front camera's render product: the prim seen at every pixel and
+    its distance to the camera."""
+
+    def __init__(self, camera: SimCamera, targets, params, seed: int | None = None):
+        import random
+
+        import omni.replicator.core as rep
+
+        self.camera = camera
+        self.targets = targets
+        self.params = params
+        self.rng = random.Random(seed)
+        self.instances = rep.AnnotatorRegistry.get_annotator("instance_id_segmentation")
+        self.distance = rep.AnnotatorRegistry.get_annotator("distance_to_camera")
+        for a in (self.instances, self.distance):
+            a.attach([camera.render_product])
+
+    def detect(self) -> list | None:
+        """Detections in the latest frame; None before the first one."""
+        from .detection import detect
+
+        seg, dist = self.instances.get_data(), self.distance.get_data()
+        ids = seg.get("data") if isinstance(seg, dict) else None
+        if ids is None or ids.size == 0 or dist is None or getattr(dist, "size", 0) == 0:
+            return None
+        id_to_path = {int(k): v for k, v in seg.get("info", {}).get("idToLabels", {}).items()}
+        return detect(np.asarray(ids), id_to_path, np.asarray(dist, dtype=np.float32), self.targets, self.params,
+                      self.rng)

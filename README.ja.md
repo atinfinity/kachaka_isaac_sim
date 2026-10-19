@@ -21,6 +21,7 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - 実機と同じ前方障害物での自動停止。teleop・Nav2・kachaka-api のどこからの指令でも、障害物の手前で
   前進を止めます。スマホアプリと同じく OFF にできます
 - 前後のトーチライト。実機と同じく kachaka-api で点灯します
+- 前方カメラでの物体検出（人・シェルフ・充電器）。シーンの正解データから作ります
 - topic 名・メッセージ型・QoS は実機ブリッジと同じ
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
@@ -180,6 +181,36 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 `robot_description` は実機と同じくロボット単体です。RViz では `shelf_markers` ノードが配信する
 `/shelf_markers`（MarkerArray）でシェルフを表示します。
 
+### 物体検出
+
+![その場で旋回しながら、前方カメラに映る人・シェルフ・充電器の枠、ラベル、スコア、距離を表示](docs/object_detection.gif)
+
+*`scripts/detection_demo.py`: その場で 1 回転し、`GetObjectDetection` と前方カメラの画像から描画。*
+
+実機は前方カメラの画像を検出ネットワークにかけます。シミュレータは代わりにレンダラーから物体を取ります。
+各ピクセルのインスタンス ID と距離から、どの人・シェルフ・充電器が映っているかがわかります。
+物体は見えているピクセルだけから検出するので、人の手前に箱があれば、実際の検出器と同じく
+人の枠はその分だけ小さくなります。
+
+- `roi`: 見えているピクセルを囲む枠。前方カメラの画素単位（640×480）で、±2 px のノイズ付き
+- `distance_median`: 見えているピクセルの距離の中央値
+- `score`: 見えている面積が大きいほど高い（150 px で 0.5、20000 px 以上で 0.95）。少しノイズ付き
+- 5 m より遠いものと 150 px より小さいものは検出しません。各フレームで 2 % の物体を見逃します
+- 結果は前方カメラの画像ごと（10 Hz）に出て、画像と同じタイムスタンプが付きます
+
+実機の検出距離・スコア・見逃し率は公開されていないので、これらの値は推定です
+（`config/robot.yaml` の `object_detection`）。ドアは検出しません。ネットワークがないので
+`GetObjectDetectionFeatures` は常に空です。
+
+部屋には人が 2 人います（`config/robot.yaml` の `people.room`）。高さ 1.7 m の簡単な人形で、
+コライダーがあるので LiDAR と Nav2 にも見えます。`--person X Y YAW` で人を置き、`--no-people` で
+なくせます。Isaac Sim のシーンには既定では人はいません。
+
+結果は `GetObjectDetection` と、実機ブリッジと同じ ROS 2 の topic
+`/kachaka/object_detection/result`（`kachaka_interfaces/ObjectDetectionListStamped`）に出ます。
+シミュレータは `sim/object_detection` に JSON を出し、`bridge.launch.py` の
+`object_detection_relay` がそれを変換します。
+
 ## 動作環境
 
 - Ubuntu 24.04、x86_64
@@ -237,6 +268,8 @@ scripts/run_sim.sh --charger X Y YAW     # 充電器の位置（既定: 部屋�
 scripts/run_sim.sh --no-charger
 scripts/run_sim.sh --shelf X Y YAW       # シェルフを置く（複数可。デフォルトは部屋に 1 台）
 scripts/run_sim.sh --no-shelves
+scripts/run_sim.sh --person X Y YAW      # 人を置く（複数可。デフォルトは部屋に 2 人）
+scripts/run_sim.sh --no-people
 scripts/run_sim.sh --api-port 26400      # kachaka-api の gRPC ポート（既定 26400。0 で無効）
 scripts/run_sim.sh --help
 ```
@@ -289,6 +322,7 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `imu/imu` | `sensor_msgs/Imu` | 100 Hz |
 | `front_camera/image_raw`、`back_camera/image_raw` | `sensor_msgs/Image`（rgb8、640×480）+ `camera_info` | 10 Hz |
 | `tof_camera/image_raw` | `sensor_msgs/Image`（16UC1、mm）+ `camera_info` | 10 Hz |
+| `object_detection/result` | `kachaka_interfaces/ObjectDetectionListStamped`、[物体検出](#物体検出)を参照（`object_detection_relay`） | 10 Hz |
 | `joint_states`、`robot_description` | | |
 | `robot_info/battery_state` | `sensor_msgs/BatteryState`（充電中または放電中） | 1 Hz |
 | `robot_info/version` | スタブ | |
@@ -302,6 +336,7 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/shelf_dock` | `std_srvs/SetBool` サービス、ピンの上げ下げ（シミュレータのみ） | |
 | `sim/speech` | `std_msgs/String`、SPEAK と `tts_on_success` のテキスト（シミュレータのみ） | |
 | `sim/front_stop/state` | `std_msgs/String`、前方障害物停止の状態 JSON `{"enabled", "muted", "blocked"}`（シミュレータのみ、latched、変化時） | |
+| `sim/object_detection` | `std_msgs/String`、前方カメラの画像ごとの検出結果の JSON（シミュレータのみ） | 10 Hz |
 | `sim/torch` | `std_msgs/String`、トーチの明るさ 0〜255 の JSON `{"front", "back"}`（シミュレータのみ、latched） | |
 | `sim/reset` | `std_srvs/SetBool` サービス、開始時の状態に戻す。`data: true` で SLAM の地図も消す（シミュレータのみ、[シミュレータのリセット](#シミュレータのリセット)を参照） | |
 | `sim/reset/event` | `std_msgs/String`、リセットのたびに JSON `{"id", "clear_map"}`（シミュレータのみ） | |
@@ -364,7 +399,8 @@ client.return_home()
 | 安全 | `SetEmergencyStop`、`RestartRobot` | 非常停止で車輪を止め、全コマンドをキャンセルし、`RestartRobot` で解除するまで新しいコマンドを拒否（−14）。シミュレータ自体は再起動しない |
 | サウンド | `GetSoundList`、`PlaySound`、`StopSound`、`AddSound`、`DeleteSound` | 音声なし。サウンド名を `sim/sound` に出す。追加したサウンドはシミュレータを止めると消える |
 | トーチ | `SetFrontTorchIntensity`、`SetBackTorchIntensity` | 各カメラの位置のスポットライト（[トーチライト](#トーチライト)を参照）。値は 0〜255 に丸め、`sim/torch` に出します |
-| 何もしない | `ActivateLaserScan`、`GetObjectDetection`、`GetObjectDetectionFeatures` | 物体検出は常に空 |
+| 物体検出 | `GetObjectDetection`、`GetObjectDetectionFeatures` | シーンの人・シェルフ・充電器（[物体検出](#物体検出)を参照）。特徴量は常に空 |
+| 何もしない | `ActivateLaserScan` | |
 
 kachaka-api 3.17.5.0 の `StartCommand` のコマンドはすべて実装しています（[コマンド](#コマンド)を参照）。
 DEPART_FROM_CHARGER はこのリリースより新しいので、kachaka-api のリリースに入るまでは
@@ -509,7 +545,7 @@ navigation.launch.py を起動します。すべての lifecycle manager が act
 
 CI には GPU がないため、シミュレータ自体はローカルで確認します。`scripts/smoke_test.sh --nav` は
 シミュレータをヘッドレスで起動して `tests/ros_smoke_check.py` を実行し、続いて SLAM + Nav2 で
-ナビゲーション・充電・シェルフ・コマンドのチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。
+ナビゲーション・充電・シェルフ・コマンド・物体検出のチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。
 
 ### シミュレータあり
 
@@ -525,6 +561,7 @@ python3 /tests/ros_nav_check.py --world office   # Isaac のシーンのルー�
 python3 /tests/ros_dock_check.py     # 充電器、バッテリー、RETURN_HOME（同上）
 python3 /tests/ros_shelf_check.py    # シェルフのドッキング、牽引、設置（同上）
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK、goal_pose、cancel_all（同上）
+python3 /tests/ros_detection_check.py   # その場で旋回しながら object_detection/result を確認（同上）
 ```
 
 kachaka-api のテストはホストで公式クライアントを使って実行します（準備は同上）:
@@ -537,7 +574,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_aio_check.py  
 `tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
 （SLAM の地図を保存し、ROS 2 側を `navigation.launch.py` で起動し直す）は docstring にあります。
 
-上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif`、Web ダッシュボードは `scripts/record_dashboard_demo.py docs/dashboard.gif`（シミュレータ・Nav2・ダッシュボードを起動し、ホストに Chromium が必要）で、`--scenario reset` を付けると `docs/sim_reset.gif` を録画します。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif`、Web ダッシュボードは `scripts/record_dashboard_demo.py docs/dashboard.gif`（シミュレータ・Nav2・ダッシュボードを起動し、ホストに Chromium が必要）で、`--scenario reset` を付けると `docs/sim_reset.gif` を録画します。物体検出は `scripts/detection_demo.py --out docs/object_detection.gif`（kachaka-api のみ使用）で録画します。
 
 ## ライセンス
 

@@ -101,6 +101,11 @@ class KachakaSimNode:
         self.shelf_docked_pub = n.create_publisher(String, f"{ns}/sim/shelf_docked", LATCHED)
         self.shelf_dock_handler = None  # set by the sim: bool -> (success, message)
         n.create_service(SetBool, f"{ns}/sim/shelf_dock", self._on_shelf_dock)
+        # Object detection (sim-only JSON; kachaka_sim_bringup's
+        # object_detection_relay publishes it as the real bridge's
+        # /kachaka/object_detection/result, whose type rclpy here cannot load).
+        self.object_detection_pub = n.create_publisher(String, f"{ns}/sim/object_detection", sensor)
+        self.object_detection_enabled = False  # set by the sim when the front camera detects objects
         # Front obstacle stop (simulator only). set_enabled stands in for the
         # smartphone app's setting; command_server mutes the stop while a
         # command with muted sensors runs.
@@ -442,6 +447,14 @@ class KachakaSimNode:
         layout = {"shelves": shelves, "locations": locations}
         self.layout_pub.publish(String(data=json.dumps(layout)))
         self.tap("layout", layout)
+
+    def publish_object_detection(self, t: float, frame_id: str, objects: list[dict]) -> None:
+        """Detections in the front camera image (detection.Detection.to_dict:
+        kachaka-api label, roi [x, y, width, height], score, distance)."""
+        stamp = to_time(t)
+        msg = {"stamp": [stamp.sec, stamp.nanosec], "frame_id": self.frame(frame_id), "objects": objects}
+        self.object_detection_pub.publish(String(data=json.dumps(msg)))
+        self.tap("object_detection", msg)
 
     @staticmethod
     def _pose(p: Pose2D) -> Pose:
