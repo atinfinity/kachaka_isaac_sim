@@ -66,6 +66,23 @@ tof:
   near_clip: 0.01
   rate: 10.0
 
+# Front and back torch lights (SetFrontTorchIntensity / SetBackTorchIntensity,
+# 0-255 per kachaka-api.proto). Where they sit on the real robot is not
+# documented and the URDF has no frame for them, so they are placed at the
+# cameras (assumed). Product photos (rt-net.jp/service/kachaka) show a small
+# unlabelled round window a few cm beside the front camera, possibly the torch. Brightness, beam and colour are unknown too (est.);
+# calibrate with #4.
+torch:
+  front:
+    frame_id: camera_front  # no torch frame in the URDF: the camera stands in
+  back:
+    frame_id: camera_back
+  max_intensity: 30000000.0  # USD SphereLight intensity at level 255 (est.)
+  radius: 0.01              # m
+  cone_angle_deg: 35.0      # half angle of the beam (est.)
+  cone_softness: 0.3
+  color: [1.0, 0.95, 0.88]  # warm white (est.)
+
 # Front obstacle stop. The real robot stops by itself when something is just in
 # front of it; its smartphone app turns this off. Here the initial state is set
 # below and the simulator-only service sim/front_stop/set_enabled switches it.

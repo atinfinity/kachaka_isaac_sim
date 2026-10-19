@@ -51,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-sim-time", type=float, default=0.0, help="exit after this many sim seconds (0: never)")
     p.add_argument("--seed", type=int, default=None, help="seed for sensor and odometry noise")
     p.add_argument("--no-cameras", action="store_true", help="skip RGB and ToF cameras (faster)")
+    p.add_argument("--dome-light", type=float, default=800.0,
+                   help="dome light intensity; low values make a dark scene, e.g. to see the torches")
     p.add_argument("--api-port", type=int, default=26400,
                    help="port of the kachaka-api gRPC server (0: no server)")
     p.add_argument("--record", metavar="DIR", help="save bird's-eye PNG frames to DIR (for demo videos)")
@@ -136,7 +138,7 @@ def main() -> int:
     from kachaka_isaac_sim.ros_node import KachakaSimNode
 
     stage = stage_utils.create_new_stage()
-    world.setup_stage(stage, args.physics_hz)
+    world.setup_stage(stage, args.physics_hz, args.dome_light)
     builtin = args.world in ("room", "empty")
     world.add_ground(stage, visible=builtin)
     if args.world == "room":
@@ -157,10 +159,14 @@ def main() -> int:
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
     world.disable_pin_collision(stage)
+    from kachaka_isaac_sim.torches import Torches
+    from kachaka_isaac_sim.urdf_tools import read_joints
+
+    torches = Torches(cfg.torch)
+    torches.create(stage, world.BASE_LINK, read_joints(ROBOT_URDF))
     cameras = []
     if not args.no_cameras:
         from kachaka_isaac_sim.cameras import create_cameras
-        from kachaka_isaac_sim.urdf_tools import read_joints
 
         cameras = create_cameras(stage, cfg, world.BASE_LINK, read_joints(ROBOT_URDF))
     recorder = None
@@ -192,6 +198,8 @@ def main() -> int:
     node = KachakaSimNode(cfg, ROBOT_URDF)
     for cam in cameras:
         node.add_camera(cam.name)
+    node.torches = torches
+    node.publish_torch()
     api = None
     if args.api_port:
         from kachaka_isaac_sim.api_server import KachakaApiServer

@@ -109,6 +109,9 @@ class KachakaSimNode:
         self.front_stop_pub = n.create_publisher(String, f"{ns}/sim/front_stop/state", LATCHED)
         n.create_service(SetBool, f"{ns}/sim/front_stop/set_enabled", self._on_front_stop_enabled)
         n.create_service(SetBool, f"{ns}/sim/front_stop/mute", self._on_front_stop_mute)
+        # Torch levels (simulator only; the real robot cannot read them back).
+        self.torches = None  # torches.Torches, set by the sim
+        self.torch_pub = n.create_publisher(String, f"{ns}/sim/torch", LATCHED)
         version_pub = n.create_publisher(String, f"{ns}/robot_info/version", LATCHED)
         desc_pub = n.create_publisher(String, f"{ns}/robot_description", LATCHED)
 
@@ -218,6 +221,19 @@ class KachakaSimNode:
                 future.set_result(fn())
             except Exception as e:  # noqa: BLE001 - handed to the caller
                 future.set_exception(e)
+
+    def set_torch(self, name: str, level: int) -> Future:
+        """From any thread: set a torch ("front" or "back", 0-255) in the
+        simulation loop and publish the levels. The Future holds the level."""
+        def apply():
+            level_set = self.torches.set(name, level)
+            self.publish_torch()
+            return level_set
+        return self.run_in_sim(apply)
+
+    def publish_torch(self) -> None:
+        """Latched JSON {"front", "back"} of the torch levels (0-255)."""
+        self.torch_pub.publish(String(data=json.dumps(self.torches.state())))
 
     def publish_front_stop(self, blocked: bool) -> None:
         """Latched JSON {"enabled", "muted", "blocked"}, sent when it changes."""

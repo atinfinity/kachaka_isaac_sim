@@ -20,6 +20,7 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - 充電器とバッテリー: 走行中は減り、充電器の上で充電されます
 - 実機と同じ前方障害物での自動停止。teleop・Nav2・kachaka-api のどこからの指令でも、障害物の手前で
   前進を止めます。スマホアプリと同じく OFF にできます
+- 前後のトーチライト。実機と同じく kachaka-api で点灯します
 - topic 名・メッセージ型・QoS は実機ブリッジと同じ
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
@@ -80,6 +81,30 @@ ros2 topic echo /kachaka/sim/front_stop/state   # {"enabled": false, "muted": fa
 
 実機の停止距離と範囲は公開されていないので、値は推定です。LiDAR の高さは 10.5 cm なので、
 それより低い障害物は見えません。
+
+### トーチライト
+
+![暗い部屋で kachaka-api からトーチを点灯。シミュレータの画面と前後カメラの画像](docs/torch.gif)
+
+kachaka-api には前と後ろのトーチライトがあり、`SetFrontTorchIntensity` /
+`SetBackTorchIntensity`（0〜255、0 で消灯）で明るさを変えます。実機のどこに付いているかは
+公開されておらず、URDF にもフレームがありません。シミュレータではカメラを照らすものと仮定し、
+前後カメラの位置にカメラの向きのスポットライトを置いています。Python クライアントにはラッパーがないので、
+gRPC のスタブを直接呼びます。
+
+```python
+from kachaka_api import KachakaApiClient
+from kachaka_api.generated import kachaka_api_pb2 as pb2
+
+client = KachakaApiClient("127.0.0.1:26400")
+client.stub.SetFrontTorchIntensity(pb2.SetFrontTorchIntensityRequest(intensity=255))
+```
+
+- 実機には明るさを読み出す RPC がありません。シミュレータは `sim/torch`（latched の JSON
+  `{"front", "back"}`）に出します
+- 既定のシーンは明るいので、トーチの効果はほとんど見えません。`--dome-light 0` で
+  デフォルトの部屋の環境光を消せます（Isaac Sim のシーンは独自の照明を持っています）
+- 明るさ・照射角・色は推定です（`config/robot.yaml` の `torch`）
 
 ### 充電器に戻る
 
@@ -179,6 +204,7 @@ scripts/run_sim.sh --world office        # Isaac Sim のシーン: office, hospi
 scripts/run_sim.sh --world /path/to.usd  # 任意の USD シーン
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
 scripts/run_sim.sh --no-cameras          # LiDAR とオドメトリだけでよいとき（速い）
+scripts/run_sim.sh --dome-light 0        # 暗いシーン（環境光。既定 800）。トーチを見たいときなど
 scripts/run_sim.sh --render-hz 20        # 描画・カメラのループ周期（「性能」を参照）
 scripts/run_sim.sh --charger X Y YAW     # 充電器の位置（既定: 部屋の西の壁際）
 scripts/run_sim.sh --no-charger
@@ -249,6 +275,7 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/shelf_dock` | `std_srvs/SetBool` サービス、ピンの上げ下げ（シミュレータのみ） | |
 | `sim/speech` | `std_msgs/String`、SPEAK と `tts_on_success` のテキスト（シミュレータのみ） | |
 | `sim/front_stop/state` | `std_msgs/String`、前方障害物停止の状態 JSON `{"enabled", "muted", "blocked"}`（シミュレータのみ、latched、変化時） | |
+| `sim/torch` | `std_msgs/String`、トーチの明るさ 0〜255 の JSON `{"front", "back"}`（シミュレータのみ、latched） | |
 | `sim/front_stop/set_enabled`、`sim/front_stop/mute` | `std_srvs/SetBool` サービス。前方障害物停止の ON/OFF（アプリの設定に相当）と、コマンド実行中の一時無効化（`command_server` が使う）（シミュレータのみ） | |
 | `sim/command/start`、`sim/command/cancel` | `std_msgs/String`、JSON。kachaka-api サーバーから `command_server` へのコマンド（シミュレータのみ） | |
 | `sim/command/state` | `std_msgs/String`、JSON。実行中のコマンドと最後の結果（シミュレータのみ、latched） | |
@@ -307,7 +334,8 @@ client.return_home()
 | 操作 | `SetManualControlEnabled`、`GetManualControlEnabled`、`SetRobotVelocity`、`SetAutoHomingEnabled`、`GetAutoHomingEnabled`、`SetSpeakerVolume`、`GetSpeakerVolume` | |
 | 安全 | `SetEmergencyStop`、`RestartRobot` | 非常停止で車輪を止め、全コマンドをキャンセルし、`RestartRobot` で解除するまで新しいコマンドを拒否（−14）。シミュレータ自体は再起動しない |
 | サウンド | `GetSoundList`、`PlaySound`、`StopSound`、`AddSound`、`DeleteSound` | 音声なし。サウンド名を `sim/sound` に出す。追加したサウンドはシミュレータを止めると消える |
-| 何もしない | `SetFrontTorchIntensity`、`SetBackTorchIntensity`、`ActivateLaserScan`、`GetObjectDetection`、`GetObjectDetectionFeatures` | 物体検出は常に空 |
+| トーチ | `SetFrontTorchIntensity`、`SetBackTorchIntensity` | 各カメラの位置のスポットライト（[トーチライト](#トーチライト)を参照）。値は 0〜255 に丸め、`sim/torch` に出します |
+| 何もしない | `ActivateLaserScan`、`GetObjectDetection`、`GetObjectDetectionFeatures` | 物体検出は常に空 |
 
 kachaka-api 3.17.5.0 の `StartCommand` のコマンドはすべて実装しています（[コマンド](#コマンド)を参照）。
 DEPART_FROM_CHARGER はこのリリースより新しいので、kachaka-api のリリースに入るまでは
@@ -410,7 +438,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 `tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
 （SLAM の地図を保存し、ROS 2 側を `navigation.launch.py` で起動し直す）は docstring にあります。
 
-上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif` で録画しています。
 
 ## ライセンス
 

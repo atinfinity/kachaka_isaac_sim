@@ -20,6 +20,7 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Charging dock and battery: the battery drains while driving and charges on the dock.
 - Front obstacle stop, as on the real robot: forward motion brakes in front of an obstacle,
   from any source (teleop, Nav2, kachaka-api). It can be switched off, like in the smartphone app.
+- Front and back torch lights, set through kachaka-api like on the real robot.
 - Same topic names, message types and QoS as the real bridge.
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
@@ -86,6 +87,32 @@ ros2 topic echo /kachaka/sim/front_stop/state   # {"enabled": false, "muted": fa
 
 The real stop distance and zone are not published; the values are estimates.
 The LiDAR scans at 10.5 cm, so lower obstacles are not seen.
+
+### Torch lights
+
+![Torches switched through kachaka-api in a dark room: the simulator view and the front and back camera](docs/torch.gif)
+
+kachaka-api has a front and a back torch, set with `SetFrontTorchIntensity` /
+`SetBackTorchIntensity` (0-255, 0 is off). Where the torches sit on the real
+robot is not documented and the URDF has no frame for them, so the simulator
+assumes they light the camera views: each is a spotlight at the front or back
+camera, aimed along it.
+The Python client has no wrapper for them, so call the gRPC stub:
+
+```python
+from kachaka_api import KachakaApiClient
+from kachaka_api.generated import kachaka_api_pb2 as pb2
+
+client = KachakaApiClient("127.0.0.1:26400")
+client.stub.SetFrontTorchIntensity(pb2.SetFrontTorchIntensityRequest(intensity=255))
+```
+
+- The real robot has no RPC to read the levels back; the simulator publishes
+  them on `sim/torch` (latched JSON `{"front", "back"}`).
+- The default scenes are bright, so the torches barely show. `--dome-light 0`
+  turns the ambient light off in the default room (Isaac Sim scenes bring
+  their own lights).
+- Brightness, beam and colour are guesses (`torch` in `config/robot.yaml`).
 
 ### Returning to the charger
 
@@ -187,6 +214,7 @@ scripts/run_sim.sh --world office        # Isaac Sim scenes: office, hospital, w
 scripts/run_sim.sh --world /path/to.usd  # any USD scene
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
 scripts/run_sim.sh --no-cameras          # faster, when you only need LiDAR and odometry
+scripts/run_sim.sh --dome-light 0        # dark scene (ambient light, default 800), e.g. to see the torches
 scripts/run_sim.sh --render-hz 20        # render/camera loop rate (see Performance)
 scripts/run_sim.sh --charger X Y YAW     # place the charger (default: by the west wall of the room)
 scripts/run_sim.sh --no-charger
@@ -270,6 +298,7 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/speech` | `std_msgs/String`, text of SPEAK and `tts_on_success` (simulator only) | |
 | `sim/front_stop/state` | `std_msgs/String`, JSON `{"enabled", "muted", "blocked"}` of the front obstacle stop (simulator only, latched, on change) | |
 | `sim/front_stop/set_enabled`, `sim/front_stop/mute` | `std_srvs/SetBool` services: switch the front obstacle stop (the app setting), or mute it while a command runs (`command_server`) (simulator only) | |
+| `sim/torch` | `std_msgs/String`, JSON `{"front", "back"}`: torch levels 0-255 (simulator only, latched) | |
 | `sim/command/start`, `sim/command/cancel` | `std_msgs/String`, JSON: commands from the kachaka-api server to `command_server` (simulator only) | |
 | `sim/command/state` | `std_msgs/String`, JSON: running command and last result (simulator only, latched) | |
 
@@ -332,7 +361,8 @@ The client methods are the RPC names in snake_case
 | Control | `SetManualControlEnabled`, `GetManualControlEnabled`, `SetRobotVelocity`, `SetAutoHomingEnabled`, `GetAutoHomingEnabled`, `SetSpeakerVolume`, `GetSpeakerVolume` | |
 | Safety | `SetEmergencyStop`, `RestartRobot` | the emergency stop halts the wheels, cancels all commands and refuses new ones (−14) until `RestartRobot`, which clears it; the simulator itself does not restart |
 | Sound | `GetSoundList`, `PlaySound`, `StopSound`, `AddSound`, `DeleteSound` | no audio: the sound name goes to `sim/sound`; added sounds live until the simulator stops |
-| No-ops | `SetFrontTorchIntensity`, `SetBackTorchIntensity`, `ActivateLaserScan`, `GetObjectDetection`, `GetObjectDetectionFeatures` | object detection is always empty |
+| Torches | `SetFrontTorchIntensity`, `SetBackTorchIntensity` | a spotlight at each camera, see [Torch lights](#torch-lights); levels are clamped to 0-255 and published on `sim/torch` |
+| No-ops | `ActivateLaserScan`, `GetObjectDetection`, `GetObjectDetectionFeatures` | object detection is always empty |
 
 All `StartCommand` commands of kachaka-api 3.17.5.0 are implemented (see
 [Commands](#commands)). DEPART_FROM_CHARGER is newer than that release, so
@@ -445,7 +475,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 map; its docstring gives the steps (save the SLAM map, then restart the ROS 2
 side with `navigation.launch.py`).
 
-`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop).
+`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights.
 
 ## License
 
