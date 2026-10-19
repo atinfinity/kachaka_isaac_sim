@@ -293,3 +293,22 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   queues the call, which runs after the next `spin_once`, and the gRPC thread
   waits on its future.
 - **Sounds** have no audio: `PlaySound` publishes the name on `sim/sound`.
+
+## Web dashboard
+
+- **A separate process that only talks kachaka-api.** `scripts/dashboard.py`
+  wraps a `KachakaApiClient` in a stdlib `ThreadingHTTPServer`
+  (`kachaka_isaac_sim/dashboard.py`), so it needs no ROS, does not load the
+  simulator, and works against a real robot. It is off unless started.
+- **Polling, no websockets.** The page (`dashboard.html`, plain JS and a
+  canvas) polls `/api/state` every 0.5 s, `/api/history` every 3 s and the map
+  and layout every 10 s, since the SLAM map grows. The server caches the
+  layout and the map between those refreshes.
+- **Idle.** With no command the robot reports PENDING and an empty command;
+  the dashboard shows that as "idle".
+- **Commands** are sent with `wait_for_completion=False`, so a request returns
+  at once and the page follows the command through the state. Only the
+  commands the page has buttons for are accepted (`parse_command`); anything
+  else is a 400.
+- **No path.** kachaka-api has no RPC for the planned path, so the page draws
+  the trail of poses it has seen.

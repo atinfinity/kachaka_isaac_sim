@@ -31,6 +31,8 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
   ROTATE_IN_PLACE など）。`goal_pose` と自動充電にも対応
 - ポート 26400 で [kachaka-api](https://github.com/pf-robotics/kachaka-api) の gRPC API を全 RPC 提供。
   公式の Python クライアント（`KachakaApiClient`）が実機なしで使えます
+- Web ダッシュボード（既定では起動しない）: 地図上のロボット・シェルフ・充電器、ロボットの状態、
+  コマンド送信ボタン。kachaka-api だけを使うので実機のカチャカにもつながります
 
 ### コマンド
 
@@ -315,6 +317,9 @@ client.return_shelf("S01")
 client.return_home()
 ```
 
+asyncio 版のクライアント（`kachaka_api.aio.KachakaApiClient`）も、`client.robot_pose.stream()`
+などのストリームを含めて使えます。
+
 コマンドと場所の一覧は `command_server` が扱うので、ROS 2 側（`slam.launch.py nav:=true` または
 `navigation.launch.py`）が必要です。ロボットの位置は slam_toolbox または AMCL の map 座標です。
 
@@ -367,6 +372,33 @@ ROS 2 のアクション（`command_type: 23`）からのみ送れます。
 - `export_map` は 2 ファイルの zip を書き、`import_map` はそれを読み込みます。`import_image_as_map` は
   PNG（カチャカの配色、または任意の画像: 暗いと障害物、明るいと空き、中間の灰色は未知）を受け取り、
   画像の左下を原点にします。
+
+### Web ダッシュボード
+
+![Web ダッシュボードでシェルフをキッチンへ運び、戻し、充電器に帰る様子](docs/dashboard.gif)
+
+地図上にロボットを表示し、コマンドを送れる小さな Web ページです。ホスト上の別プロセスで、
+kachaka-api だけを使うので ROS は不要で、実機のカチャカにもつながります。既定では起動しないので、
+シミュレータとは別に起動します。
+
+```bash
+uv run --no-project --with kachaka-api==3.17.5.0 python scripts/dashboard.py
+# http://127.0.0.1:8080/ を開く
+# オプション: --target <ロボット>:26400（既定 127.0.0.1:26400）、他のマシンから開くなら --host 0.0.0.0、
+# --port 8080
+```
+
+- **地図**: ロボットの地図（`GetPngMap`。SLAM で広がるよう 10 秒ごとに再取得）、ロボット、シェルフ
+  （運搬中は濃く表示）、充電器、場所。ホイールで拡大縮小、ドラッグで移動します。kachaka-api には
+  経路を返す RPC がないので、青い線は計画経路ではなく、ページが受け取った位置の軌跡です。
+- **状態**: バッテリーと充電状態、位置、運搬中のシェルフ、実行中のコマンド、直前の結果、発生中の
+  エラー（説明は `get_robot_error_code` から）。その下にコマンド履歴を表示します。
+- **コマンド**: 場所への移動、シェルフを場所へ運ぶ、シェルフを戻す、シェルフを切り離す、充電器に戻る、
+  「Goal on map」（地図上の点をクリックしてドラッグで向きを決め、`move_to_pose` で送る）、キャンセル。
+  ほかの kachaka-api クライアントと同じく、Nav2 を含む ROS 2 側が必要です。
+
+ログインはありません。ページを開ければ誰でもロボットを動かせるので、信頼できるネットワーク以外では
+既定の `--host 127.0.0.1` のままにしてください。
 
 ## 性能
 
@@ -438,7 +470,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 `tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
 （SLAM の地図を保存し、ROS 2 側を `navigation.launch.py` で起動し直す）は docstring にあります。
 
-上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif` で録画しています。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif`、Web ダッシュボードは `scripts/record_dashboard_demo.py docs/dashboard.gif`（シミュレータ・Nav2・ダッシュボードを起動し、ホストに Chromium が必要）で録画しています。
 
 ## ライセンス
 
