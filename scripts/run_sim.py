@@ -54,6 +54,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--api-port", type=int, default=26400,
                    help="port of the kachaka-api gRPC server (0: no server)")
     p.add_argument("--record", metavar="DIR", help="save bird's-eye PNG frames to DIR (for demo videos)")
+    p.add_argument("--record-follow", action="store_true",
+                   help="move the --record camera with the robot (--record-view relative to it)")
+    p.add_argument("--record-near", type=float, default=0.05,
+                   help="--record camera near clip [m]; larger cuts away ceilings above the robot")
     p.add_argument("--record-hz", type=float, default=10.0, help="frame rate for --record")
     p.add_argument("--record-view", type=float, nargs=6, default=[0.0, -2.4, 7.5, 0.0, -0.1, 0.0],
                    metavar=("EX", "EY", "EZ", "TX", "TY", "TZ"), help="--record camera position and target [m]")
@@ -164,7 +168,8 @@ def main() -> int:
         from kachaka_isaac_sim.cameras import RecordCamera
 
         v = args.record_view
-        recorder = RecordCamera(stage, args.record, v[:3], v[3:], args.record_hz)
+        recorder = RecordCamera(stage, args.record, v[:3], v[3:], args.record_hz, follow=args.record_follow,
+                                near=args.record_near)
     app.update()
 
     from isaacsim.core.rendering_manager import RenderingManager
@@ -243,7 +248,7 @@ def main() -> int:
             t1 = time.perf_counter()
             publish_cameras(node, cameras, robot.t, tof_off=robot.sensors_paused)
             if recorder:
-                recorder.capture(robot.t - sim_start)
+                recorder.capture(robot.t - sim_start, (robot.gt.x, robot.gt.y))
             timing[0] += t1 - t0
             timing[1] += time.perf_counter() - t1
             timing[2] += 1
