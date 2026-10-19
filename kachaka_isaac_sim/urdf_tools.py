@@ -30,7 +30,7 @@ class Xacro:
         text = _FIND.sub(lambda m: str(self.package_paths[m.group(1)]), text)
 
         def repl(m: re.Match) -> str:
-            value = eval(m.group(1), {"__builtins__": {}}, {**self.props, **scope})  # noqa: S307
+            value = eval(m.group(1), {"__builtins__": {}}, {**self.props, **scope})
             return str(value)
 
         return _EXPR.sub(repl, text)

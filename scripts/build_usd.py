@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from kachaka_isaac_sim.urdf_tools import build_sim_urdf, write_urdf  # noqa: E402
+from kachaka_isaac_sim.urdf_tools import build_sim_urdf, write_urdf
 
 PKG = ROOT / "third_party/kachaka-api/ros2/kachaka_description"
 URDF_OUT = ROOT / "build/kachaka.urdf"

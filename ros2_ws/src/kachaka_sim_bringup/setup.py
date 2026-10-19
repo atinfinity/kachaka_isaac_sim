@@ -17,6 +17,7 @@ setup(
         (f"share/{package_name}/maps", glob("maps/*")),
     ],
     install_requires=["setuptools"],
+    tests_require=["pytest"],
     zip_safe=True,
     license="Apache-2.0",
     entry_points={"console_scripts": [
@@ -24,5 +25,6 @@ setup(
         f"footprint_map_filter = {package_name}.footprint_map_filter:main",
         f"command_server = {package_name}.command_server:main",
         f"shelf_markers = {package_name}.shelf_markers:main",
+        f"fake_robot = {package_name}.fake_robot:main",
     ]},
 )

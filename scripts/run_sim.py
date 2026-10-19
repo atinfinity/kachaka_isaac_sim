@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from kachaka_isaac_sim.config import DEFAULT_CONFIG, load_config  # noqa: E402
+from kachaka_isaac_sim.config import DEFAULT_CONFIG, load_config
 
 ROBOT_USD = ROOT / "assets/generated/kachaka/kachaka.usda"
 ROBOT_URDF = ROOT / "build/kachaka.urdf"

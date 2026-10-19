@@ -23,3 +23,11 @@ index-strategy = "unsafe-best-match"
 [[tool.uv.index]]
 name = "nvidia"
 url = "https://pypi.nvidia.com"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["third_party"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
