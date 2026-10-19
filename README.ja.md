@@ -18,6 +18,8 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - センサー: 2D LiDAR、前後の RGB カメラ、ToF 深度カメラ、IMU
 - オドメトリ（統合・車輪）、TF、`joint_states`、`robot_description`、バージョンのスタブ
 - 充電器とバッテリー: 走行中は減り、充電器の上で充電されます
+- 実機と同じ前方障害物での自動停止。teleop・Nav2・kachaka-api のどこからの指令でも、障害物の手前で
+  前進を止めます。スマホアプリと同じく OFF にできます
 - topic 名・メッセージ型・QoS は実機ブリッジと同じ
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
@@ -45,7 +47,7 @@ ros2 topic pub --once /kachaka/goal_pose geometry_msgs/PoseStamped \
 | MOVE_TO_LOCATION | `layout/locations/list` の場所へ Nav2 で移動。充電器（`home`）なら RETURN_HOME |
 | SPEAK | 音声なし。テキストをログと `sim/speech` に出す |
 | MOVE_FORWARD、ROTATE_IN_PLACE | オドメトリで距離を進む・角度を回る。MOVE_FORWARD は前方に障害物があると止まる（−9） |
-| MOVE_BY_VELOCITY_WITH_MUTED_SENSORS | 指定の速度で指定の時間走る |
+| MOVE_BY_VELOCITY_WITH_MUTED_SENSORS | 指定の速度で指定の時間走る。その間は前方障害物での停止を無効にする |
 | LOCK | 指定の時間その場で止まる |
 | DOCK_ANY_SHELF_WITH_REGISTRATION | 場所に最も近い（0.5 m 以内の）シェルフにドッキング |
 | LOCALIZE | すぐ成功する（シミュレータは自己位置を見失わない） |
@@ -54,6 +56,28 @@ ros2 topic pub --once /kachaka/goal_pose geometry_msgs/PoseStamped \
 実機と同じく、`cancel_all: true` なら実行中のコマンドを止めます。付けなければ前のコマンドが
 終わるまで待ちます。`tts_on_success` はコマンド成功後に `sim/speech` に出ます。`goal_pose` は
 実機ブリッジと同じく `cancel_all` なしで MOVE_TO_POSE を送ります。
+
+### 前方障害物での停止
+
+実機のカチャカは、すぐ前に障害物があると自動で止まります（スマホアプリで OFF にできます）。
+シミュレータも、teleop・Nav2・`set_robot_velocity`・コマンドのどこから来た速度指令にも同じように効きます。
+
+- 車体の前、幅 0.30 m の範囲の LiDAR の空き距離が `margin + v × スキャン周期 + v² / (2 × 減速度)`
+  まで縮むと前進にブレーキをかけます。止まっているときは 3 cm（`front_stop.margin`）空けます。
+  旋回と後退はでき、前が空けばまた進みます
+- 範囲はシェルフの脚の間隔より狭いので、カチャカシェルフの下には入れます。牽引中のシェルフは見ません
+- MOVE_BY_VELOCITY_WITH_MUTED_SENSORS と `mute_sensors` 付きの MOVE_FORWARD は、実行中この停止を
+  無効にします。MOVE_FORWARD はこの停止で 1 秒止められると −9 で失敗します
+- 初期状態と範囲は `config/robot.yaml`（`front_stop`）で設定します。アプリの設定は kachaka-api に
+  ないので、実行中の切り替えはシミュレータ専用のサービス `sim/front_stop/set_enabled` で行います
+
+```bash
+ros2 service call /kachaka/sim/front_stop/set_enabled std_srvs/srv/SetBool "{data: false}"
+ros2 topic echo /kachaka/sim/front_stop/state   # {"enabled": false, "muted": false, "blocked": false}
+```
+
+実機の停止距離と範囲は公開されていないので、値は推定です。LiDAR の高さは 10.5 cm なので、
+それより低い障害物は見えません。
 
 ### 充電器に戻る
 
@@ -222,6 +246,8 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/shelf_docked` | `std_msgs/String`、牽引中のシェルフ ID か空文字（シミュレータのみ、latched） | |
 | `sim/shelf_dock` | `std_srvs/SetBool` サービス、ピンの上げ下げ（シミュレータのみ） | |
 | `sim/speech` | `std_msgs/String`、SPEAK と `tts_on_success` のテキスト（シミュレータのみ） | |
+| `sim/front_stop/state` | `std_msgs/String`、前方障害物停止の状態 JSON `{"enabled", "muted", "blocked"}`（シミュレータのみ、latched、変化時） | |
+| `sim/front_stop/set_enabled`、`sim/front_stop/mute` | `std_srvs/SetBool` サービス。前方障害物停止の ON/OFF（アプリの設定に相当）と、コマンド実行中の一時無効化（`command_server` が使う）（シミュレータのみ） | |
 | `sim/command/start`、`sim/command/cancel` | `std_msgs/String`、JSON。kachaka-api サーバーから `command_server` へのコマンド（シミュレータのみ） | |
 | `sim/command/state` | `std_msgs/String`、JSON。実行中のコマンドと最後の結果（シミュレータのみ、latched） | |
 

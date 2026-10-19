@@ -101,6 +101,14 @@ class KachakaSimNode:
         self.shelf_docked_pub = n.create_publisher(String, f"{ns}/sim/shelf_docked", LATCHED)
         self.shelf_dock_handler = None  # set by the sim: bool -> (success, message)
         n.create_service(SetBool, f"{ns}/sim/shelf_dock", self._on_shelf_dock)
+        # Front obstacle stop (simulator only). set_enabled stands in for the
+        # smartphone app's setting; command_server mutes the stop while a
+        # command with muted sensors runs.
+        self.front_stop = None  # safety.FrontStop, set by the sim
+        self._front_stop_state = None
+        self.front_stop_pub = n.create_publisher(String, f"{ns}/sim/front_stop/state", LATCHED)
+        n.create_service(SetBool, f"{ns}/sim/front_stop/set_enabled", self._on_front_stop_enabled)
+        n.create_service(SetBool, f"{ns}/sim/front_stop/mute", self._on_front_stop_mute)
         version_pub = n.create_publisher(String, f"{ns}/robot_info/version", LATCHED)
         desc_pub = n.create_publisher(String, f"{ns}/robot_description", LATCHED)
 
@@ -160,6 +168,20 @@ class KachakaSimNode:
             res.success, res.message = self.shelf_dock_handler(req.data)
         return res
 
+    def _on_front_stop_enabled(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
+        return self._set_front_stop(res, "enabled", req.data)
+
+    def _on_front_stop_mute(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
+        return self._set_front_stop(res, "muted", req.data)
+
+    def _set_front_stop(self, res: SetBool.Response, attr: str, value: bool) -> SetBool.Response:
+        if self.front_stop is None:
+            res.success, res.message = False, "the simulator is not running yet"
+        else:
+            setattr(self.front_stop, attr, value)
+            res.success = True
+        return res
+
     # --- called from the sim loop --------------------------------------------
     def spin_once(self, max_callbacks: int = 200) -> None:
         """Run every ready callback. `Executor.spin_once` runs only one, which
@@ -196,6 +218,14 @@ class KachakaSimNode:
                 future.set_result(fn())
             except Exception as e:  # noqa: BLE001 - handed to the caller
                 future.set_exception(e)
+
+    def publish_front_stop(self, blocked: bool) -> None:
+        """Latched JSON {"enabled", "muted", "blocked"}, sent when it changes."""
+        fs = self.front_stop
+        state = {"enabled": fs.enabled, "muted": fs.muted, "blocked": blocked}
+        if state != self._front_stop_state:
+            self._front_stop_state = state
+            self.front_stop_pub.publish(String(data=json.dumps(state)))
 
     def publish_clock(self, t: float) -> None:
         self.clock_pub.publish(Clock(clock=to_time(t)))

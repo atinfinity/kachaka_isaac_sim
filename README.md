@@ -18,6 +18,8 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Sensors: 2D LiDAR, front/back RGB cameras, ToF depth camera, IMU.
 - Odometry (fused and wheel), TF, `joint_states`, `robot_description`, version stub.
 - Charging dock and battery: the battery drains while driving and charges on the dock.
+- Front obstacle stop, as on the real robot: forward motion brakes in front of an obstacle,
+  from any source (teleop, Nav2, kachaka-api). It can be switched off, like in the smartphone app.
 - Same topic names, message types and QoS as the real bridge.
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
@@ -45,7 +47,7 @@ ros2 topic pub --once /kachaka/goal_pose geometry_msgs/PoseStamped \
 | MOVE_TO_LOCATION | Nav2 goal to a location from `layout/locations/list`; the charger (`home`) runs RETURN_HOME |
 | SPEAK | no audio: the text goes to the log and to `sim/speech` |
 | MOVE_FORWARD, ROTATE_IN_PLACE | drives the distance or turns the angle on odometry; MOVE_FORWARD stops (−9) at an obstacle ahead |
-| MOVE_BY_VELOCITY_WITH_MUTED_SENSORS | drives at the velocity for the duration |
+| MOVE_BY_VELOCITY_WITH_MUTED_SENSORS | drives at the velocity for the duration, with the front obstacle stop muted |
 | LOCK | holds the robot still for the duration |
 | DOCK_ANY_SHELF_WITH_REGISTRATION | docks the shelf nearest to the location (within 0.5 m) |
 | LOCALIZE | succeeds at once: the simulator never loses its pose |
@@ -55,6 +57,33 @@ As on the real robot, `cancel_all: true` stops the running command; without
 it a command waits until the earlier ones finish. `tts_on_success` is sent to
 `sim/speech` after a successful command. `goal_pose` sends MOVE_TO_POSE
 without `cancel_all`, like the real bridge.
+
+### Front obstacle stop
+
+The real Kachaka stops by itself when something is just in front of it; its
+smartphone app turns this off. The simulator does the same for every velocity
+command, whatever sends it (teleop, Nav2, `set_robot_velocity`, commands):
+
+- Forward motion brakes when the LiDAR clearance ahead of the body, in a lane
+  0.30 m wide, falls to `margin + v * scan period + v² / (2 * deceleration)`.
+  At rest the robot keeps 3 cm (`front_stop.margin`). Turning and backing up
+  stay allowed, and the robot drives on once the way is clear.
+- The lane is narrower than a shelf's legs, so the robot still drives under a
+  Kachaka Shelf; a towed shelf is not seen.
+- MOVE_BY_VELOCITY_WITH_MUTED_SENSORS and MOVE_FORWARD with `mute_sensors`
+  turn it off while they run. MOVE_FORWARD fails with −9 when the stop holds
+  the robot for 1 s.
+- `config/robot.yaml` (`front_stop`) sets the initial state and the zone. The
+  app setting is not part of kachaka-api, so the simulator-only service
+  `sim/front_stop/set_enabled` switches it at run time:
+
+```bash
+ros2 service call /kachaka/sim/front_stop/set_enabled std_srvs/srv/SetBool "{data: false}"
+ros2 topic echo /kachaka/sim/front_stop/state   # {"enabled": false, "muted": false, "blocked": false}
+```
+
+The real stop distance and zone are not published; the values are estimates.
+The LiDAR scans at 10.5 cm, so lower obstacles are not seen.
 
 ### Returning to the charger
 
@@ -237,6 +266,8 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/shelf_docked` | `std_msgs/String`, id of the towed shelf or empty (simulator only, latched) | |
 | `sim/shelf_dock` | `std_srvs/SetBool` service: raise or lower the pin (simulator only) | |
 | `sim/speech` | `std_msgs/String`, text of SPEAK and `tts_on_success` (simulator only) | |
+| `sim/front_stop/state` | `std_msgs/String`, JSON `{"enabled", "muted", "blocked"}` of the front obstacle stop (simulator only, latched, on change) | |
+| `sim/front_stop/set_enabled`, `sim/front_stop/mute` | `std_srvs/SetBool` services: switch the front obstacle stop (the app setting), or mute it while a command runs (`command_server`) (simulator only) | |
 | `sim/command/start`, `sim/command/cancel` | `std_msgs/String`, JSON: commands from the kachaka-api server to `command_server` (simulator only) | |
 | `sim/command/state` | `std_msgs/String`, JSON: running command and last result (simulator only, latched) | |
 

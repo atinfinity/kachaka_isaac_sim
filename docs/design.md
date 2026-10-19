@@ -56,12 +56,38 @@ generic names (`/cmd_vel`, `/scan`, `/odom`).
 | `manual_control/set_enabled` | SetBool | stub, always succeeds |
 | `sim/charger_pose`, `sim/charger_detection` | PoseStamped | sim-only, see Charger below |
 | `sim/layout`, `sim/shelf_poses`, `sim/shelf_detection`, `sim/shelf_docked`, `sim/shelf_dock` (srv) | | sim-only, see Kachaka Shelf below |
+| `sim/front_stop/state`, `sim/front_stop/set_enabled` (srv), `sim/front_stop/mute` (srv) | | sim-only, see Front obstacle stop below |
 
 `kachaka_sim_bringup`'s `command_server` adds the parts the real robot runs
 itself: `kachaka_command/execute` (all command types, see Commands below), `goal_pose`,
 `layout/locations/list` (charger id `home`, shelf homes `<shelf>_home`),
 `layout/shelves/list` and `auto_homing/set_enabled`.
 | `robot_description`, `joint_states` | | |
+
+### Front obstacle stop
+
+The real robot stops by itself in front of an obstacle (an app setting turns
+it off). Every velocity source ends on `manual_control/cmd_vel`, so the
+simulator applies the stop where it limits the velocity (`robot.py`,
+`safety.py`):
+
+- At each LiDAR scan, `front_clearance` takes the exact raycast distances (no
+  noise, no `min_range` cut-off, since on the real robot the ToF camera
+  covers the LiDAR's blind range) and finds the nearest point in a lane ahead
+  of the body (`front_x` 0.23 m, `half_width` 0.15 m).
+- Each physics step, forward motion brakes (`VelocityCommand.update(...,
+  forward_blocked=True)`, at `max_linear_accel`) while the clearance is at
+  most `margin + v * scan period + v^2 / (2 * max_linear_accel)`. It is
+  released once the clearance grows by 3 cm more, so the robot does not
+  creep up in starts and stops. The command is kept, so the robot drives on
+  when the way clears; backing up and turning are never blocked.
+- The lane (+-0.15 m) is inside a shelf's legs (inner faces at +-0.172 m),
+  so docking under a shelf works without an exemption; the towed shelf is
+  ignored by the LiDAR already. On the charger with `sensors_off`, the
+  clearance is treated as free.
+- `command_server` mutes it (`sim/front_stop/mute`) for
+  MOVE_BY_VELOCITY_WITH_MUTED_SENSORS and MOVE_FORWARD with `mute_sensors`,
+  and fails a drive with −9 after the stop holds it for 1 s.
 
 TF follows the real robot: URDF frames plus `laser_link`, `camera_front`,
 `camera_back`, `tof_camera` (placed at the URDF sensor poses until real values

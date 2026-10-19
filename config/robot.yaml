@@ -66,6 +66,18 @@ tof:
   near_clip: 0.01
   rate: 10.0
 
+# Front obstacle stop. The real robot stops by itself when something is just in
+# front of it; its smartphone app turns this off. Here the initial state is set
+# below and the simulator-only service sim/front_stop/set_enabled switches it.
+# Forward motion brakes once the LiDAR clearance ahead falls to
+# margin + v * scan period + v^2 / (2 * drive.max_linear_accel). Turning and
+# backing up stay allowed. The real stop distance and zone are not published.
+front_stop:
+  enabled: true
+  front_x: 0.23             # m, base_footprint to the front of the body (body 387 mm, rear at -0.16)
+  half_width: 0.15          # m, watched lane: body 240 mm wide plus 3 cm a side; clears shelf legs (+-0.172 m)
+  margin: 0.03              # m (est.)
+
 imu:
   frame_id: imu_link
   rate: 100.0               # Hz (est.)

@@ -26,6 +26,7 @@ from .drive import (
 from .physics_sensors import Imu, Lidar, quat_to_matrix
 from .power import Battery, Charger
 from .ros_node import KachakaSimNode
+from .safety import FrontStop, FrontStopZone, front_clearance
 from .urdf_tools import frame_pose, read_com, read_joints
 
 LEFT_WHEEL = "base_l_drive_wheel_joint"
@@ -73,6 +74,13 @@ class SimRobot:
         self.lidar = Lidar(cfg.lidar, *frame_pose(joints, cfg.lidar.frame_id), robot_path, seed)
         self.lidar_period = 1.0 / cfg.lidar.rate
         self.next_lidar = start_time
+        fs = cfg.front_stop
+        self.front_stop = FrontStop(
+            FrontStopZone(fs.front_x, fs.half_width, fs.margin, self.lidar_period, d.max_linear_accel),
+            bool(fs.enabled))
+        self.front_blocked = False
+        node.front_stop = self.front_stop
+        node.publish_front_stop(False)
         self.imu = Imu(cfg.imu, *frame_pose(joints, cfg.imu.frame_id), read_com(urdf_path), seed)
         self.imu_period = 1.0 / cfg.imu.rate
         self.next_imu = start_time
@@ -94,7 +102,8 @@ class SimRobot:
         cmd = self.node.take_cmd()
         if cmd is not None:
             self.limiter.set_target(cmd[0], cmd[1], self.t)
-        v, w = self.limiter.update(self.t, dt)
+        self.front_blocked = self.front_stop.update(self.limiter.current[0])
+        v, w = self.limiter.update(self.t, dt, self.front_blocked)
         d = self.cfg.drive
         wl, wr = wheel_speeds(v, w, d.wheel_radius, d.wheel_separation)
         targets = [[0.0] * len(self.dof_names)]
@@ -171,9 +180,15 @@ class SimRobot:
 
         if t + 1e-9 >= self.next_lidar:
             self.next_lidar += self.lidar_period
-            if not self.sensors_paused:
+            if self.sensors_paused:
+                self.front_stop.clearance = float("inf")
+            else:
                 self.lidar.scan(pos, rot)
                 node.publish_scan(t, self.lidar, self.lidar_period)
+                fs, lidar = self.cfg.front_stop, self.lidar
+                self.front_stop.clearance = front_clearance(
+                    lidar.raw, lidar.local_dirs, lidar.offset, lidar.mount_rot, fs.front_x, fs.half_width)
+        node.publish_front_stop(self.front_blocked)
 
         if t + 1e-9 >= self.next_battery:
             self.next_battery += 1.0
