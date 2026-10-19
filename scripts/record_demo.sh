@@ -6,6 +6,7 @@
 #   scripts/record_demo.sh shelf  # dock, tow, turn and leave a shelf -> docs/shelf.gif
 #   scripts/record_demo.sh scene office  # Nav2 route in an Isaac Sim scene -> build/scene_office.mp4
 #                                        # (both views follow the robot)
+#   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
 #
 # Needs the ROS image (docker compose -f docker/compose.yaml build) and
 # ffmpeg on the host. Runs headless: RViz draws into Xvfb inside the container.
@@ -16,6 +17,8 @@ SIM_ARGS=()
 RVIZ_SED=""  # sed script applied to demo.rviz
 LABEL="RViz: slam_toolbox + Nav2"
 COMPOSE_ARGS=()
+RUN=""       # run in the ROS container
+HOST_RUN=""  # or on the host
 case "$DEMO" in
     nav)
         GIF=docs/demo.gif
@@ -46,7 +49,13 @@ case "$DEMO" in
         RVIZ_CROP=${RVIZ_CROP:-576 106 720 720}  # square around the robot
         COMPOSE_ARGS=(--height 540 --mark-robot 45)
         RUN="python3 /tests/ros_nav_check.py --world $WORLD" ;;
-    *) echo "usage: $0 [nav|dock|shelf|scene <world>]" >&2; exit 2 ;;
+    api)
+        GIF=build/api.mp4
+        VIEW=(0.0 -2.4 7.5 0.0 -0.1 0.0)
+        LABEL="RViz: slam_toolbox + Nav2 (driven by kachaka-api)"
+        COMPOSE_ARGS=(--height 540)
+        HOST_RUN="uv run --no-project --with kachaka-api==3.17.5.0 python scripts/api_demo.py $PWD/build/api/captions.csv" ;;
+    *) echo "usage: $0 [nav|dock|shelf|scene <world>|api]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 DISPLAY_NUM=99
@@ -83,7 +92,11 @@ date +%s.%N > "$OUT/rviz_start.txt"
 ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 0 -framerate 10 -video_size 1440x900 -i ":$DISPLAY_NUM" \
     -c:v libx264 -preset ultrafast -pix_fmt yuv420p "$OUT/rviz.mp4" &
 FFMPEG_PID=$!
-docker exec kachaka-demo-ros bash -c "source /ws/install/setup.bash && $RUN" | tee "$OUT/run.log"
+if [[ -n "$HOST_RUN" ]]; then
+    $HOST_RUN | tee "$OUT/run.log"
+else
+    docker exec kachaka-demo-ros bash -c "source /ws/install/setup.bash && $RUN" | tee "$OUT/run.log"
+fi
 date +%s.%N > "$OUT/end.txt"
 sleep 1
 kill -INT "$FFMPEG_PID"; wait "$FFMPEG_PID" || true

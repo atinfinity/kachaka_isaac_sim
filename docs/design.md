@@ -218,13 +218,38 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   homing) on the latched `sim/command/state`, which backs `GetCommandState`
   and `GetLastCommandResult`. Without `command_server`, `StartCommand` fails
   with −6.
-- **Pose and map.** `GetRobotPose` composes slam_toolbox's map→odom (from
-  `/tf`) with odometry; `GetPngMap` converts `/map` to the robot's PNG
-  format (occupied 174, free 253, unknown 234, top row = max y). There is a
-  single map, `sim`.
+- **Pose and map.** `GetRobotPose` composes map→odom (slam_toolbox or AMCL,
+  from `/tf`) with odometry; `GetPngMap` converts `/map` to the robot's PNG
+  format (occupied 174, free 253, unknown 234, top row = max y).
+- **Saved maps** (`kachaka_isaac_sim/maps.py`) are Nav2 yaml + pgm pairs in
+  `maps/`, so `map_saver_cli` output and the maps the API writes are the same
+  files. Under SLAM the only current map is `sim`, the live `/map`. The server
+  tells the modes apart by map_server's parameter service: with it
+  (`navigation.launch.py`), `GetCurrentMapId` is the launch map until
+  `SwitchMap`. `SwitchMap` publishes `sim/map/load`; `command_server` calls
+  map_server's `load_map`, clears the costmaps and answers on
+  `sim/map/loaded`, then the server publishes `/initialpose` for AMCL, as
+  does `SetRobotPose`.
 - **Locations** are the charger (`home`, the default), each shelf's home
   (`<id>_home`) and the layout's extra locations.
 - **Manual control.** `SetRobotVelocity` takes values normalized to the speed
   limits and publishes on `manual_control/cmd_vel`; it fails with −12 while
   manual control is disabled, so the client enables it first, as on the robot.
-- Unimplemented RPCs return `UNIMPLEMENTED` (#12).
+- **Odometry-driven commands.** MOVE_FORWARD, ROTATE_IN_PLACE,
+  MOVE_BY_VELOCITY_WITH_MUTED_SENSORS, LOCK and DEPART_FROM_CHARGER run in
+  `command_server` on `cmd_vel` and odometry, without Nav2. MOVE_FORWARD
+  checks the LiDAR 0.15 m ahead as it goes and stops with −9. The simulated
+  robot follows a velocity command about 0.35 s late, so ROTATE_IN_PLACE
+  slows down toward the end and stops when the turn left equals what the
+  robot will still coast at its current rate; it lands within about 0.03 rad
+  and returns once the robot stands still.
+- **Shortcuts and history.** Shortcuts come from `config/robot.yaml`;
+  `StartShortcutCommand` starts their commands one after another. The history
+  is the last 100 results from `sim/command/state`, in memory.
+- **Emergency stop.** `SetEmergencyStop` cancels every command (`{"all": true}`
+  on `sim/command/cancel` also drops the queue), zeroes the wheel command in
+  the sim node and refuses `StartCommand` (−14) until `RestartRobot`.
+- **Shelf reset** runs in the simulation loop: `KachakaSimNode.run_in_sim`
+  queues the call, which runs after the next `spin_once`, and the gRPC thread
+  waits on its future.
+- **Sounds** have no audio: `PlaySound` publishes the name on `sim/sound`.

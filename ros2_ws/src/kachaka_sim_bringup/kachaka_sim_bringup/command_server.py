@@ -17,13 +17,26 @@
     it runs RETURN_HOME, since the robot backs onto it.
   - SPEAK has no audio: the text goes to the log and to the simulator-only
     topic `sim/speech`, as does `tts_on_success` after a successful command.
+  - MOVE_FORWARD and ROTATE_IN_PLACE drive on odometry. MOVE_FORWARD stops
+    short of anything the LiDAR sees ahead unless `mute_sensors` is set;
+    backward it does not look (the robot has no rear range sensor).
+    MOVE_BY_VELOCITY_WITH_MUTED_SENSORS drives at a speed for a time.
+  - LOCK keeps the robot still for a time. LOCALIZE succeeds at once:
+    localization (SLAM or AMCL) runs all the time.
+  - DEPART_FROM_CHARGER drives forward off the charger.
+  - DOCK_ANY_SHELF_WITH_REGISTRATION docks with the shelf standing at a
+    location. Every shelf in the simulator is registered already, and the
+    robot enters it from whichever side Nav2 reaches (`dock_forward` is not
+    used).
   - `cancel_all` stops the running command and drops queued ones; without
     it the command waits until the earlier ones finish, as on the real robot.
 - Topic `/kachaka/goal_pose` (PoseStamped): sends MOVE_TO_POSE through the
   action without `cancel_all`, like the real bridge.
 - The simulator's kachaka-api gRPC server (kachaka_isaac_sim/api_server.py)
   starts commands on `sim/command/start` and cancels the running one on
-  `sim/command/cancel` (JSON in std_msgs/String). `sim/command/state`
+  `sim/command/cancel` (JSON in std_msgs/String; `{"all": true}` also drops
+  the queued ones). Fields of commands that KachakaCommand.msg lacks (LOCK,
+  MOVE_FORWARD, ...) come in the JSON only. `sim/command/state`
   (latched JSON) reports the running command and the last result of every
   command, from either side, like the real robot's GetCommandState and
   GetLastCommandResult.
@@ -35,6 +48,10 @@
   the docking servers, so docking does not depend on how well the SLAM map
   lines up with the world.
 - Enlarges the Nav2 costmaps' footprint while a shelf is towed.
+- `sim/map/load` (JSON {"id", "map_id"}) loads `<maps_dir>/<map_id>.yaml`
+  into Nav2's map_server and answers on `sim/map/loaded` ({"id", "success",
+  "message"}), for the gRPC SwitchMap. Only navigation.launch.py runs a
+  map_server.
 - Service `/kachaka/auto_homing/set_enabled`. When enabled the robot returns
   home after `auto_homing_idle_timeout` seconds without velocity commands, or
   when the battery falls below `auto_homing_low_battery`.
@@ -62,7 +79,7 @@ from kachaka_interfaces.msg import (
     ShelfSize,
 )
 from nav2_msgs.action import DockRobot, NavigateToPose
-from nav2_msgs.srv import ClearEntireCostmap
+from nav2_msgs.srv import ClearEntireCostmap, LoadMap
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -97,8 +114,18 @@ ERROR_UNKNOWN_LOCATION = -8
 ERROR_BLOCKED = -9
 ERROR_NAVIGATION_FAILED = -10
 ERROR_OTHER_SHELF_DOCKED = -11
+ERROR_NOT_ON_CHARGER = -13  # -12 is the gRPC server's (manual control disabled)
 
 CHARGER_ID = "home"  # the id the real robot gives its charger
+
+# kachaka-api commands that KachakaCommand.msg lacks (Command oneof field numbers).
+LOCK_COMMAND = 15
+MOVE_FORWARD_COMMAND = 16
+ROTATE_IN_PLACE_COMMAND = 17
+DOCK_ANY_SHELF_WITH_REGISTRATION_COMMAND = 18
+LOCALIZE_COMMAND = 19
+MOVE_BY_VELOCITY_WITH_MUTED_SENSORS_COMMAND = 22
+DEPART_FROM_CHARGER_COMMAND = 23
 
 FOOTPRINT = [(0.25, 0.13), (0.25, -0.13), (-0.16, -0.13), (-0.16, 0.13)]
 SHELF_FIND_RANGE = 1.5  # m, DOCK_SHELF looks this far for a shelf
@@ -107,6 +134,18 @@ UNDOCK_SPEED = 0.15  # m/s
 UNDOCK_CLEARANCE = 0.10  # m, free space wanted beyond the undock distance
 STAGING_DISTANCE = 0.9  # m, shelf_docking_server's staging_x_offset (negated)
 STAGING_BUSY_COST = 50  # global costmap value (0-100) above which the other side is tried first
+MAX_SPEED = 0.3  # m/s, the simulator's cmd_vel limit (config/robot.yaml drive.max_linear_vel)
+MOVE_SPEED = 0.2  # m/s, MOVE_FORWARD when no speed is given
+MIN_SPEED = 0.05  # m/s, slowest speed while closing in on the distance
+STOP_CLEARANCE = 0.05  # m, MOVE_FORWARD stops this far from what the LiDAR sees
+LOOK_AHEAD = 0.15  # m, MOVE_FORWARD watches this far ahead (more than it travels between checks)
+ROTATE_SPEED = 1.0  # rad/s
+MIN_ROTATE_SPEED = 0.15  # rad/s
+ROTATE_TOLERANCE = 0.01  # rad
+ROTATE_DECEL = 0.8  # rad/s^2, planned deceleration: slow near the end
+ROTATE_LAG = 0.35  # s, the robot still turns this long at its rate after a stop
+DEPART_DISTANCE = 0.30  # m, driven forward off the charger
+SHELF_AT_LOCATION = 0.5  # m, a shelf this close to a location stands at it
 
 
 @dataclass
@@ -180,6 +219,7 @@ class CommandServer(Node):
         self.shelf_dock_type = self.declare_parameter("shelf_dock_type", "shelf_dock").value
         self.map_frame = self.declare_parameter("map_frame", "map").value
         self.base_frame = self.declare_parameter("base_frame", "base_footprint").value
+        self.maps_dir = self.declare_parameter("maps_dir", "/maps").value
         # Footprint while towing: the robot and the shelf (0.328 x 0.488 m) over it.
         self.towing_footprint = [(0.26, 0.25), (0.26, -0.25), (-0.17, -0.25), (-0.17, 0.25)]
 
@@ -192,6 +232,7 @@ class CommandServer(Node):
         self.docked_id = ""
         self.scan: LaserScan | None = None
         self.odom: P2 | None = None
+        self.odom_turn_rate = 0.0  # rad/s, from odometry
         self.costmap: OccupancyGrid | None = None
         self.last_activity = self.get_clock().now()
         self.lock = threading.Lock()  # one command at a time
@@ -203,6 +244,7 @@ class CommandServer(Node):
         self.auto_retry_at = 0.0  # monotonic time; wait after a failed auto homing
         self.shelf_target = None  # what the shelf docking server should see (see _relay_shelf)
         self.dock_error = 0  # DockRobot error code of the last failed docking
+        self.api_fields: dict[str, dict] = {}  # gRPC command id -> its fields, all of them
 
         self.tf = Buffer()
         self.tf_listener = TransformListener(self.tf, self)
@@ -237,8 +279,7 @@ class CommandServer(Node):
         self.create_subscription(LaserScan, f"{prefix}/lidar/scan", lambda m: setattr(self, "scan", m),
                                  sensor, callback_group=group)
         self.create_subscription(Odometry, f"{prefix}/odometry/odometry",
-                                 lambda m: setattr(self, "odom", _from_pose(m.pose.pose)), sensor,
-                                 callback_group=group)
+                                 self._on_odom, sensor, callback_group=group)
         self.create_subscription(OccupancyGrid, "global_costmap/costmap", lambda m: setattr(self, "costmap", m),
                                  LATCHED, callback_group=group)
         self.create_subscription(Twist, f"{prefix}/manual_control/cmd_vel", self._on_cmd_vel,
@@ -257,6 +298,9 @@ class CommandServer(Node):
                                  callback_group=group)
         self.create_subscription(String, f"{prefix}/sim/command/cancel", self._on_api_cancel, 10,
                                  callback_group=group)
+        self.load_map_client = self.create_client(LoadMap, "map_server/load_map", callback_group=group)
+        self.map_loaded_pub = self.create_publisher(String, f"{prefix}/sim/map/loaded", 10)
+        self.create_subscription(String, f"{prefix}/sim/map/load", self._on_map_load, 10, callback_group=group)
         self._set_state()
         self.action_server = ActionServer(
             self, ExecKachakaCommand, f"{prefix}/kachaka_command/execute",
@@ -327,15 +371,43 @@ class CommandServer(Node):
         cmd = goal.kachaka_command
         command_type = int(req.get("command_type", 0))
         cmd.command_type = command_type if 0 <= command_type < 256 else KachakaCommand.COMMAND_TYPE_OTHER
-        for k, v in req.get("fields", {}).items():
+        fields = req.get("fields", {})
+        for k, v in fields.items():
             if k != "command_type" and hasattr(cmd, k):
                 setattr(cmd, k, type(getattr(cmd, k))(v))
+        self.api_fields[req["id"]] = fields
         self.self_client.send_goal_async(goal, goal_uuid=UUID(uuid=list(bytes.fromhex(req["id"]))))
 
-    def _on_api_cancel(self, _msg: String) -> None:
-        if self.state["running"] is not None:
+    def _on_api_cancel(self, msg: String) -> None:
+        if msg.data and json.loads(msg.data).get("all"):
+            self.request_id += 1  # stops the running command and the queued ones
+            self.get_logger().info("cancel of all commands requested")
+        elif self.state["running"] is not None:
             self.cancel_seq = self.run_seq
             self.get_logger().info("cancel requested")
+
+    def _on_map_load(self, msg: String) -> None:
+        req = json.loads(msg.data)
+
+        def reply(success: bool, message: str = "") -> None:
+            self.map_loaded_pub.publish(String(data=json.dumps(
+                {"id": req.get("id"), "success": success, "message": message})))
+
+        if not self.load_map_client.wait_for_service(timeout_sec=2.0):
+            reply(False, "map_server/load_map is not available (only navigation.launch.py runs a map_server)")
+            return
+        url = f"{self.maps_dir.rstrip('/')}/{req['map_id']}.yaml"
+        res = self._wait(self.load_map_client.call_async(LoadMap.Request(map_url=url)), lambda: False, timeout=10.0)
+        if res is None:
+            reply(False, f"map_server did not answer loading {url}")
+        elif res.result != LoadMap.Response.RESULT_SUCCESS:
+            reply(False, f"map_server could not load {url} (result {res.result})")
+        else:
+            self.get_logger().info(f"loaded map {url}")
+            for client in self.clear_clients:
+                if client.service_is_ready():
+                    client.call_async(ClearEntireCostmap.Request())
+            reply(True)
 
     def _set_state(self, **changes) -> None:
         with self.state_lock:
@@ -430,6 +502,8 @@ class CommandServer(Node):
         info = {"id": bytes(goal_handle.goal_id.uuid).hex(), "command_type": cmd.command_type,
                 "fields": {k: getattr(cmd, k) for k in cmd.get_fields_and_field_types()
                            if k != "command_type" and getattr(cmd, k)}}
+        info["fields"].update(self.api_fields.pop(info["id"], {}))
+        f = info["fields"]
         handlers = {
             KachakaCommand.RETURN_HOME_COMMAND: self._return_home,
             KachakaCommand.DOCK_SHELF_COMMAND: self._dock_shelf_command,
@@ -445,6 +519,21 @@ class CommandServer(Node):
             KachakaCommand.MOVE_TO_LOCATION_COMMAND:
                 lambda stopped: self._move_to_location(stopped, cmd.move_to_location_command_target_location_id),
             KachakaCommand.SPEAK_COMMAND: lambda stopped: self._speak(cmd.speak_command_text),
+            # Commands KachakaCommand.msg has no constants or fields for; the
+            # numbers are kachaka-api's Command oneof field numbers.
+            LOCK_COMMAND: lambda stopped: self._lock(stopped, float(f.get("lock_command_duration_sec", 0.0))),
+            MOVE_FORWARD_COMMAND: lambda stopped: self._move_forward(
+                stopped, float(f.get("move_forward_command_distance_meter", 0.0)),
+                float(f.get("move_forward_command_speed", 0.0)), bool(f.get("move_forward_command_mute_sensors"))),
+            ROTATE_IN_PLACE_COMMAND:
+                lambda stopped: self._rotate(stopped, float(f.get("rotate_in_place_command_angle_radian", 0.0))),
+            DOCK_ANY_SHELF_WITH_REGISTRATION_COMMAND: lambda stopped: self._dock_shelf_at_location(
+                stopped, str(f.get("dock_any_shelf_with_registration_command_target_location_id", ""))),
+            LOCALIZE_COMMAND: lambda stopped: (OK, "the simulator localizes all the time"),
+            MOVE_BY_VELOCITY_WITH_MUTED_SENSORS_COMMAND: lambda stopped: self._move_by_velocity(
+                stopped, float(f.get("move_by_velocity_with_muted_sensors_command_signed_velocity", 0.0)),
+                float(f.get("move_by_velocity_with_muted_sensors_command_move_duration_sec", 0.0))),
+            DEPART_FROM_CHARGER_COMMAND: self._depart_from_charger,
         }
         handler = handlers.get(cmd.command_type)
         if handler is None:
@@ -692,8 +781,8 @@ class CommandServer(Node):
             self.get_logger().info("cannot reach the staging pose; trying the other side")
         return code, msg
 
-    def _path_blocked(self) -> bool:
-        """Anything in the scan in the robot's way for the undock distance."""
+    def _path_blocked(self, distance: float = UNDOCK_DISTANCE, clearance: float = UNDOCK_CLEARANCE) -> bool:
+        """Anything in the scan in the robot's way for `distance` plus `clearance`."""
         scan = self.scan
         if scan is None:
             return False
@@ -702,7 +791,7 @@ class CommandServer(Node):
         except TransformException:
             return False
         laser = P2(t.translation.x, t.translation.y, _yaw(t.rotation))
-        x_max = FOOTPRINT[0][0] + UNDOCK_DISTANCE + UNDOCK_CLEARANCE
+        x_max = FOOTPRINT[0][0] + distance + clearance
         half = FOOTPRINT[0][1] + 0.02
         for k, r in enumerate(scan.ranges):
             if not (scan.range_min <= r <= scan.range_max):
@@ -727,21 +816,10 @@ class CommandServer(Node):
         if not ok:
             return ERROR_DOCKING_FAILED, f"could not undock: {msg}"
         self.get_logger().info("leaving the shelf")
-        start = self.odom
-        deadline = time.monotonic() + 3.0 * UNDOCK_DISTANCE / UNDOCK_SPEED
-        cmd = Twist()
-        try:
-            while math.hypot(self.odom.x - start.x, self.odom.y - start.y) < UNDOCK_DISTANCE:
-                if stopped():
-                    return ERROR_CANCELED, "canceled"
-                if time.monotonic() > deadline:
-                    return ERROR_BLOCKED, "could not drive out from under the shelf"
-                cmd.linear.x = UNDOCK_SPEED
-                self.cmd_pub.publish(cmd)
-                time.sleep(0.05)
-        finally:
-            self.cmd_pub.publish(Twist())
-        return OK, ""
+        code, msg = self._drive(stopped, UNDOCK_DISTANCE, UNDOCK_SPEED)
+        if code == ERROR_BLOCKED:
+            msg = "could not drive out from under the shelf"
+        return code, msg
 
     def _move_shelf(self, stopped, shelf_id: str, location_id: str, undock: bool) -> tuple[int, str]:
         i = self.shelf_index(shelf_id)
@@ -776,6 +854,132 @@ class CommandServer(Node):
         if not shelf_id:
             return ERROR_NO_SHELF, "no shelf given and none is docked"
         return self._move_shelf(stopped, shelf_id, f"{shelf_id}_home", True)
+
+    # --- driving on odometry ------------------------------------------------------
+    def _now(self) -> float:
+        """Simulation time [s]."""
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def _drive(self, stopped, distance: float, speed: float, look_ahead: bool = False) -> tuple[int, str]:
+        """Drive straight `distance` m (negative: backward) at up to `speed`.
+        With `look_ahead`, stop short of anything the LiDAR sees ahead."""
+        if self.odom is None:
+            return ERROR_SERVER_UNAVAILABLE, "no odometry"
+        speed = min(abs(speed), MAX_SPEED)
+        start = self.odom
+        deadline = self._now() + 3.0 * abs(distance) / speed + 2.0
+        cmd = Twist()
+        try:
+            while True:
+                left = abs(distance) - math.hypot(self.odom.x - start.x, self.odom.y - start.y)
+                if left <= 0.005:
+                    return OK, ""
+                if stopped():
+                    return ERROR_CANCELED, "canceled"
+                if self._now() > deadline:
+                    return ERROR_BLOCKED, "could not drive the whole distance"
+                if look_ahead and distance > 0 and self._path_blocked(min(left, LOOK_AHEAD), STOP_CLEARANCE):
+                    return ERROR_BLOCKED, "something is in front of the robot"
+                cmd.linear.x = math.copysign(min(speed, max(MIN_SPEED, 1.5 * left)), distance)
+                self.cmd_pub.publish(cmd)
+                time.sleep(0.05)
+        finally:
+            self.cmd_pub.publish(Twist())
+
+    def _move_forward(self, stopped, distance: float, speed: float, mute_sensors: bool) -> tuple[int, str]:
+        self.get_logger().info(f"moving forward {distance:.2f} m")
+        return self._drive(stopped, distance, speed or MOVE_SPEED, look_ahead=not mute_sensors)
+
+    def _on_odom(self, msg: Odometry) -> None:
+        self.odom = _from_pose(msg.pose.pose)
+        self.odom_turn_rate = msg.twist.twist.angular.z
+
+    def _rotate(self, stopped, angle: float) -> tuple[int, str]:
+        """Turn on the spot by `angle` rad (positive: counter-clockwise); more
+        than a full turn is fine."""
+        if self.odom is None:
+            return ERROR_SERVER_UNAVAILABLE, "no odometry"
+        self.get_logger().info(f"rotating {angle:.2f} rad")
+        turned, last = 0.0, self.odom.yaw
+        deadline = self._now() + abs(angle) / MIN_ROTATE_SPEED + 2.0
+        cmd = Twist()
+        try:
+            while True:
+                yaw = self.odom.yaw
+                turned += _wrap(yaw - last)
+                last = yaw
+                left = angle - turned
+                # The robot answers a command late: stop when the turn it will
+                # still make at its current rate covers what is left.
+                coast = self.odom_turn_rate * ROTATE_LAG
+                if abs(left) <= ROTATE_TOLERANCE or (coast * left > 0 and abs(left) <= abs(coast)):
+                    self.cmd_pub.publish(Twist())
+                    self._wait_still()
+                    return OK, ""
+                if stopped():
+                    return ERROR_CANCELED, "canceled"
+                if self._now() > deadline:
+                    return ERROR_BLOCKED, "could not turn the whole angle"
+                speed = math.sqrt(2.0 * ROTATE_DECEL * max(0.0, abs(left) - abs(coast)))
+                cmd.angular.z = math.copysign(min(ROTATE_SPEED, max(MIN_ROTATE_SPEED, speed)), left)
+                self.cmd_pub.publish(cmd)
+                time.sleep(0.05)
+        finally:
+            self.cmd_pub.publish(Twist())
+
+    def _wait_still(self, timeout: float = 1.0) -> None:
+        """Until the robot stops turning after a zero command."""
+        end = time.monotonic() + timeout
+        while abs(self.odom_turn_rate) > 0.02 and time.monotonic() < end:
+            time.sleep(0.05)
+
+    def _move_by_velocity(self, stopped, velocity: float, duration: float) -> tuple[int, str]:
+        cmd = Twist()
+        cmd.linear.x = max(-MAX_SPEED, min(MAX_SPEED, velocity))
+        end = self._now() + duration
+        try:
+            while self._now() < end:
+                if stopped():
+                    return ERROR_CANCELED, "canceled"
+                self.cmd_pub.publish(cmd)
+                time.sleep(0.05)
+        finally:
+            self.cmd_pub.publish(Twist())
+        return OK, ""
+
+    def _lock(self, stopped, duration: float) -> tuple[int, str]:
+        """Stay still for `duration` s."""
+        self.cmd_pub.publish(Twist())
+        end = self._now() + duration
+        while self._now() < end:
+            if stopped():
+                return ERROR_CANCELED, "canceled"
+            time.sleep(0.05)
+        return OK, ""
+
+    def _depart_from_charger(self, stopped) -> tuple[int, str]:
+        """The robot backs onto the charger, so it leaves forward."""
+        if not self.charging:
+            return ERROR_NOT_ON_CHARGER, "not on the charger"
+        self.get_logger().info("departing from the charger")
+        return self._drive(stopped, DEPART_DISTANCE, UNDOCK_SPEED)
+
+    def _dock_shelf_at_location(self, stopped, location_id: str) -> tuple[int, str]:
+        """DOCK_ANY_SHELF_WITH_REGISTRATION: dock with the shelf at a location."""
+        loc = self.locations().get(location_id)
+        if loc is None:
+            return ERROR_UNKNOWN_LOCATION, f"unknown location {location_id!r}"
+        target = loc[2]
+        near = [(math.hypot(p.x - target.x, p.y - target.y), i) for i, p in enumerate(self.shelf_poses)]
+        near = [n for n in near if n[0] <= SHELF_AT_LOCATION]
+        if not near:
+            return ERROR_NO_SHELF, f"no shelf at {location_id}"
+        i = min(near)[1]
+        if self.docked_id:
+            if self.docked_id == self.shelves[i]["id"]:
+                return OK, f"already docked with {self.docked_id}"
+            return ERROR_OTHER_SHELF_DOCKED, f"towing another shelf ({self.docked_id})"
+        return self._dock_shelf(stopped, i)
 
     # --- auto homing ------------------------------------------------------------
     def _check_auto_homing(self) -> None:

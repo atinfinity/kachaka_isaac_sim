@@ -10,9 +10,14 @@ topics with JSON in std_msgs/String, because the custom kachaka_interfaces
 types cannot be imported into Isaac Sim's bundled rclpy:
 
 - `sim/command/start`: {"id", "command_type", "fields", "cancel_all", "tts_on_success"}
-- `sim/command/cancel`: cancel the running command
+- `sim/command/cancel`: cancel the running command; {"all": true} also the queued ones
 - `sim/command/state` (latched, from command_server): {"running": {...} | null,
   "last": {..., "success", "error_code"} | null}
+- `sim/map/load` {"id", "map_id"} and the answer `sim/map/loaded` {"id",
+  "success", "message"}: SwitchMap, through Nav2's map_server
+
+Maps live in the repository's `maps/` folder (see maps.py). The simulator has
+no speaker: PlaySound and StopSound only publish on `sim/sound`.
 
 Getters follow the real long-polling protocol: a request carrying the cursor
 of the newest data waits until newer data arrives; any other cursor returns
@@ -27,18 +32,24 @@ import math
 import threading
 import time
 import uuid
+from collections import deque
 from concurrent import futures
+from pathlib import Path
 
 import grpc
+from google.protobuf import json_format
 from kachaka_api.generated import kachaka_api_pb2 as pb2
 from kachaka_api.generated import kachaka_api_pb2_grpc as pb2_grpc
 from nav_msgs.msg import OccupancyGrid
+from rcl_interfaces.srv import GetParameters
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 from tf2_msgs.msg import TFMessage
 
+from .config import ROOT
 from .drive import Pose2D
+from .maps import MapError, MapFile, MapStore
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 MAX_LINEAR = 0.3  # SetRobotVelocity full scale, as in kachaka_api.base
@@ -59,9 +70,27 @@ ERROR_CODES = {
     -9: ("Blocked", "Something stands in the way."),
     -10: ("Navigation failed", "Nav2 could not reach the goal."),
     -11: ("Other shelf docked", "The robot tows another shelf."),
+    -12: ("Manual control disabled", "SetRobotVelocity needs manual control enabled."),
+    -13: ("Not on charger", "The robot is not on the charger."),
+    -14: ("Emergency stop", "The emergency stop is on; RestartRobot releases it."),
+    -15: ("Map error", "The map does not exist or cannot be read."),
+    -16: ("Needs a saved map", ("Switching maps and setting the robot pose need navigation.launch.py "
+                                "(map_server and AMCL); slam.launch.py maps as it goes.")),
+    -17: ("Kachaka Pro only", "The standard Kachaka does not support this."),
 }
+ERROR_UNKNOWN_SHELF = -8
 ERROR_SERVER_UNAVAILABLE = -6
+ERROR_OTHER_SHELF_DOCKED = -11
 ERROR_MANUAL_CONTROL_DISABLED = -12
+ERROR_EMERGENCY_STOP = -14
+ERROR_MAP = -15
+ERROR_NEEDS_SAVED_MAP = -16
+ERROR_PRO_ONLY = -17
+SLAM_MAP_ID = "sim"  # the live SLAM map
+HISTORY_SIZE = 100
+CHUNK = 1024 * 1024  # ExportMap stream chunk
+DEFAULT_RESOLUTION = 0.05  # m/pixel, ImportImageAsMap without one
+BUILTIN_SOUNDS = [("chime", "Chime"), ("alarm", "Alarm"), ("melody", "Melody")]
 
 
 class Store:
@@ -218,6 +247,15 @@ def command_from_json(command_type: int, fields: dict) -> pb2.Command:
     return cmd
 
 
+def _ns_to_dict(value):
+    """config.py's SimpleNamespace back to plain dicts and lists."""
+    if hasattr(value, "__dict__"):
+        return {k: _ns_to_dict(v) for k, v in vars(value).items()}
+    if isinstance(value, list):
+        return [_ns_to_dict(v) for v in value]
+    return value
+
+
 def _yaw(q) -> float:
     return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
@@ -226,8 +264,18 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
     """The servicer. Create it before the simulator publishes anything, so
     the latched layout and charger messages reach `tap`."""
 
-    def __init__(self, sim_node, port: int, serial: str = "SIMULATOR"):
+    def __init__(self, sim_node, port: int, serial: str = "SIMULATOR", maps_dir: Path | str = ROOT / "maps"):
         self.sim = sim_node
+        self.maps = MapStore(maps_dir, reserved=(SLAM_MAP_ID,))
+        self.history: deque = deque(maxlen=HISTORY_SIZE)
+        self.started: dict[str, int] = {}  # command id -> start time [ns since the epoch]
+        self.sounds = dict(BUILTIN_SOUNDS)  # id -> name
+        self.sound_data: dict[str, bytes] = {}
+        self.map_replies: dict[str, dict] = {}
+        self.map_cond = threading.Condition()
+        api_cfg = getattr(sim_node.cfg, "api", None)
+        shortcuts = getattr(api_cfg, "shortcuts", None) if api_cfg else None
+        self.shortcuts = [_ns_to_dict(s) for s in shortcuts or []]  # config/robot.yaml api.shortcuts
         self.store = Store()
         self.serial = serial
         self.map_to_odom = Pose2D(0.0, 0.0, 0.0)  # from SLAM's /tf; identity until it runs
@@ -246,6 +294,14 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         self._twist = Twist
         self.vel_pub = n.create_publisher(Twist, f"{ns}/manual_control/cmd_vel", 10)
         self.auto_homing_client = n.create_client(SetBool, f"{ns}/auto_homing/set_enabled")
+        from geometry_msgs.msg import PoseWithCovarianceStamped
+
+        self._pose_cov = PoseWithCovarianceStamped
+        self.initial_pose_pub = n.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
+        self.map_load_pub = n.create_publisher(String, f"{ns}/sim/map/load", 10)
+        self.sound_pub = n.create_publisher(String, f"{ns}/sim/sound", 10)
+        self.map_params_client = n.create_client(GetParameters, "/map_server/get_parameters")
+        n.create_subscription(String, f"{ns}/sim/map/loaded", self._on_map_loaded, 10)
         n.create_subscription(String, f"{ns}/sim/command/state", self._on_command_state, LATCHED)
         n.create_subscription(OccupancyGrid, "/map", lambda m: self.store.set("map", m), LATCHED)
         n.create_subscription(TFMessage, "/tf", self._on_tf, 100)
@@ -259,6 +315,12 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         s.set("static", None)  # serial number, version, map id: never change
         s.set("errors", [])
         s.set("static_tf", sim_node.static_tf)
+        s.set("history", None)
+        s.set("map_id", SLAM_MAP_ID)
+        self.launch_map_id = ""  # map_server's yaml_filename last seen
+        s.set("map_list", None)
+        s.set("sounds", None)
+        s.set("shortcuts", None)
         sim_node.tap = self.tap
 
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=64))
@@ -306,6 +368,7 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         self.store.set("shelves", None)
 
     def _on_tf(self, msg: TFMessage) -> None:
+        self.store.set("tf", msg)
         for t in msg.transforms:
             if t.header.frame_id == self.map_frame and t.child_frame_id == self.odom_frame:
                 tr = t.transform
@@ -317,9 +380,21 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         prev_running = self.store.peek("command_state")
         if (running or {}).get("id") != (prev_running or {}).get("id"):
             self.store.set("command_state", running)
+            if running:
+                self.started.setdefault(running["id"], time.time_ns())
         prev_last = self.store.peek("last_result")
         if last and last.get("id") != (prev_last or {}).get("id"):
             self.store.set("last_result", last)
+            self.history.appendleft(pb2.History(
+                id=last["id"], command=self._command(last), success=last["success"], error_code=last["error_code"],
+                command_executed_time=self.started.pop(last["id"], time.time_ns()) // 1_000_000_000))
+            self.store.set("history", None)
+
+    def _on_map_loaded(self, msg: String) -> None:
+        reply = json.loads(msg.data)
+        with self.map_cond:
+            self.map_replies[reply.get("id")] = reply
+            self.map_cond.notify_all()
 
     # --- helpers --------------------------------------------------------------
     @staticmethod
@@ -364,6 +439,75 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
     def _command(entry) -> pb2.Command:
         return command_from_json(entry["command_type"], entry.get("fields", {}))
 
+    def _start(self, command: pb2.Command, cancel_all: bool, tts_on_success: str = "") -> tuple[pb2.Result, str]:
+        if self.sim.emergency_stop:
+            return pb2.Result(success=False, error_code=ERROR_EMERGENCY_STOP), ""
+        if self.cmd_pub.get_subscription_count() == 0:
+            return pb2.Result(success=False, error_code=ERROR_SERVER_UNAVAILABLE), ""
+        command_type, fields = command_to_json(command)
+        cmd_id = uuid.uuid4().hex
+        self.cmd_pub.publish(String(data=json.dumps({
+            "id": cmd_id, "command_type": command_type, "fields": fields,
+            "cancel_all": cancel_all, "tts_on_success": tts_on_success})))
+        return pb2.Result(success=True), cmd_id
+
+    def _wait_future(self, future, timeout: float):
+        """The simulation loop spins the node, so a service future completes
+        while this gRPC thread waits."""
+        deadline = time.monotonic() + timeout
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return future.result() if future.done() else None
+
+    def _saved_map_mode(self) -> bool:
+        """navigation.launch.py (map_server + AMCL) rather than SLAM."""
+        return self.map_params_client.service_is_ready()
+
+    def _refresh_map_id(self) -> None:
+        """The map map_server was launched with, if it runs. load_map (SwitchMap)
+        does not change that parameter, so it counts only when it changes:
+        a new navigation.launch.py run."""
+        if not self._saved_map_mode():
+            return
+        res = self._wait_future(self.map_params_client.call_async(GetParameters.Request(names=["yaml_filename"])),
+                                2.0)
+        if res and res.values and res.values[0].string_value:
+            map_id = Path(res.values[0].string_value).stem
+            if map_id != self.launch_map_id:
+                self.launch_map_id = map_id
+                self.store.set("map_id", map_id)
+
+    def _map_name(self, map_id: str) -> str:
+        try:
+            return str(self.maps.meta(map_id).get("name") or map_id)
+        except MapError:
+            return map_id
+
+    def _live_map(self) -> MapFile | None:
+        m = self.store.peek("map")
+        if m is None:
+            return None
+        i = m.info
+        c = self.charger
+        return MapFile.from_occupancy_grid(m.data, i.width, i.height, i.resolution,
+                                           (i.origin.position.x, i.origin.position.y, _yaw(i.origin.orientation)),
+                                           name="slam", charger_pose=(c.x, c.y, c.yaw) if c else None)
+
+    def _publish_initial_pose(self, x: float, y: float, yaw: float) -> bool:
+        if self.initial_pose_pub.get_subscription_count() == 0:  # no AMCL
+            return False
+        msg = self._pose_cov()
+        msg.header.frame_id = self.map_frame
+        msg.header.stamp = self.sim.node.get_clock().now().to_msg()
+        msg.pose.pose.position.x, msg.pose.pose.position.y = x, y
+        msg.pose.pose.orientation.z, msg.pose.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+        cov = [0.0] * 36
+        cov[0] = cov[7] = 0.05 ** 2
+        cov[35] = 0.05 ** 2
+        msg.pose.covariance = cov
+        self.initial_pose_pub.publish(msg)
+        return True
+
     # --- robot info -----------------------------------------------------------
     def GetRobotSerialNumber(self, request, context):
         cursor, _ = self.store.get("static", request, context)
@@ -401,17 +545,125 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         return pb2.GetPngMapResponse(metadata=self._meta(cursor), map=_png_map(m))
 
     def GetCurrentMapId(self, request, context):
-        cursor, _ = self.store.get("static", request, context)
-        return pb2.GetCurrentMapIdResponse(metadata=self._meta(cursor), id="sim")
+        self._refresh_map_id()
+        cursor, map_id = self.store.get("map_id", request, context)
+        return pb2.GetCurrentMapIdResponse(metadata=self._meta(cursor), id=map_id)
 
     def GetMapList(self, request, context):
-        cursor, _ = self.store.get("static", request, context)
-        return pb2.GetMapListResponse(metadata=self._meta(cursor),
-                                      map_list_entries=[pb2.MapListEntry(id="sim", name="sim")])
+        cursor, _ = self.store.get("map_list", request, context)
+        entries = [] if self._saved_map_mode() else [pb2.MapListEntry(id=SLAM_MAP_ID, name="SLAM (live)")]
+        entries += [pb2.MapListEntry(id=i, name=self._map_name(i)) for i in self.maps.ids()]
+        return pb2.GetMapListResponse(metadata=self._meta(cursor), map_list_entries=entries)
+
+    def LoadMapPreview(self, request, context):
+        if request.map_id == SLAM_MAP_ID:
+            m = self.store.peek("map")
+            if m is None:
+                return pb2.LoadMapPreviewResponse(result=pb2.Result(success=False, error_code=ERROR_MAP))
+            return pb2.LoadMapPreviewResponse(result=pb2.Result(success=True), map=_png_map(m))
+        try:
+            m = self.maps.load(request.map_id)
+        except MapError:
+            return pb2.LoadMapPreviewResponse(result=pb2.Result(success=False, error_code=ERROR_MAP))
+        h, w = m.grid.shape
+        return pb2.LoadMapPreviewResponse(result=pb2.Result(success=True), map=pb2.Map(
+            data=m.png(), name=m.name or request.map_id, resolution=m.resolution, width=w, height=h,
+            origin=pb2.Pose(x=m.origin[0], y=m.origin[1], theta=m.origin[2])))
+
+    def ExportMap(self, request, context):
+        """A zip of the Nav2 map pair (the real robot's format is its own)."""
+        try:
+            m = self._live_map() if request.map_id == SLAM_MAP_ID else self.maps.load(request.map_id)
+        except MapError:
+            m = None
+        if m is None:
+            yield pb2.ExportMapResponse(end_of_stream=pb2.ExportMapResponse.EndOfStream(
+                result=pb2.Result(success=False, error_code=ERROR_MAP)))
+            return
+        data = m.zip(request.map_id)
+        for i in range(0, len(data), CHUNK):
+            yield pb2.ExportMapResponse(middle_of_stream=pb2.ExportMapResponse.MiddleOfStream(data=data[i:i + CHUNK]))
+        yield pb2.ExportMapResponse(end_of_stream=pb2.ExportMapResponse.EndOfStream(result=pb2.Result(success=True)))
+
+    def ImportMap(self, request_iterator, context):
+        data = b"".join(r.data for r in request_iterator)
+        try:
+            map_id = self.maps.save(MapFile.from_zip(data))
+        except (MapError, OSError):
+            return pb2.ImportMapResponse(result=pb2.Result(success=False, error_code=ERROR_MAP))
+        self.store.set("map_list", None)
+        return pb2.ImportMapResponse(result=pb2.Result(success=True), map_id=map_id)
+
+    def ImportImageAsMap(self, request_iterator, context):
+        data, charger, resolution = b"", None, 0.0
+        for r in request_iterator:
+            data += r.data
+            if r.HasField("charger_pose"):
+                charger = (r.charger_pose.x, r.charger_pose.y, r.charger_pose.theta)
+            resolution = r.resolution or resolution
+        try:
+            m = MapFile.from_image(data, resolution or DEFAULT_RESOLUTION, name="imported", charger_pose=charger)
+            map_id = self.maps.save(m)
+        except (OSError, ValueError, MapError):  # PIL raises OSError subclasses for bad images
+            return pb2.ImportImageAsMapResponse(result=pb2.Result(success=False, error_code=ERROR_MAP))
+        self.store.set("map_list", None)
+        return pb2.ImportImageAsMapResponse(result=pb2.Result(success=True), map_id=map_id)
+
+    def SwitchMap(self, request, context):
+        def fail(code):
+            return pb2.SwitchMapResponse(result=pb2.Result(success=False, error_code=code))
+
+        if request.inherit_docking_state_and_docked_shelf:
+            return fail(ERROR_PRO_ONLY)
+        saved = self._saved_map_mode()
+        if request.map_id == SLAM_MAP_ID:
+            return pb2.SwitchMapResponse(result=pb2.Result(success=True)) if not saved else fail(ERROR_NEEDS_SAVED_MAP)
+        try:
+            meta = self.maps.meta(request.map_id)
+        except MapError:
+            return fail(ERROR_MAP)
+        if not saved:
+            return fail(ERROR_NEEDS_SAVED_MAP)
+        if self.map_load_pub.get_subscription_count() == 0:
+            return fail(ERROR_SERVER_UNAVAILABLE)
+        req_id = uuid.uuid4().hex
+        self.map_load_pub.publish(String(data=json.dumps({"id": req_id, "map_id": request.map_id})))
+        with self.map_cond:
+            if not self.map_cond.wait_for(lambda: req_id in self.map_replies, timeout=20.0):
+                return fail(ERROR_SERVER_UNAVAILABLE)
+            reply = self.map_replies.pop(req_id)
+        if not reply.get("success"):
+            return fail(ERROR_MAP)
+        if request.HasField("initial_pose"):
+            p = request.initial_pose
+            pose = (p.x, p.y, p.theta)
+        else:
+            pose = tuple(meta.get("charger_pose") or (0.0, 0.0, 0.0))
+        self._publish_initial_pose(*pose)
+        self.store.set("map_id", request.map_id)
+        return pb2.SwitchMapResponse(result=pb2.Result(success=True))
+
+    def SetRobotPose(self, request, context):
+        p = request.pose
+        if not self._publish_initial_pose(p.x, p.y, p.theta):
+            return pb2.SetRobotPoseResponse(result=pb2.Result(success=False, error_code=ERROR_NEEDS_SAVED_MAP))
+        return pb2.SetRobotPoseResponse(result=pb2.Result(success=True))
 
     def GetStaticTransform(self, request, context):
         cursor, m = self.store.get("static_tf", request, context)
         return pb2.GetStaticTransformResponse(metadata=self._meta(cursor), transforms=_transforms(m))
+
+    def GetDynamicTransform(self, request, context):
+        """Every /tf message, until the client goes away."""
+        s, cursor = self.store, 0
+        while context.is_active():
+            with s.cond:
+                entry = s.data.get("tf")
+                if entry is None or entry[0] == cursor:
+                    s.cond.wait(0.5)
+                    continue
+            cursor, m = entry
+            yield pb2.GetDynamicTransformResponse(transforms=_transforms(m))
 
     # --- sensors --------------------------------------------------------------
     def GetRosImu(self, request, context):
@@ -485,19 +737,18 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         header = pb2.RosHeader(stamp_nsec=_header(m.header).stamp_nsec, frame_id=self.sim.frame("camera_front"))
         return pb2.GetObjectDetectionResponse(metadata=self._meta(cursor), header=header)
 
+    def GetObjectDetectionFeatures(self, request, context):
+        cursor, m = self.store.get("odometry", request, context)
+        header = pb2.RosHeader(stamp_nsec=_header(m.header).stamp_nsec, frame_id=self.sim.frame("camera_front"))
+        return pb2.GetObjectDetectionFeaturesResponse(metadata=self._meta(cursor), header=header)
+
     def ActivateLaserScan(self, request, context):
         return pb2.ActivateLaserScanResponse(result=pb2.Result(success=True))
 
     # --- commands -------------------------------------------------------------
     def StartCommand(self, request, context):
-        if self.cmd_pub.get_subscription_count() == 0:
-            return pb2.StartCommandResponse(result=pb2.Result(success=False, error_code=ERROR_SERVER_UNAVAILABLE))
-        command_type, fields = command_to_json(request.command)
-        cmd_id = uuid.uuid4().hex
-        self.cmd_pub.publish(String(data=json.dumps({
-            "id": cmd_id, "command_type": command_type, "fields": fields,
-            "cancel_all": request.cancel_all, "tts_on_success": request.tts_on_success})))
-        return pb2.StartCommandResponse(result=pb2.Result(success=True), command_id=cmd_id)
+        result, cmd_id = self._start(request.command, request.cancel_all, request.tts_on_success)
+        return pb2.StartCommandResponse(result=result, command_id=cmd_id)
 
     def CancelCommand(self, request, context):
         running = self.store.peek("command_state")
@@ -522,6 +773,43 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
 
     def Proceed(self, request, context):
         return pb2.ProceedResponse(result=pb2.Result(success=True))
+
+    def GetHistoryList(self, request, context):
+        cursor, _ = self.store.get("history", request, context)
+        return pb2.GetHistoryListResponse(metadata=self._meta(cursor), histories=list(self.history))
+
+    def GetShortcuts(self, request, context):
+        cursor, _ = self.store.get("shortcuts", request, context)
+        return pb2.GetShortcutsResponse(metadata=self._meta(cursor), shortcuts=[
+            pb2.Shortcut(id=s["id"], name=s["name"]) for s in self.shortcuts])
+
+    def StartShortcutCommand(self, request, context):
+        """Runs the shortcut's commands one after another, stopping at the
+        first that fails."""
+        shortcut = next((s for s in self.shortcuts if s["id"] == request.target_shortcut_id), None)
+        if shortcut is None:
+            return pb2.StartShortcutCommandResponse(result=pb2.Result(success=False, error_code=ERROR_UNKNOWN_SHELF))
+        try:
+            commands = [json_format.ParseDict(c, pb2.Command()) for c in shortcut["commands"]]
+        except json_format.ParseError:
+            return pb2.StartShortcutCommandResponse(result=pb2.Result(success=False, error_code=-1))
+        if not commands:
+            return pb2.StartShortcutCommandResponse(result=pb2.Result(success=True))
+        result, first = self._start(commands[0], request.cancel_all)
+        if result.success and len(commands) > 1:
+            threading.Thread(target=self._run_rest, args=(first, commands[1:]), daemon=True).start()
+        return pb2.StartShortcutCommandResponse(result=result)
+
+    def _run_rest(self, cmd_id: str, commands: list) -> None:
+        s = self.store
+        for command in commands:
+            with s.cond:  # wait for the previous command's result
+                s.cond.wait_for(lambda prev=cmd_id: (s.peek("last_result") or {}).get("id") == prev)
+            if not s.peek("last_result")["success"]:
+                return
+            result, cmd_id = self._start(command, cancel_all=False)
+            if not result.success:
+                return
 
     # --- layout ---------------------------------------------------------------
     def GetLocations(self, request, context):
@@ -605,3 +893,65 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         self.volume = max(0, min(10, request.volume))
         self.store.set("volume", self.volume)
         return pb2.SetSpeakerVolumeResponse(result=pb2.Result(success=True))
+
+    # --- sounds (no audio) -----------------------------------------------------
+    def GetSoundList(self, request, context):
+        cursor, _ = self.store.get("sounds", request, context)
+        return pb2.GetSoundListResponse(metadata=self._meta(cursor), sounds=[
+            pb2.Sound(id=i, name=n) for i, n in self.sounds.items()])
+
+    def AddSound(self, request, context):
+        sound_id = uuid.uuid4().hex
+        self.sounds[sound_id] = request.name
+        self.sound_data[sound_id] = request.data
+        self.store.set("sounds", None)
+        return pb2.AddSoundResponse(result=pb2.Result(success=True), sound_id=sound_id)
+
+    def DeleteSound(self, request, context):
+        if request.sound_id not in self.sound_data:  # built-in ones stay
+            return pb2.DeleteSoundResponse(result=pb2.Result(success=False, error_code=-1))
+        del self.sounds[request.sound_id], self.sound_data[request.sound_id]
+        self.store.set("sounds", None)
+        return pb2.DeleteSoundResponse(result=pb2.Result(success=True))
+
+    def PlaySound(self, request, context):
+        name = self.sounds.get(request.sound_id)
+        if name is None:
+            return pb2.PlaySoundResponse(result=pb2.Result(success=False, error_code=-1))
+        self.sound_pub.publish(String(data=json.dumps({"play": request.sound_id, "name": name,
+                                                       "loop": request.loop})))
+        print(f"[kachaka] sound: {name}{' (loop)' if request.loop else ''}", flush=True)
+        return pb2.PlaySoundResponse(result=pb2.Result(success=True))
+
+    def StopSound(self, request, context):
+        self.sound_pub.publish(String(data=json.dumps({"stop": True})))
+        return pb2.StopSoundResponse(result=pb2.Result(success=True))
+
+    # --- shelves, emergency stop, restart ----------------------------------------
+    def ResetShelfPose(self, request, context):
+        handler = self.sim.shelf_reset_handler
+        if handler is None:
+            return pb2.ResetShelfPoseResponse(result=pb2.Result(success=False, error_code=ERROR_UNKNOWN_SHELF))
+        try:
+            ok, msg = self.sim.run_in_sim(lambda: handler(request.shelf_id)).result(timeout=10.0)
+        except Exception:  # noqa: BLE001 - timeout or a simulator error
+            return pb2.ResetShelfPoseResponse(result=pb2.Result(success=False, error_code=ERROR_SERVER_UNAVAILABLE))
+        code = 0 if ok else ERROR_OTHER_SHELF_DOCKED if msg.startswith("the robot tows") else ERROR_UNKNOWN_SHELF
+        return pb2.ResetShelfPoseResponse(result=pb2.Result(success=ok, error_code=code))
+
+    def SetEmergencyStop(self, request, context):
+        """Stops the robot and refuses commands until RestartRobot."""
+        self.sim.emergency_stop = True
+        self.cancel_pub.publish(String(data=json.dumps({"all": True})))
+        self.vel_pub.publish(self._twist())
+        self.store.set("errors", [ERROR_EMERGENCY_STOP])
+        return pb2.SetEmergencyStopResponse(result=pb2.Result(success=True))
+
+    def RestartRobot(self, request, context):
+        """Does not restart the simulator: stops all commands and releases the
+        emergency stop."""
+        self.cancel_pub.publish(String(data=json.dumps({"all": True})))
+        self.vel_pub.publish(self._twist())
+        self.sim.emergency_stop = False
+        self.store.set("errors", [])
+        return pb2.RestartRobotResponse(result=pb2.Result(success=True))
