@@ -112,6 +112,8 @@ client.stub.SetFrontTorchIntensity(pb2.SetFrontTorchIntensityRequest(intensity=2
 
 シミュレータ専用のサービス `sim/reset` で、シミュレータを再起動せずに開始時の状態へ戻せます。
 
+![シェルフを牽引中に sim/reset：ロボットとシェルフが開始時の位置に戻る様子](docs/sim_reset.gif)
+
 ```bash
 ros2 service call /kachaka/sim/reset std_srvs/srv/SetBool "{data: false}"   # data: true なら SLAM の地図も消す
 ```
@@ -496,7 +498,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 `tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
 （SLAM の地図を保存し、ROS 2 側を `navigation.launch.py` で起動し直す）は docstring にあります。
 
-上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif`、Web ダッシュボードは `scripts/record_dashboard_demo.py docs/dashboard.gif`（シミュレータ・Nav2・ダッシュボードを起動し、ホストに Chromium が必要）で録画しています。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif`、Web ダッシュボードは `scripts/record_dashboard_demo.py docs/dashboard.gif`（シミュレータ・Nav2・ダッシュボードを起動し、ホストに Chromium が必要）で、`--scenario reset` を付けると `docs/sim_reset.gif` を録画します。
 
 ## ライセンス
 

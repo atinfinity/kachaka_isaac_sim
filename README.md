@@ -121,6 +121,8 @@ client.stub.SetFrontTorchIntensity(pb2.SetFrontTorchIntensityRequest(intensity=2
 `sim/reset` (simulator only) puts everything back to the start without
 restarting the simulator:
 
+![sim/reset while the robot tows a shelf: robot and shelf go back to the start](docs/sim_reset.gif)
+
 ```bash
 ros2 service call /kachaka/sim/reset std_srvs/srv/SetBool "{data: false}"   # data: true also clears the SLAM map
 ```
@@ -543,7 +545,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 map; its docstring gives the steps (save the SLAM map, then restart the ROS 2
 side with `navigation.launch.py`).
 
-`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights; `scripts/record_dashboard_demo.py docs/dashboard.gif` records the web dashboard (with the simulator, Nav2 and the dashboard running, and Chromium on the host).
+`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights; `scripts/record_dashboard_demo.py docs/dashboard.gif` records the web dashboard (with the simulator, Nav2 and the dashboard running, and Chromium on the host), and with `--scenario reset` it records `docs/sim_reset.gif`.
 
 ## License
 
