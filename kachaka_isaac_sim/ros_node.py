@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,7 +20,12 @@ from geometry_msgs.msg import Pose, PoseArray, PoseStamped, TransformStamped, Tw
 from nav_msgs.msg import Odometry
 from rclpy.executors import ShutdownException, SingleThreadedExecutor, TimeoutException
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import BatteryState, CameraInfo, Image, Imu, JointState, LaserScan
 from std_msgs.msg import String
@@ -51,6 +58,10 @@ class KachakaSimNode:
         self.generic = bool(cfg.ros.remap_generic)
         self.manual_control_enabled = True
         self.cmd: tuple[float, float] | None = None  # newest Twist, consumed by the sim loop
+        self.shelf_reset_handler = None  # shelf_id -> (ok, message); set when the world has shelves
+        self.emergency_stop = False  # set by the gRPC SetEmergencyStop: velocity commands are ignored
+        self._pending: list = []  # (function, Future) to run in the sim loop, see run_in_sim
+        self._pending_lock = threading.Lock()
         # Sees every message published here: tap(name, msg...). Set by the
         # kachaka-api gRPC server (api_server.py).
         self.tap = lambda name, *msg: None
@@ -164,7 +175,27 @@ class KachakaSimNode:
 
     def take_cmd(self) -> tuple[float, float] | None:
         cmd, self.cmd = self.cmd, None
+        if self.emergency_stop:
+            return 0.0, 0.0
         return cmd
+
+    def run_in_sim(self, fn) -> Future:
+        """Run `fn()` in the simulation loop (between steps, where touching the
+        stage is safe) and return a Future of its result. For other threads."""
+        future = Future()
+        with self._pending_lock:
+            self._pending.append((fn, future))
+        return future
+
+    def run_pending(self) -> None:
+        """Called by the simulation loop."""
+        with self._pending_lock:
+            pending, self._pending = self._pending, []
+        for fn, future in pending:
+            try:
+                future.set_result(fn())
+            except Exception as e:  # noqa: BLE001 - handed to the caller
+                future.set_exception(e)
 
     def publish_clock(self, t: float) -> None:
         self.clock_pub.publish(Clock(clock=to_time(t)))

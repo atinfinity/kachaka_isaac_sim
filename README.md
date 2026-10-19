@@ -23,11 +23,11 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
   Nav2 never drives backwards, since Kachaka has no rear range sensor.
 - `kachaka_command/execute` with every command type of the real bridge: MOVE_TO_POSE,
-  MOVE_TO_LOCATION, RETURN_HOME, SPEAK (text only) and the Kachaka Shelf commands
-  (DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF), built on Nav2. Also
-  `goal_pose` and auto homing.
+  MOVE_TO_LOCATION, RETURN_HOME, SPEAK (text only), the Kachaka Shelf commands
+  (DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF) and the motion commands
+  (MOVE_FORWARD, ROTATE_IN_PLACE, …), built on Nav2. Also `goal_pose` and auto homing.
 - The [kachaka-api](https://github.com/pf-robotics/kachaka-api) gRPC API on port 26400,
-  so the official Python client (`KachakaApiClient`) works without a robot.
+  with every RPC, so the official Python client (`KachakaApiClient`) works without a robot.
 
 ### Commands
 
@@ -44,6 +44,12 @@ ros2 topic pub --once /kachaka/goal_pose geometry_msgs/PoseStamped \
 | MOVE_TO_POSE | Nav2 goal in the map frame |
 | MOVE_TO_LOCATION | Nav2 goal to a location from `layout/locations/list`; the charger (`home`) runs RETURN_HOME |
 | SPEAK | no audio: the text goes to the log and to `sim/speech` |
+| MOVE_FORWARD, ROTATE_IN_PLACE | drives the distance or turns the angle on odometry; MOVE_FORWARD stops (−9) at an obstacle ahead |
+| MOVE_BY_VELOCITY_WITH_MUTED_SENSORS | drives at the velocity for the duration |
+| LOCK | holds the robot still for the duration |
+| DOCK_ANY_SHELF_WITH_REGISTRATION | docks the shelf nearest to the location (within 0.5 m) |
+| LOCALIZE | succeeds at once: the simulator never loses its pose |
+| DEPART_FROM_CHARGER | drives 0.3 m off the charger; fails (−13) when not on it |
 
 As on the real robot, `cancel_all: true` stops the running command; without
 it a command waits until the earlier ones finish. `tts_on_success` is sent to
@@ -273,31 +279,62 @@ client.return_shelf("S01")
 client.return_home()
 ```
 
-Commands and the locations need the ROS 2 side (`slam.launch.py nav:=true`),
-since `command_server` runs them. The robot pose is in slam_toolbox's map
-frame and `get_png_map` returns its `/map`.
+Commands and the locations need the ROS 2 side (`slam.launch.py nav:=true`
+or `navigation.launch.py`), since `command_server` runs them. The robot pose
+is in the map frame of slam_toolbox or AMCL.
 
-Every RPC of the `KachakaApi` service (kachaka-api 3.17.5.0) is in one of
-these lists. The client methods are the RPC names in snake_case
-(`GetRobotPose` → `get_robot_pose`).
+Every RPC of the `KachakaApi` service (kachaka-api 3.17.5.0) is implemented.
+The client methods are the RPC names in snake_case
+(`GetRobotPose` → `get_robot_pose`). Where the simulator differs from the robot:
 
-| Area | Implemented | Not implemented ([#12](https://github.com/atinfinity/kachaka_isaac_sim/issues/12)) |
+| Area | RPCs | In the simulator |
 |---|---|---|
-| Robot info | `GetRobotSerialNumber`, `GetRobotVersion`, `IsReady`, `GetError`, `GetRobotErrorCodeJson`, `GetRobotPose`, `GetBatteryInfo` | `RestartRobot`, `SetEmergencyStop` |
-| Sensors | `GetRosImu`, `GetRosOdometry`, `GetRosWheelOdometry`, `GetRosLaserScan`, `Get{Front,Back,Tof}CameraRos{CameraInfo,Image,CompressedImage}`, `GetStaticTransform` | `GetDynamicTransform` |
-| Map | `GetPngMap`, `GetMapList`, `GetCurrentMapId` (one map, `sim`) | `SwitchMap`, `LoadMapPreview`, `ExportMap`, `ImportMap`, `ImportImageAsMap`, `SetRobotPose` |
-| Commands | `StartCommand`, `CancelCommand`, `GetCommandState`, `GetLastCommandResult`, `Proceed` | `GetShortcuts`, `StartShortcutCommand`, `GetHistoryList` |
-| Layout | `GetLocations`, `GetLocationsDigest`, `GetShelves`, `GetShelvesDigest`, `GetMovingShelfId` | `ResetShelfPose` |
+| Robot info | `GetRobotSerialNumber`, `GetRobotVersion`, `IsReady`, `GetError`, `GetRobotErrorCodeJson`, `GetRobotPose`, `GetBatteryInfo` | |
+| Sensors | `GetRosImu`, `GetRosOdometry`, `GetRosWheelOdometry`, `GetRosLaserScan`, `Get{Front,Back,Tof}CameraRos{CameraInfo,Image,CompressedImage}`, `GetStaticTransform`, `GetDynamicTransform` | |
+| Map | `GetPngMap`, `GetMapList`, `GetCurrentMapId`, `LoadMapPreview`, `ExportMap`, `ImportMap`, `ImportImageAsMap` | see [Maps](#maps) |
+| Map (saved map) | `SwitchMap`, `SetRobotPose` | need `navigation.launch.py` (map_server and AMCL); fail with −16 under SLAM. `inherit_docking_state_and_docked_shelf` is Kachaka Pro only (−17) |
+| Commands | `StartCommand`, `CancelCommand`, `GetCommandState`, `GetLastCommandResult`, `Proceed`, `GetHistoryList` | history keeps the last 100 commands, until the simulator stops |
+| Shortcuts | `GetShortcuts`, `StartShortcutCommand` | defined in `config/robot.yaml` (`api.shortcuts`) |
+| Layout | `GetLocations`, `GetLocationsDigest`, `GetShelves`, `GetShelvesDigest`, `GetMovingShelfId`, `ResetShelfPose` | `ResetShelfPose` puts the shelf back at its home; fails while the robot tows it |
 | Control | `SetManualControlEnabled`, `GetManualControlEnabled`, `SetRobotVelocity`, `SetAutoHomingEnabled`, `GetAutoHomingEnabled`, `SetSpeakerVolume`, `GetSpeakerVolume` | |
-| Sound | | `GetSoundList`, `PlaySound`, `StopSound`, `AddSound`, `DeleteSound` |
-| No-ops | `SetFrontTorchIntensity`, `SetBackTorchIntensity`, `ActivateLaserScan`; `GetObjectDetection` is always empty | `GetObjectDetectionFeatures` |
+| Safety | `SetEmergencyStop`, `RestartRobot` | the emergency stop halts the wheels, cancels all commands and refuses new ones (−14) until `RestartRobot`, which clears it; the simulator itself does not restart |
+| Sound | `GetSoundList`, `PlaySound`, `StopSound`, `AddSound`, `DeleteSound` | no audio: the sound name goes to `sim/sound`; added sounds live until the simulator stops |
+| No-ops | `SetFrontTorchIntensity`, `SetBackTorchIntensity`, `ActivateLaserScan`, `GetObjectDetection`, `GetObjectDetectionFeatures` | object detection is always empty |
 
-Not implemented RPCs return `UNIMPLEMENTED`.
+All `StartCommand` commands of kachaka-api 3.17.5.0 are implemented (see
+[Commands](#commands)). DEPART_FROM_CHARGER is newer than that release, so
+it can be sent only through the ROS 2 action (`command_type: 23`) until a
+kachaka-api release includes it.
 
-| `StartCommand` command | |
+Simulator error codes, shown by `get_robot_error_code` like the robot's own:
+
+| Code | Meaning |
 |---|---|
-| Implemented | MOVE_TO_POSE, MOVE_TO_LOCATION, RETURN_HOME, SPEAK (no audio), DOCK_SHELF, UNDOCK_SHELF, MOVE_SHELF, RETURN_SHELF |
-| Not implemented (fails) | LOCK, MOVE_FORWARD, ROTATE_IN_PLACE, DOCK_ANY_SHELF_WITH_REGISTRATION, LOCALIZE, MOVE_BY_VELOCITY_WITH_MUTED_SENSORS, DEPART_FROM_CHARGER |
+| −1 … −11 | command errors from `command_server` (unsupported, no charger, docking failed, canceled, navigation failed, blocked, …) |
+| −12 | manual control is disabled |
+| −13 | not on the charger |
+| −14 | emergency stop |
+| −15 | map error (unknown id, bad file) |
+| −16 | needs a saved map (`navigation.launch.py`) |
+| −17 | Kachaka Pro only |
+
+### Maps
+
+Maps are Nav2 map pairs in `maps/` (mounted at `/maps` in the containers):
+`<id>.yaml` plus its `<id>.pgm`, as `map_saver_cli` writes them. The id is
+the file name. The yaml may also hold `name` (shown by `get_map_list`) and
+`charger_pose: [x, y, yaw]` (the default pose after `switch_map`).
+
+- Under SLAM the current map is `sim`, slam_toolbox's live `/map`. Export it to
+  keep it: `export_map("sim", "slam.zip")` then `import_map("slam.zip")`
+  writes `maps/slam.yaml`. The id `sim` is never given to a saved map.
+- Under `navigation.launch.py` the current map is the one it was started with;
+  `get_map_list` lists the files in `maps/` and `switch_map` loads another one
+  into map_server and sets the initial pose.
+- `export_map` writes a zip of the two files, which `import_map` reads back.
+  `import_image_as_map` takes a PNG (Kachaka's palette, or any image: dark is
+  occupied, light free, mid gray unknown) with the origin at its bottom-left
+  corner.
 
 ## Performance
 
@@ -344,6 +381,10 @@ The kachaka-api check runs on the host with the official client (same setup):
 ```bash
 uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 ```
+
+`tests/api_map_check.py` checks `switch_map` and `set_robot_pose` on a saved
+map; its docstring gives the steps (save the SLAM map, then restart the ROS 2
+side with `navigation.launch.py`).
 
 `scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf).
 

@@ -210,6 +210,7 @@ def main() -> int:
         from kachaka_isaac_sim.world import SHELF_SIZE
 
         shelves = Shelves(stage, shelf_specs, cfg.shelf)
+        node.shelf_reset_handler = shelves.reset
 
         def in_map(p):
             m = relative_pose(spawn, p)
@@ -237,6 +238,7 @@ def main() -> int:
         while app.is_running():
             t0 = time.perf_counter()
             node.spin_once()
+            node.run_pending()
             app.update()
             t1 = time.perf_counter()
             publish_cameras(node, cameras, robot.t, tof_off=robot.sensors_paused)

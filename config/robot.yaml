@@ -75,6 +75,20 @@ imu:
 stubs:
   version: "kachaka-isaac-sim 0.1.0"
 
+api:
+  # kachaka-api GetShortcuts / StartShortcutCommand. Each command is a
+  # kachaka-api Command in protobuf JSON; they run one after another.
+  shortcuts:
+    - id: go_home
+      name: Go home
+      commands:
+        - return_home_command: {}
+    - id: hello
+      name: Say hello
+      commands:
+        - speak_command: {text: Hello}
+        - rotate_in_place_command: {angle_radian: 6.2832}
+
 battery:
   initial_percentage: 1.0
   drain_per_hour: 0.5       # fraction per hour of sim time, off the charger (est.)

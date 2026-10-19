@@ -24,8 +24,9 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
   カチャカには後方の距離センサーがないので、Nav2 は後退しない設定です
 - 実機ブリッジの全コマンドに対応した `kachaka_command/execute`（Nav2 ベース）: MOVE_TO_POSE、
   MOVE_TO_LOCATION、RETURN_HOME、SPEAK（テキストのみ）、カチャカシェルフのコマンド
-  （DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF）。`goal_pose` と自動充電にも対応
-- ポート 26400 で [kachaka-api](https://github.com/pf-robotics/kachaka-api) の gRPC API を提供。
+  （DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF）、移動コマンド（MOVE_FORWARD、
+  ROTATE_IN_PLACE など）。`goal_pose` と自動充電にも対応
+- ポート 26400 で [kachaka-api](https://github.com/pf-robotics/kachaka-api) の gRPC API を全 RPC 提供。
   公式の Python クライアント（`KachakaApiClient`）が実機なしで使えます
 
 ### コマンド
@@ -43,6 +44,12 @@ ros2 topic pub --once /kachaka/goal_pose geometry_msgs/PoseStamped \
 | MOVE_TO_POSE | map 座標で Nav2 のゴールを送る |
 | MOVE_TO_LOCATION | `layout/locations/list` の場所へ Nav2 で移動。充電器（`home`）なら RETURN_HOME |
 | SPEAK | 音声なし。テキストをログと `sim/speech` に出す |
+| MOVE_FORWARD、ROTATE_IN_PLACE | オドメトリで距離を進む・角度を回る。MOVE_FORWARD は前方に障害物があると止まる（−9） |
+| MOVE_BY_VELOCITY_WITH_MUTED_SENSORS | 指定の速度で指定の時間走る |
+| LOCK | 指定の時間その場で止まる |
+| DOCK_ANY_SHELF_WITH_REGISTRATION | 場所に最も近い（0.5 m 以内の）シェルフにドッキング |
+| LOCALIZE | すぐ成功する（シミュレータは自己位置を見失わない） |
+| DEPART_FROM_CHARGER | 充電器から 0.3 m 離れる。充電器の上にいなければ失敗（−13） |
 
 実機と同じく、`cancel_all: true` なら実行中のコマンドを止めます。付けなければ前のコマンドが
 終わるまで待ちます。`tts_on_success` はコマンド成功後に `sim/speech` に出ます。`goal_pose` は
@@ -253,29 +260,57 @@ client.return_shelf("S01")
 client.return_home()
 ```
 
-コマンドと場所の一覧は `command_server` が扱うので、ROS 2 側（`slam.launch.py nav:=true`）が必要です。
-ロボットの位置は slam_toolbox の map 座標で、`get_png_map` はその `/map` を返します。
+コマンドと場所の一覧は `command_server` が扱うので、ROS 2 側（`slam.launch.py nav:=true` または
+`navigation.launch.py`）が必要です。ロボットの位置は slam_toolbox または AMCL の map 座標です。
 
-`KachakaApi` サービス（kachaka-api 3.17.5.0）の RPC はすべて以下のどちらかに載っています。
+`KachakaApi` サービス（kachaka-api 3.17.5.0）の RPC はすべて実装しています。
 クライアントのメソッド名は RPC 名を snake_case にしたものです（`GetRobotPose` → `get_robot_pose`）。
+実機との違いは次のとおりです。
 
-| 分類 | 対応 | 未実装（[#12](https://github.com/atinfinity/kachaka_isaac_sim/issues/12)） |
+| 分類 | RPC | シミュレータでの動作 |
 |---|---|---|
-| ロボット情報 | `GetRobotSerialNumber`、`GetRobotVersion`、`IsReady`、`GetError`、`GetRobotErrorCodeJson`、`GetRobotPose`、`GetBatteryInfo` | `RestartRobot`、`SetEmergencyStop` |
-| センサー | `GetRosImu`、`GetRosOdometry`、`GetRosWheelOdometry`、`GetRosLaserScan`、`Get{Front,Back,Tof}CameraRos{CameraInfo,Image,CompressedImage}`、`GetStaticTransform` | `GetDynamicTransform` |
-| 地図 | `GetPngMap`、`GetMapList`、`GetCurrentMapId`（地図は `sim` の 1 枚） | `SwitchMap`、`LoadMapPreview`、`ExportMap`、`ImportMap`、`ImportImageAsMap`、`SetRobotPose` |
-| コマンド | `StartCommand`、`CancelCommand`、`GetCommandState`、`GetLastCommandResult`、`Proceed` | `GetShortcuts`、`StartShortcutCommand`、`GetHistoryList` |
-| レイアウト | `GetLocations`、`GetLocationsDigest`、`GetShelves`、`GetShelvesDigest`、`GetMovingShelfId` | `ResetShelfPose` |
+| ロボット情報 | `GetRobotSerialNumber`、`GetRobotVersion`、`IsReady`、`GetError`、`GetRobotErrorCodeJson`、`GetRobotPose`、`GetBatteryInfo` | |
+| センサー | `GetRosImu`、`GetRosOdometry`、`GetRosWheelOdometry`、`GetRosLaserScan`、`Get{Front,Back,Tof}CameraRos{CameraInfo,Image,CompressedImage}`、`GetStaticTransform`、`GetDynamicTransform` | |
+| 地図 | `GetPngMap`、`GetMapList`、`GetCurrentMapId`、`LoadMapPreview`、`ExportMap`、`ImportMap`、`ImportImageAsMap` | [地図](#地図)を参照 |
+| 地図（保存済み地図） | `SwitchMap`、`SetRobotPose` | `navigation.launch.py`（map_server と AMCL）が必要。SLAM 中は −16 で失敗。`inherit_docking_state_and_docked_shelf` はカチャカ Pro 専用（−17） |
+| コマンド | `StartCommand`、`CancelCommand`、`GetCommandState`、`GetLastCommandResult`、`Proceed`、`GetHistoryList` | 履歴は直近 100 件。シミュレータを止めると消える |
+| ショートカット | `GetShortcuts`、`StartShortcutCommand` | `config/robot.yaml`（`api.shortcuts`）で定義 |
+| レイアウト | `GetLocations`、`GetLocationsDigest`、`GetShelves`、`GetShelvesDigest`、`GetMovingShelfId`、`ResetShelfPose` | `ResetShelfPose` はシェルフをホームに戻す。ロボットが運搬中なら失敗 |
 | 操作 | `SetManualControlEnabled`、`GetManualControlEnabled`、`SetRobotVelocity`、`SetAutoHomingEnabled`、`GetAutoHomingEnabled`、`SetSpeakerVolume`、`GetSpeakerVolume` | |
-| サウンド | | `GetSoundList`、`PlaySound`、`StopSound`、`AddSound`、`DeleteSound` |
-| 何もしない | `SetFrontTorchIntensity`、`SetBackTorchIntensity`、`ActivateLaserScan`。`GetObjectDetection` は常に空 | `GetObjectDetectionFeatures` |
+| 安全 | `SetEmergencyStop`、`RestartRobot` | 非常停止で車輪を止め、全コマンドをキャンセルし、`RestartRobot` で解除するまで新しいコマンドを拒否（−14）。シミュレータ自体は再起動しない |
+| サウンド | `GetSoundList`、`PlaySound`、`StopSound`、`AddSound`、`DeleteSound` | 音声なし。サウンド名を `sim/sound` に出す。追加したサウンドはシミュレータを止めると消える |
+| 何もしない | `SetFrontTorchIntensity`、`SetBackTorchIntensity`、`ActivateLaserScan`、`GetObjectDetection`、`GetObjectDetectionFeatures` | 物体検出は常に空 |
 
-未実装の RPC は `UNIMPLEMENTED` を返します。
+kachaka-api 3.17.5.0 の `StartCommand` のコマンドはすべて実装しています（[コマンド](#コマンド)を参照）。
+DEPART_FROM_CHARGER はこのリリースより新しいので、kachaka-api のリリースに入るまでは
+ROS 2 のアクション（`command_type: 23`）からのみ送れます。
 
-| `StartCommand` のコマンド | |
+シミュレータのエラーコード（実機のものと同じく `get_robot_error_code` で説明が取れます）:
+
+| コード | 意味 |
 |---|---|
-| 対応 | MOVE_TO_POSE、MOVE_TO_LOCATION、RETURN_HOME、SPEAK（音声なし）、DOCK_SHELF、UNDOCK_SHELF、MOVE_SHELF、RETURN_SHELF |
-| 未実装（失敗する） | LOCK、MOVE_FORWARD、ROTATE_IN_PLACE、DOCK_ANY_SHELF_WITH_REGISTRATION、LOCALIZE、MOVE_BY_VELOCITY_WITH_MUTED_SENSORS、DEPART_FROM_CHARGER |
+| −1 … −11 | `command_server` のコマンドエラー（未対応、充電器なし、ドッキング失敗、キャンセル、ナビゲーション失敗、障害物など） |
+| −12 | 手動操作が無効 |
+| −13 | 充電器の上にいない |
+| −14 | 非常停止中 |
+| −15 | 地図のエラー（存在しない ID、壊れたファイル） |
+| −16 | 保存済み地図が必要（`navigation.launch.py`） |
+| −17 | カチャカ Pro 専用 |
+
+### 地図
+
+地図は `maps/`（コンテナでは `/maps`）に置く Nav2 形式の 2 ファイル、`<id>.yaml` と `<id>.pgm` です
+（`map_saver_cli` が書く形式）。ファイル名が ID になります。yaml には `name`（`get_map_list` で表示）と
+`charger_pose: [x, y, yaw]`（`switch_map` 後の既定の位置）も書けます。
+
+- SLAM 中の現在の地図は `sim`（slam_toolbox のその場の `/map`）です。残すにはエクスポートします:
+  `export_map("sim", "slam.zip")` のあと `import_map("slam.zip")` で `maps/slam.yaml` ができます。
+  `sim` という ID は保存する地図には付きません。
+- `navigation.launch.py` では起動時の地図が現在の地図です。`get_map_list` は `maps/` のファイルを返し、
+  `switch_map` は別の地図を map_server に読み込んで初期位置を設定します。
+- `export_map` は 2 ファイルの zip を書き、`import_map` はそれを読み込みます。`import_image_as_map` は
+  PNG（カチャカの配色、または任意の画像: 暗いと障害物、明るいと空き、中間の灰色は未知）を受け取り、
+  画像の左下を原点にします。
 
 ## 性能
 
@@ -320,6 +355,9 @@ kachaka-api のテストはホストで公式クライアントを使って実�
 ```bash
 uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 ```
+
+`tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
+（SLAM の地図を保存し、ROS 2 側を `navigation.launch.py` で起動し直す）は docstring にあります。
 
 上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`）。
 

@@ -66,6 +66,22 @@ class Shelves:
             return True, f"docked with {self.specs[i].id}"
         return False, "no shelf above the robot"
 
+    def reset(self, shelf_id: str = "") -> tuple[bool, str]:
+        """Put a shelf (all of them if `shelf_id` is empty) back at its home
+        pose, at rest. Not while the robot tows it."""
+        idx = [i for i, s in enumerate(self.specs) if not shelf_id or s.id == shelf_id]
+        if not idx:
+            return False, f"unknown shelf {shelf_id!r}"
+        if self.docked in idx:
+            return False, f"the robot tows {self.specs[self.docked].id}"
+        pos = self.view.get_world_poses()[0].numpy()
+        positions = [[s.home.x, s.home.y, float(pos[i][2])] for i, s in ((i, self.specs[i]) for i in idx)]
+        orientations = [list(quat_from_yaw(self.specs[i].home.yaw)) for i in idx]
+        self.view.set_world_poses(positions, orientations, indices=idx)
+        self.view.set_velocities([[0.0] * 3] * len(idx), [[0.0] * 3] * len(idx), indices=idx)
+        self.update()
+        return True, ""
+
     def undock(self) -> tuple[bool, str]:
         if self.docked is None:
             return True, "no shelf docked"
