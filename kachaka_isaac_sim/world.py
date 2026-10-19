@@ -1,4 +1,5 @@
-"""Stage building: physics scene, floor, simple room, shelves, charger, robot and contact materials.
+"""Stage building: physics scene, floor, simple room, shelves, charger, people, robot and contact
+materials.
 
 Import only after SimulationApp has started.
 """
@@ -219,6 +220,44 @@ def add_charger(stage: Usd.Stage, path: str, pose, cfg: SimpleNamespace) -> None
                 (0.55, 0.55, 0.5), collider=False)
     add_box(stage, f"{path}/led", (face - t / 2, 0.0, h + 0.002), (0.01, 0.03, 0.004), (0.1, 0.9, 0.2),
             collider=False)
+
+
+def add_person(stage: Usd.Stage, path: str, pose, height: float = 1.7) -> None:
+    """A standing person as a static mannequin of capsules, for object
+    detection and for the LiDAR to see. `pose` (x, y, yaw): feet centre and
+    facing direction. One invisible box collider covers the body."""
+    x, y, yaw = pose
+    root = UsdGeom.Xform.Define(stage, path)
+    xf = UsdGeom.Xformable(root.GetPrim())
+    xf.AddTranslateOp().Set(Gf.Vec3d(x, y, 0.0))
+    xf.AddRotateZOp().Set(math.degrees(yaw))
+    k = height / 1.7
+    skin, shirt, pants, shoes = (0.8, 0.6, 0.48), (0.2, 0.42, 0.65), (0.13, 0.14, 0.2), (0.06, 0.05, 0.05)
+
+    def capsule(name, center, radius, length, color, axis="Z", scale=None):
+        c = UsdGeom.Capsule.Define(stage, f"{path}/{name}")
+        c.CreateRadiusAttr(radius * k)
+        c.CreateHeightAttr(length * k)  # the cylinder part; the caps add 2 * radius
+        c.CreateAxisAttr(axis)
+        c.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+        cxf = UsdGeom.Xformable(c.GetPrim())
+        cxf.AddTranslateOp().Set(Gf.Vec3d(*(v * k for v in center)))
+        if scale:
+            cxf.AddScaleOp().Set(Gf.Vec3f(*scale))
+
+    for side, sy in (("l", 0.1), ("r", -0.1)):
+        capsule(f"leg_{side}", (0.0, sy, 0.47), 0.065, 0.74, pants)
+        capsule(f"shoe_{side}", (0.04, sy, 0.04), 0.04, 0.14, shoes, axis="X")
+        capsule(f"arm_{side}", (0.0, sy * 2.3, 1.12), 0.045, 0.5, shirt)
+        capsule(f"hand_{side}", (0.0, sy * 2.3, 0.8), 0.04, 0.04, skin)
+    capsule("torso", (0.0, 0.0, 1.17), 0.16, 0.38, shirt, scale=(0.7, 1.0, 1.0))
+    capsule("neck", (0.0, 0.0, 1.45), 0.05, 0.05, skin)
+    head = UsdGeom.Sphere.Define(stage, f"{path}/head")
+    head.CreateRadiusAttr(0.11 * k)
+    head.CreateDisplayColorAttr([Gf.Vec3f(*skin)])
+    UsdGeom.Xformable(head.GetPrim()).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 1.58 * k))
+    add_box(stage, f"{path}/collider", (0.0, 0.0, height / 2), (0.28 * k, 0.5 * k, height))
+    UsdGeom.Imageable(stage.GetPrimAtPath(f"{path}/collider")).MakeInvisible()
 
 
 def add_robot(stage: Usd.Stage, usd_path: Path, x: float = 0.0, y: float = 0.0, yaw: float = 0.0) -> Usd.Prim:

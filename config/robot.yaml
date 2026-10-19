@@ -95,6 +95,30 @@ front_stop:
   half_width: 0.15          # m, watched lane: body 240 mm wide plus 3 cm a side; clears shelf legs (+-0.172 m)
   margin: 0.03              # m (est.)
 
+# Object detection (GetObjectDetection, /kachaka/object_detection/result).
+# People, shelves and the charger are detected in the front camera image from
+# the renderer's ground truth: only their visible pixels count, so whatever
+# stands in front hides them. How the real detector scores, what it misses
+# and how far it sees are not published; all numbers below are guesses (est.).
+# The ROI is in the simulated front camera's pixels (cameras.front).
+object_detection:
+  enabled: true             # needs the cameras (not --no-cameras)
+  max_distance: 5.0         # m, median distance of the visible pixels (est.)
+  min_pixels: 150           # visible pixels needed (est.)
+  full_pixels: 20000        # visible pixels for score_max (est.)
+  score_min: 0.5            # score at min_pixels (est.)
+  score_max: 0.95           # (est.)
+  score_noise: 0.03         # stddev (est.)
+  roi_noise_px: 2.0         # stddev of each ROI edge [px] (est.)
+  miss_rate: 0.02           # chance to miss an object in a frame (est.)
+
+# People: static mannequins, seen by the cameras, the detector and the LiDAR.
+people:
+  height: 1.7               # m
+  room:                     # in the default room ([x, y, yaw], world frame)
+    - [2.0, 1.5, -2.5]      # north-east corner, half behind box_a
+    - [-2.1, -1.55, 0.6]    # south-west corner, half behind box_b, off the test routes
+
 imu:
   frame_id: imu_link
   rate: 100.0               # Hz (est.)

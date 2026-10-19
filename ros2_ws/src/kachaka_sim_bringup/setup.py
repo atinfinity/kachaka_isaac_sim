@@ -26,5 +26,6 @@ setup(
         f"command_server = {package_name}.command_server:main",
         f"shelf_markers = {package_name}.shelf_markers:main",
         f"fake_robot = {package_name}.fake_robot:main",
+        f"object_detection_relay = {package_name}.object_detection_relay:main",
     ]},
 )

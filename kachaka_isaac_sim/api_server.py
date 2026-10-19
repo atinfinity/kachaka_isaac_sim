@@ -359,6 +359,8 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
             s.set("moving_shelf", msg[0])
         elif name == "reset":
             self._reset()
+        elif name == "object_detection":
+            s.set("object_detection", msg[0])
         elif name.endswith("_camera"):
             img, info = msg
             s.set(f"{name}/image", img)
@@ -765,16 +767,31 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         c, m = self._camera("tof_camera", "compressed", request, context)
         return pb2.GetTofCameraRosCompressedImageResponse(metadata=self._meta(c), image=m, is_available=True)
 
+    def _object_detection(self, request, context) -> tuple[int, pb2.RosHeader, list]:
+        """The newest front camera detections (detection.py). Without them
+        (--no-cameras, or object_detection disabled) the newest odometry
+        paces an always-empty result."""
+        if not self.sim.object_detection_enabled:
+            cursor, m = self.store.get("odometry", request, context)
+            return cursor, pb2.RosHeader(stamp_nsec=_header(m.header).stamp_nsec,
+                                         frame_id=self.sim.frame("camera_front")), []
+        cursor, d = self.store.get("object_detection", request, context)
+        sec, nsec = d["stamp"]
+        return cursor, pb2.RosHeader(stamp_nsec=sec * 1_000_000_000 + nsec, frame_id=d["frame_id"]), d["objects"]
+
     def GetObjectDetection(self, request, context):
-        # No object detector in the simulator: the newest odometry paces an
-        # always-empty result.
-        cursor, m = self.store.get("odometry", request, context)
-        header = pb2.RosHeader(stamp_nsec=_header(m.header).stamp_nsec, frame_id=self.sim.frame("camera_front"))
-        return pb2.GetObjectDetectionResponse(metadata=self._meta(cursor), header=header)
+        cursor, header, objects = self._object_detection(request, context)
+        return pb2.GetObjectDetectionResponse(metadata=self._meta(cursor), header=header, objects=[
+            pb2.ObjectDetection(label=o["label"], score=o["score"], distance_median=o["distance"],
+                                roi=pb2.RegionOfInterest(x_offset=o["roi"][0], y_offset=o["roi"][1],
+                                                         width=o["roi"][2], height=o["roi"][3]))
+            for o in objects])
 
     def GetObjectDetectionFeatures(self, request, context):
-        cursor, m = self.store.get("odometry", request, context)
-        header = pb2.RosHeader(stamp_nsec=_header(m.header).stamp_nsec, frame_id=self.sim.frame("camera_front"))
+        # The real robot returns its detector's feature maps; the simulator
+        # has no detector network, so the list stays empty. Paced like
+        # GetObjectDetection.
+        cursor, header, _ = self._object_detection(request, context)
         return pb2.GetObjectDetectionFeaturesResponse(metadata=self._meta(cursor), header=header)
 
     def ActivateLaserScan(self, request, context):

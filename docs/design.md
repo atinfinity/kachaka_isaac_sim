@@ -349,3 +349,32 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   else is a 400.
 - **No path.** kachaka-api has no RPC for the planned path, so the page draws
   the trail of poses it has seen.
+
+## Object detection
+
+The real robot runs a detector network on the front camera and reports
+`ObjectDetection {label, roi, score, distance_median}` (kachaka-api) and
+`/kachaka/object_detection/result` (ROS 2 bridge). The simulator has no
+network; it reads the answer from the renderer.
+
+- **Ground truth from Replicator.** The front camera's render product has two
+  more annotators: `instance_id_segmentation` (which prim each pixel shows)
+  and `distance_to_camera`. Each target (a person, a shelf, the charger) is a
+  prim subtree; `detection.detect` maps instance ids to targets and works on
+  the pixels of each. Only visible pixels count, so occlusion needs no extra
+  work, and the boxes and distances match the image they are stamped with.
+- **Noise and limits are guesses.** Range, minimum size, the score curve, box
+  noise and the miss rate are in `config/robot.yaml` `object_detection`, all
+  marked est.; the real values are not published.
+- **Features are empty.** `GetObjectDetectionFeatures` returns the stamp and
+  no features: there is no network whose embeddings to fake.
+- **ROS 2 through a relay.** Isaac Sim's rclpy cannot load
+  `kachaka_interfaces`, so the simulator publishes JSON on
+  `sim/object_detection` and `object_detection_relay` (in `bridge.launch.py`)
+  republishes it as `ObjectDetectionListStamped` with the real bridge's label
+  numbers (PERSON 0, SHELF 1, CHARGER 2, DOOR 3; UNSPECIFIED is dropped, as
+  the bridge does).
+- **People.** Simple figures built from capsules (`world.add_person`) with one
+  invisible box collider, so the PhysX LiDAR, Nav2 and the front stop see them
+  as obstacles. Two stand in the room by default (`people.room`); they do not
+  move.
