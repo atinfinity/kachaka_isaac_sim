@@ -94,7 +94,9 @@ simulator applies the stop where it limits the velocity (`robot.py`,
 `torches.py` puts a USD SphereLight (radius 1 cm) with a cone (`ShapingAPI`)
 at `camera_front` and `camera_back`, turned like the USD cameras so it shines
 along the optical axis. This placement is an assumption: the real torches'
-position is not documented and the URDF has no torch frame. The lights cast no
+position is not documented and the URDF has no torch frame. Product photos
+show a small unlabelled round window a few cm beside the front camera, which
+may be the torch; a few cm makes no visible difference here. The lights cast no
 shadows, otherwise the body shell in front of the lenses would block them.
 `SetFrontTorchIntensity` / `SetBackTorchIntensity` arrive on gRPC threads, so
 `KachakaSimNode.set_torch` changes the intensity in the simulation loop

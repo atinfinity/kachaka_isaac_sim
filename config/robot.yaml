@@ -69,7 +69,8 @@ tof:
 # Front and back torch lights (SetFrontTorchIntensity / SetBackTorchIntensity,
 # 0-255 per kachaka-api.proto). Where they sit on the real robot is not
 # documented and the URDF has no frame for them, so they are placed at the
-# cameras (assumed). Brightness, beam and colour are unknown too (est.);
+# cameras (assumed). Product photos (rt-net.jp/service/kachaka) show a small
+# unlabelled round window a few cm beside the front camera, possibly the torch. Brightness, beam and colour are unknown too (est.);
 # calibrate with #4.
 torch:
   front:
