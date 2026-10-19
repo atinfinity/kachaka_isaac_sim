@@ -84,11 +84,12 @@ ros2 topic echo /kachaka/sim/front_stop/state   # {"enabled": false, "muted": fa
 
 ### トーチライト
 
-![暗い部屋での前後カメラの画像。それぞれトーチ消灯と 255 で点灯](docs/torch.png)
+![暗い部屋で kachaka-api からトーチを点灯。シミュレータの画面と前後カメラの画像](docs/torch.gif)
 
-実機のカチャカは前後のカメラの横にトーチライトがあります。シミュレータではカメラの位置に
-カメラの向きのスポットライトを置き、`SetFrontTorchIntensity` / `SetBackTorchIntensity`
-（0〜255、0 で消灯）で明るさを変えます。Python クライアントにはラッパーがないので、
+kachaka-api には前と後ろのトーチライトがあり、`SetFrontTorchIntensity` /
+`SetBackTorchIntensity`（0〜255、0 で消灯）で明るさを変えます。実機のどこに付いているかは
+公開されておらず、URDF にもフレームがありません。シミュレータではカメラを照らすものと仮定し、
+前後カメラの位置にカメラの向きのスポットライトを置いています。Python クライアントにはラッパーがないので、
 gRPC のスタブを直接呼びます。
 
 ```python
@@ -437,7 +438,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 `tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
 （SLAM の地図を保存し、ROS 2 側を `navigation.launch.py` で起動し直す）は docstring にあります。
 
-上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif` で録画しています。
 
 ## ライセンス
 

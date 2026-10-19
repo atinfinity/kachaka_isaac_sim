@@ -90,11 +90,13 @@ The LiDAR scans at 10.5 cm, so lower obstacles are not seen.
 
 ### Torch lights
 
-![Front and back camera in a dark room, each with its torch off and at 255](docs/torch.png)
+![Torches switched through kachaka-api in a dark room: the simulator view and the front and back camera](docs/torch.gif)
 
-The real Kachaka has a torch next to its front and its back camera. In the
-simulator each is a spotlight at the camera, aimed along it, and
-`SetFrontTorchIntensity` / `SetBackTorchIntensity` (0-255, 0 is off) set it.
+kachaka-api has a front and a back torch, set with `SetFrontTorchIntensity` /
+`SetBackTorchIntensity` (0-255, 0 is off). Where the torches sit on the real
+robot is not documented and the URDF has no frame for them, so the simulator
+assumes they light the camera views: each is a spotlight at the front or back
+camera, aimed along it.
 The Python client has no wrapper for them, so call the gRPC stub:
 
 ```python
@@ -473,7 +475,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_check.py
 map; its docstring gives the steps (save the SLAM map, then restart the ROS 2
 side with `navigation.launch.py`).
 
-`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop).
+`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights.
 
 ## License
 

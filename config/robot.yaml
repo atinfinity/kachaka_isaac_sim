@@ -66,9 +66,11 @@ tof:
   near_clip: 0.01
   rate: 10.0
 
-# Torch lights next to the front and back camera (SetFrontTorchIntensity /
-# SetBackTorchIntensity, 0-255). The real brightness, beam and colour are
-# unknown (est.); calibrate with #4.
+# Front and back torch lights (SetFrontTorchIntensity / SetBackTorchIntensity,
+# 0-255 per kachaka-api.proto). Where they sit on the real robot is not
+# documented and the URDF has no frame for them, so they are placed at the
+# cameras (assumed). Brightness, beam and colour are unknown too (est.);
+# calibrate with #4.
 torch:
   front:
     frame_id: camera_front  # no torch frame in the URDF: the camera stands in
