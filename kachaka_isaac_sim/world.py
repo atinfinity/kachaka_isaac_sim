@@ -13,7 +13,19 @@ from types import SimpleNamespace
 from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
 from kachaka_isaac_sim.meshes import read_stl
-from kachaka_isaac_sim.scenes import ISAAC_WORLDS
+from kachaka_isaac_sim.scenes import (
+    ISAAC_WORLDS,
+    PERSON_COLLIDER,
+    ROOM_BOXES,
+    ROOM_HEIGHT,
+    ROOM_SIZE,
+    ROOM_WALL,
+    SHELF_CASTER_RADIUS,
+    SHELF_LEG_SIZE,
+    SHELF_LEG_XY,
+    SHELF_PLATES,
+    SHELF_SIZE,
+)
 
 ROBOT_PATH = "/World/kachaka"
 BASE_LINK = f"{ROBOT_PATH}/Geometry/base_footprint/base_link"
@@ -106,31 +118,18 @@ def enable_contact_report(stage: Usd.Stage, path: str = BASE_LINK) -> None:
     api.CreateThresholdAttr().Set(0.0)
 
 
-def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, height: float = 2.4) -> None:
-    """A walled room with a couple of obstacles, enough to test teleop and SLAM."""
-    t = 0.05
+def add_simple_room(stage: Usd.Stage) -> None:
+    """A walled room with a couple of obstacles, enough to test teleop and SLAM
+    (scenes.ROOM_*)."""
+    (size_x, size_y), height, t = ROOM_SIZE, ROOM_HEIGHT, ROOM_WALL
     root = "/World/Room"
     UsdGeom.Xform.Define(stage, root)
     add_box(stage, f"{root}/wall_n", (0, size_y / 2 + t / 2, height / 2), (size_x + 2 * t, t, height))
     add_box(stage, f"{root}/wall_s", (0, -size_y / 2 - t / 2, height / 2), (size_x + 2 * t, t, height))
     add_box(stage, f"{root}/wall_e", (size_x / 2 + t / 2, 0, height / 2), (t, size_y, height))
     add_box(stage, f"{root}/wall_w", (-size_x / 2 - t / 2, 0, height / 2), (t, size_y, height))
-    add_box(stage, f"{root}/box_a", (1.4, 1.0, 0.25), (0.4, 0.4, 0.5), (0.55, 0.4, 0.3))
-    add_box(stage, f"{root}/box_b", (-1.2, -0.9, 0.35), (0.6, 0.3, 0.7), (0.3, 0.45, 0.6))
-    add_box(stage, f"{root}/pillar", (-0.6, 1.1, 0.4), (0.2, 0.2, 0.8), (0.6, 0.6, 0.6))
-
-
-# Kachaka Shelf colliders, measured from the 3-layer mesh (metres, shelf frame,
-# z from the floor). The robot drives in along x between the caster rows at
-# y = +-0.195, under the bottom plate.
-SHELF_LEG_XY = (0.131, 0.195)
-SHELF_LEG_SIZE = (0.012, 0.046)
-# The bottom plate's collider starts at 0.107 m, not the mesh's 0.104 m: the
-# LiDAR scans at 0.1049 m and sees only the legs under a shelf, as the real
-# robot does, so a shelf is not mapped as a closed box the robot cannot leave.
-SHELF_PLATES = ((0.107, 0.121), (0.435, 0.452), (0.649, 0.666))  # bottom, middle, top (z ranges)
-SHELF_SIZE = (0.328, 0.488)  # x (width the robot drives across), y
-SHELF_CASTER_RADIUS = 0.03
+    for name, center, size, color in ROOM_BOXES:
+        add_box(stage, f"{root}/{name}", center, size, color)
 
 
 def add_shelf(stage: Usd.Stage, path: str, stl: Path, pose, cfg: SimpleNamespace) -> str:
@@ -283,7 +282,7 @@ def add_person(stage: Usd.Stage, path: str, pose, height: float = 1.7) -> None:
     head.CreateRadiusAttr(0.11 * k)
     head.CreateDisplayColorAttr([Gf.Vec3f(*skin)])
     UsdGeom.Xformable(head.GetPrim()).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 1.58 * k))
-    add_box(stage, f"{path}/collider", (0.0, 0.0, height / 2), (0.28 * k, 0.5 * k, height))
+    add_box(stage, f"{path}/collider", (0.0, 0.0, height / 2), (PERSON_COLLIDER[0] * k, PERSON_COLLIDER[1] * k, height))
     UsdGeom.Imageable(stage.GetPrimAtPath(f"{path}/collider")).MakeInvisible()
 
 

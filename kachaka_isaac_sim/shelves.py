@@ -1,6 +1,7 @@
 """Kachaka Shelves in the running simulation: poses, docking and undocking.
 
-Import only after SimulationApp has started.
+`Shelves` needs Isaac Sim (create it after SimulationApp has started);
+`ShelfSpec` and `dock_offset` are plain Python (scripts/fake_sim.py uses them).
 """
 
 from __future__ import annotations
@@ -8,12 +9,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from types import SimpleNamespace
-
-from isaacsim.core.experimental.prims import RigidPrim
-from pxr import Usd
+from typing import TYPE_CHECKING
 
 from .drive import Pose2D, quat_from_yaw, relative_pose, wrap_angle, yaw_from_quat
-from .world import ShelfJoint
+
+if TYPE_CHECKING:
+    from pxr import Usd
 
 
 @dataclass
@@ -36,6 +37,10 @@ def dock_offset(robot: Pose2D, shelf: Pose2D, tol_xy: float, tol_yaw: float) -> 
 
 class Shelves:
     def __init__(self, stage: Usd.Stage, specs: list[ShelfSpec], cfg: SimpleNamespace):
+        from isaacsim.core.experimental.prims import RigidPrim
+
+        from .world import ShelfJoint
+
         self.specs = specs
         self.cfg = cfg
         self.view = RigidPrim([s.path for s in specs])

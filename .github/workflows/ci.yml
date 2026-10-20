@@ -37,9 +37,11 @@ jobs:
       - run: uv run --no-project --with pytest --with numpy --with pyyaml --with pillow python -m pytest -v
 
   ros:
-    # The ROS 2 image: colcon test, then Nav2 and slam_toolbox with fake_robot
-    # standing in for the simulator.
+    # The ROS 2 image: colcon test, Nav2 and slam_toolbox with fake_robot
+    # standing in for the simulator, then the kachaka-api checks with
+    # scripts/fake_sim.py (the simulator's own ROS node and gRPC server).
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Fetch the Kachaka description
@@ -64,9 +66,17 @@ jobs:
           mkdir -p build/nav2_check
           docker run --rm -v "$PWD:/repo" -e CHECK_LOG_DIR=/repo/build/nav2_check "$ROS_IMAGE" \
             python3 /repo/tests/nav2_config_check.py
+      - name: kachaka-api check against the fake simulator
+        run: |
+          python3 scripts/build_usd.py --urdf-only
+          mkdir -p build/api_fake
+          docker run --rm -v "$PWD:/repo" -e CHECK_LOG_DIR=/repo/build/api_fake "$ROS_IMAGE" \
+            python3 /repo/tests/api_fake_check.py
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: nav2-check-logs
-          path: build/nav2_check
+          name: ros-check-logs
+          path: |
+            build/nav2_check
+            build/api_fake
           if-no-files-found: ignore

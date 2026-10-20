@@ -626,6 +626,8 @@ uv run --no-project --with pytest --with numpy --with pyyaml --with pillow pytho
 docker run --rm kachaka-isaac-sim-ros:jazzy bash -c \
     'colcon test --packages-select kachaka_sim_bringup && colcon test-result --verbose'
 docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/nav2_config_check.py
+python3 scripts/build_usd.py --urdf-only                # build/kachaka.urdf, for the next one
+docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/api_fake_check.py
 ```
 
 The unit tests on the URDF need `scripts/fetch_assets.py` first.
@@ -634,6 +636,20 @@ navigation.launch.py on the saved map, with `fake_robot` (a point robot in an
 empty room, `ros2 run kachaka_sim_bringup fake_robot`) in place of the
 simulator. It checks that every lifecycle manager comes up and that Nav2
 goals succeed.
+
+`tests/api_fake_check.py` runs `tests/api_check.py --no-cameras` (the
+kachaka-api regression check: move_to_pose, rotate_in_place, return_home,
+shelves, error codes, history and more) against `scripts/fake_sim.py`, with
+SLAM, Nav2 and the command server as for the simulator. `fake_sim.py` runs the
+simulator's own ROS node and gRPC server, and replaces Isaac Sim with a
+kinematic robot in a 2D copy of the default room: the LiDAR sees its walls,
+boxes, people and shelf legs, the charger and the shelves work, and the robot
+stops at whatever it would run into. Add `-e FAKE_SIM_ARGS=--trace` to log the
+robot's pose and command once a second (in `fake_sim.log` under `CHECK_LOG_DIR`). It has no physics and no cameras, so
+these still need the simulator: camera images and object detection, the
+cliff and collision detection, how the robot moves under physics (wheel slip,
+bumping into things, pushing a shelf), Isaac scenes, and switching to a saved
+map (`tests/api_map_check.py`, `navigation.launch.py`).
 
 CI has no GPU, so the simulator itself is checked locally:
 `scripts/smoke_test.sh --nav` starts it headless and runs

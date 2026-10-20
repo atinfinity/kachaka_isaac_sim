@@ -17,6 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
     && rm -rf /var/lib/apt/lists/*
 
+# The simulator's kachaka-api gRPC server and the official client, for
+# scripts/fake_sim.py and tests/api_check.py in CI. kachaka-api asks for
+# numpy>=2.2 only for its vision and geometry helpers, which neither uses, so
+# install it without dependencies and keep ROS's numpy.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip python3-pil \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --no-cache-dir --break-system-packages --no-deps \
+        kachaka-api==3.17.5.0 grpcio==1.66.1 "protobuf>=5.27.2,<6"
+
 WORKDIR /ws
 # kachaka_description (meshes for RViz), kachaka_interfaces (command action,
 # locations) and our bringup package.

@@ -330,6 +330,21 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   queues the call, which runs after the next `spin_once`, and the gRPC thread
   waits on its future.
 - **Sounds** have no audio: `PlaySound` publishes the name on `sim/sound`.
+- **Checked in CI without Isaac Sim.** `scripts/fake_sim.py` runs
+  `KachakaSimNode` and this server with a kinematic robot in a 2D copy of the
+  default room (`kachaka_isaac_sim/flat_world.py`: walls, boxes, people and
+  shelf legs as boxes for the LiDAR and for collisions), and mirrors
+  `SimRobot`'s limiter, front stop, odometry, IMU, battery, charger, shelf
+  towing and reset. The robot follows the limited command; only the yaw rate
+  lags (first order, 0.3 s, `--turn-lag`) so that `ROTATE_IN_PLACE` ends where
+  it does in Isaac Sim (the command server stops early by `ROTATE_LAG`). It
+  stops at obstacles instead of bumping into them; when it already overlaps
+  one (a shelf reset onto it), it moves freely until clear, as if physics had
+  pushed them apart. `--trace` logs the pose and the command once a second.
+  `tests/api_fake_check.py` brings it up with SLAM, Nav2 and `command_server`
+  and runs `tests/api_check.py --no-cameras`. Cameras, object detection, the
+  hazard sensors, physics effects, Isaac scenes and saved-map switching are
+  checked with the simulator only.
 
 ## Web dashboard
 
