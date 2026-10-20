@@ -1,6 +1,9 @@
 # Nav2 parameters for Kachaka, adapted from the Jazzy nav2_bringup defaults.
 # Changes: base_footprint frames, Kachaka footprint, /kachaka/lidar/scan,
-# speed limits of the real bridge (0.3 m/s, 1.57 rad/s), smaller inflation,
+# the simulator's autonomous top speed (0.8 m/s, est.; command_server sends
+# a 0.5 m/s speed_limit while a shelf is docked; a real Kachaka's bridge caps
+# cmd_vel at 0.3 m/s, set vx_max and the smoother to that there), the bridge's
+# 1.57 rad/s, smaller inflation,
 # and a collision-monitor height range that includes the LiDAR (z = 0.105 m).
 # Nav2 never drives backwards: the LiDAR covers only 240 deg to the front and
 # Kachaka has no rear range sensor (MPPI vx_min 0, smoother min x 0, and
@@ -114,7 +117,7 @@ controller_server:
       vx_std: 0.2
       vy_std: 0.2
       wz_std: 0.4
-      vx_max: 0.3
+      vx_max: 0.8
       vx_min: 0.0
       vy_max: 0.5
       wz_max: 1.57
@@ -370,7 +373,7 @@ velocity_smoother:
     stamp_smoothed_velocity_with_smoothing_time: False
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.3, 0.0, 1.57]
+    max_velocity: [0.8, 0.0, 1.57]
     min_velocity: [0.0, 0.0, -1.57]
     max_accel: [2.0, 0.0, 3.0]
     max_decel: [-2.0, 0.0, -3.0]
@@ -462,7 +465,11 @@ docking_server:
       transform_tolerance: 0.1
       projection_time: 5.0
       simulation_step: 0.1
-      dock_collision_threshold: 0.3
+      # The charger the robot backs onto stays in the local costmap, and the
+      # projected path ends inside it. The distance is to the controller's
+      # target, 0.25 m beyond the dock pose: skip the checks for the last
+      # ~0.35 m (0.3 here let a rare false collision fail every retry).
+      dock_collision_threshold: 0.6
 
 shelf_docking_server:
   # A second docking server for Kachaka Shelves (launch/shelf_docking.launch.py),

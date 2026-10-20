@@ -14,7 +14,7 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 ## 特徴
 
 - 公式 URDF とメッシュから変換したロボットモデル
-- 実機と同じ速度上限（0.3 m/s、1.57 rad/s）の差動二輪。車輪トルク制限とキャスター付き
+- 車輪トルク制限とキャスター付きの差動二輪。手動の cmd_vel は実機ブリッジと同じ 0.3 m/s、自律走行はそれより速い（[速度上限](#速度上限)）
 - センサー: 2D LiDAR、前後の RGB カメラ、ToF 深度カメラ、IMU
 - オドメトリ（統合・車輪）、TF、`joint_states`、`robot_description`、バージョンのスタブ
 - 充電器とバッテリー: 走行中は減り、充電器の上で充電されます
@@ -159,7 +159,7 @@ Nav2 を含む ROS 2 スタック（`NAV=true ... up slam` または `up navigat
 
 部屋にはカチャカシェルフが 1 台（`S01`、ホーム `S01_home`）と、ほかの場所が 1 つ（`L01`）あります。
 ロボットは前進でシェルフの下に入り、ピンを上げてキャスター付きのシェルフを牽引します
-（最高 0.5 m/s、`drive.max_linear_vel_towing`。Nav2 の上限 0.3 m/s のほうが低い）。
+（最高 0.5 m/s、[速度上限](#速度上限)）。
 牽引中は Nav2 のフットプリントがシェルフの大きさになります。
 アンドックではピンを下げて前進でシェルフから抜けます。前がふさがっているときは失敗します。
 
@@ -182,6 +182,28 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 ワールド上では数 cm ずれます。
 `robot_description` は実機と同じくロボット単体です。RViz では `shelf_markers` ノードが配信する
 `/shelf_markers`（MarkerArray）でシェルフを表示します。
+
+### 速度上限
+
+| | 単体 | シェルフ牽引中 |
+|---|---|---|
+| 手動: `manual_control/cmd_vel`、`set_robot_velocity` | 0.3 m/s | 0.3 m/s *（仮定）* |
+| 自律: Nav2、kachaka-api のコマンド（`sim/autonomous/cmd_vel`） | 0.8 m/s *（推定）* | 0.5 m/s *（推定）* |
+| 旋回（両方） | 1.57 rad/s | 1.57 rad/s（Nav2: 0.98 rad/s） |
+
+![1.0 m/s の指令に対し、シェルフ牽引中は manual_control/cmd_vel で 0.30 m/s、sim/autonomous/cmd_vel で 0.50 m/s、単体では 0.30 m/s と 0.80 m/s で頭打ちになる様子](docs/speed.gif)
+
+実機のブリッジは手動の cmd_vel を 0.3 m/s・1.57 rad/s にスケールします。カチャカの仕様の最高速度は
+単体 0.8 m/s、シェルフ付き 0.5 m/s で、実機で測るまで（#4）シミュレータは自律走行にこの値を使います。
+実機が牽引中に手動の上限も下げるかは分かっていません（牽引時の 0.5 m/s はどのみち 0.3 m/s より上です）。
+
+自律走行の指令はシミュレータ専用の topic `sim/autonomous/cmd_vel` で届きます。`nav_bridge` は
+`use_sim_time` が true のとき Nav2 の `/cmd_vel` をここへ転送し（実機では `manual_control/cmd_vel`）、
+`command_server` は MOVE_FORWARD や ROTATE_IN_PLACE などをこの topic で動かします。
+`manual_control/cmd_vel` に出した指令は誰からでも 0.3 m/s のままです。シェルフをドックしている間は
+`command_server` が Nav2 のコントローラに 0.5 m/s の `speed_limit` を送り（MPPI は旋回速度も同じ比率で下げ、
+1.57 → 0.98 rad/s）、アンドックで解除します。上限は `config/robot.yaml` の `drive.max_linear_vel`、
+`drive.max_linear_vel_auto`、`drive.max_linear_vel_towing` で、`tests/speed_limit_check.py` が測ります。
 
 ### 物体検出
 
@@ -348,7 +370,7 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 
 | Topic | 型 | 周期 |
 |---|---|---|
-| `manual_control/cmd_vel` | `geometry_msgs/Twist`（購読） | |
+| `manual_control/cmd_vel` | `geometry_msgs/Twist`（購読）、最高 0.3 m/s | |
 | `goal_pose` | `geometry_msgs/PoseStamped`（購読）: MOVE_TO_POSE | |
 | `odometry/odometry` | `nav_msgs/Odometry` | 20 Hz |
 | `wheel_odometry/wheel_odometry` | `nav_msgs/Odometry` | 20 Hz |
@@ -368,6 +390,7 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/shelf_detection` | `geometry_msgs/PoseArray`、ロボットから見たシェルフ位置（シミュレータのみ） | 20 Hz |
 | `sim/shelf_docked` | `std_msgs/String`、牽引中のシェルフ ID か空文字（シミュレータのみ、latched） | |
 | `sim/shelf_dock` | `std_srvs/SetBool` サービス、ピンの上げ下げ（シミュレータのみ） | |
+| `sim/autonomous/cmd_vel` | `geometry_msgs/Twist`（購読）、`nav_bridge` と `command_server` からの自律走行の指令、最高 0.8 m/s（シミュレータのみ、[速度上限](#速度上限)） | |
 | `sim/speech` | `std_msgs/String`、SPEAK と `tts_on_success` のテキスト（シミュレータのみ） | |
 | `sim/front_stop/state` | `std_msgs/String`、前方障害物停止の状態 JSON `{"enabled", "muted", "blocked"}`（シミュレータのみ、latched、変化時） | |
 | `sim/cliff` | `std_msgs/String`、段差センサーの状態 JSON `{"enabled", "paused", "over"}`（シミュレータのみ、latched、変化時） | |
@@ -394,6 +417,8 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 
 `ros2_ws/src/kachaka_sim_bringup` は `/kachaka` の topic にしか依存しないので、実機
 （`use_sim_time:=false`、`command_server:=false`）でも動くはずです。ただし未確認です。
+このとき `nav_bridge` は Nav2 の指令を `manual_control/cmd_vel` に送り、実機のブリッジは 0.3 m/s で頭打ちにします。
+`nav2_params.yaml` の MPPI の `vx_max` と velocity smoother の `max_velocity`（シミュレータ向けに 0.8 m/s）を合わせて下げてください。
 
 ## kachaka-api（gRPC）
 
@@ -576,12 +601,16 @@ docker run --rm kachaka-isaac-sim-ros:jazzy bash -c \
 docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/nav2_config_check.py
 python3 scripts/build_usd.py --urdf-only                # 次のテスト用の build/kachaka.urdf
 docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/api_fake_check.py
+docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/speed_limit_check.py
 ```
 
 URDF の単体テストには先に `scripts/fetch_assets.py` が必要です。
 `tests/nav2_config_check.py` はシミュレータの代わりに `fake_robot`（何もない部屋の中の点ロボット、
 `ros2 run kachaka_sim_bringup fake_robot`）を使い、slam.launch.py（Nav2 付き）、続いて保存した地図で
 navigation.launch.py を起動します。すべての lifecycle manager が active になり、Nav2 のゴールが成功することを確かめます。
+
+`tests/speed_limit_check.py` は `scripts/fake_sim.py` で、シェルフあり・なしの手動と自律の最高速度を測ります
+（`--external` を付けると、`--shelf 0 0 0 --no-people` で起動したシミュレータを確かめます）。
 
 `tests/api_fake_check.py` は `scripts/fake_sim.py` に対して、シミュレータと同じく SLAM・Nav2・コマンドサーバを
 起動し、`tests/api_check.py --no-cameras`（kachaka-api の回帰テスト: move_to_pose、rotate_in_place、return_home、

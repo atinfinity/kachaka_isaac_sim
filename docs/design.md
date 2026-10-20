@@ -33,8 +33,10 @@ applications. Synthetic data generation is a secondary use.
   Drive wheels use sphere colliders (smooth rolling on any floor mesh).
 - Wheels are articulation joints driven by velocity; torque limited to a
   realistic value (Kachaka Pro motor max 2 Nm).
-- Velocity limits: 0.3 m/s, 1.57 rad/s (real bridge full scale), configurable
-  up to 0.8 m/s; 0.5 m/s when towing a shelf. Accel 2 m/s², 3 rad/s² *(est.)*.
+- Velocity limits: manual cmd_vel 0.3 m/s, 1.57 rad/s (real bridge full
+  scale); autonomous motion (`sim/autonomous/cmd_vel`) 0.8 m/s, the spec top
+  speed *(est.)*; both at most 0.5 m/s while towing a shelf, the spec top speed
+  with a shelf *(est.)*. Accel 2 m/s², 3 rad/s² *(est.)*. See Speed limits below.
 
 ## ROS 2 interface (namespace `kachaka`)
 Same names, types and QoS as `kachaka_grpc_ros2_bridge`; optional remap to
@@ -42,7 +44,8 @@ generic names (`/cmd_vel`, `/scan`, `/odom`).
 
 | Topic | Type | Notes |
 |---|---|---|
-| `manual_control/cmd_vel` | Twist (sub) | clamped to limits |
+| `manual_control/cmd_vel` | Twist (sub) | clamped to the manual limits |
+| `sim/autonomous/cmd_vel` | Twist (sub) | sim-only, clamped to the autonomous limits, see Speed limits below |
 | `lidar/scan` | LaserScan | PhysX raycasts, 240°, 400 pts, 10 Hz, 0.1–10 m *(est.)* |
 | `front_camera/image_raw`, `camera_info` | Image, CameraInfo | 640×480, 10 Hz (lowered from 1280×720 for real-time) |
 | `back_camera/...` | same | |
@@ -65,10 +68,48 @@ itself: `kachaka_command/execute` (all command types, see Commands below), `goal
 `layout/shelves/list` and `auto_homing/set_enabled`.
 | `robot_description`, `joint_states` | | |
 
+### Speed limits
+
+The real robot has two speed regimes: its bridge scales manual cmd_vel to
+0.3 m/s and 1.57 rad/s, while its own autonomous motion reaches the spec top
+speed, 0.8 m/s alone and 0.5 m/s with a shelf. In the simulator, Nav2's
+commands reach the robot through `nav_bridge`, so on `manual_control/cmd_vel`
+they could not be told apart from manual ones.
+
+- **Two inputs.** `ros_node` also subscribes the simulator-only
+  `sim/autonomous/cmd_vel` and hands the sim loop `(v, w, autonomous)`.
+  `VelocityCommand.set_target(..., autonomous=...)` clamps the linear speed
+  with `DriveLimits.linear_cap(autonomous, towing)`: `max_linear_vel` (0.3)
+  for manual commands, `max_linear_vel_auto` (0.8 *(est.)*) for autonomous
+  ones, and at most `max_linear_vel_towing` (0.5 *(est.)*) for both while the
+  limiter's `towing` flag is set (`set_shelf_docked` in `robot.py` and
+  `fake_sim.py`). The angular cap and the accelerations stay the same.
+- **Who uses which.** `nav_bridge` forwards Nav2's `/cmd_vel` to
+  `sim/autonomous/cmd_vel` when `use_sim_time` is true (`bridge.launch.py`
+  sets its `cmd_vel_topic`), and to `manual_control/cmd_vel` for a real robot.
+  `command_server` (simulator only) drives MOVE_FORWARD, ROTATE_IN_PLACE,
+  undocking and the like on `sim/autonomous/cmd_vel`. The gRPC
+  `SetRobotVelocity`, teleop and anything else on `manual_control/cmd_vel`
+  stay at 0.3 m/s.
+- **Nav2 while towing.** MPPI's `vx_max` and the smoother's maximum are 0.8
+  m/s. On `sim/shelf_docked`, and every second since the controller server
+  subscribes volatile, `command_server` publishes `nav2_msgs/SpeedLimit` on
+  `speed_limit`: 0.5 m/s absolute while towing, 0 (no limit) otherwise. MPPI
+  scales `vx_max` and `wz_max` by the same ratio, so Nav2 also turns slower
+  with a shelf (0.98 rad/s); the docking servers have their own slow speeds.
+- **Wheel joint limit.** The official URDF limits the drive wheels to 10
+  rad/s, 0.45 m/s at the 0.045 m radius, which would cap the physics below
+  0.5 and 0.8 m/s. `_configure_drives` in `robot.py` raises the wheels' max
+  joint velocity to 1.2 x (the top linear cap + full-rate turning) / radius.
+- **Unknowns.** Whether the real robot lowers its manual cap while towing is
+  not published (the towing cap is above 0.3 m/s anyway), and all autonomous
+  values are estimates until measured (#4).
+
 ### Front obstacle stop
 
 The real robot stops by itself in front of an obstacle (an app setting turns
-it off). Every velocity source ends on `manual_control/cmd_vel`, so the
+it off). Every velocity source ends on `manual_control/cmd_vel` or
+`sim/autonomous/cmd_vel`, so the
 simulator applies the stop where it limits the velocity (`robot.py`,
 `safety.py`):
 
@@ -167,7 +208,8 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   0.71 at 30 Hz.
 - **QoS.** Odometry, wheel odometry, scan, IMU and cameras use SensorDataQoS
   like the real bridge. Nav2 expects reliable `/odom`, so `kachaka_sim_bringup`
-  relays it (`nav_bridge`), together with `/cmd_vel` → `manual_control/cmd_vel`.
+  relays it (`nav_bridge`), together with `/cmd_vel` → `sim/autonomous/cmd_vel`
+  (`manual_control/cmd_vel` with `use_sim_time:=false`, for a real robot).
 - **No reversing in Nav2.** The LiDAR covers 240° to the front and nothing
   senses range behind the robot, so MPPI `vx_min` and the velocity smoother's
   minimum x are 0, and the behavior trees drop the `BackUp` recovery.
@@ -232,8 +274,8 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
 - **Docking.** `sim/shelf_dock` raises the pin when the robot is within 5 cm
   and 0.2 rad of that pose (either direction along the shelf's x axis) and
   joins robot and shelf with a fixed joint; lowering the pin removes it. While
-  towing, the speed is capped at `drive.max_linear_vel_towing` (0.5 m/s; Nav2's
-  0.3 m/s limit is lower) and the LiDAR ignores the towed shelf.
+  towing, the speed is capped at `drive.max_linear_vel_towing` (0.5 m/s, see
+  Speed limits below) and the LiDAR ignores the towed shelf.
 - **LiDAR sees the legs only.** The scan plane (z 0.105 m) lies just under the
   bottom plate, so its collider starts at 0.107 m. Otherwise the shelf showed
   up in the map as a closed box and Nav2 could not plan out from under it.
@@ -264,7 +306,7 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   static layer reads `/nav_map`. A robot is never inside an obstacle, so this
   holds without a shelf too.
 - **Undocking** lowers the pin and drives 0.40 m forward at 0.15 m/s on
-  `manual_control/cmd_vel`. It refuses (error −9) when the LiDAR sees
+  `sim/autonomous/cmd_vel`. It refuses (error −9) when the LiDAR sees
   something in that path, since the robot does not reverse.
 - **RViz.** `robot_description` stays the official URDF without the shelf, as
   on the real robot. `shelf_markers` draws the shelves as a MarkerArray on

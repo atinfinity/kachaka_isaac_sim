@@ -14,11 +14,11 @@ from types import SimpleNamespace
 from isaacsim.core.experimental.prims import Articulation
 
 from .drive import (
-    DriveLimits,
     NoisyOdometry,
     Pose2D,
     VelocityCommand,
     WheelOdometry,
+    drive_limits,
     quat_from_yaw,
     relative_pose,
     wheel_speeds,
@@ -51,8 +51,7 @@ class SimRobot:
         self._configure_drives()
 
         d = cfg.drive
-        self.limiter = VelocityCommand(DriveLimits(
-            d.max_linear_vel, d.max_angular_vel, d.max_linear_accel, d.max_angular_accel, d.cmd_vel_timeout))
+        self.limiter = VelocityCommand(drive_limits(d))
         self.wheel_odom = WheelOdometry(d.wheel_radius, d.wheel_separation)
         self.fused_odom = NoisyOdometry(cfg.odometry.fused_noise_xy, cfg.odometry.fused_noise_yaw, seed)
         self.odom_period = 1.0 / cfg.odometry.rate
@@ -101,22 +100,31 @@ class SimRobot:
         self.next_imu = start_time
 
     def _configure_drives(self) -> None:
-        """Wheel velocity drives limited to the real motor torque."""
+        """Wheel velocity drives limited to the real motor torque.
+
+        The official URDF limits the wheels to 10 rad/s (0.45 m/s), below the
+        autonomous top speed: raise the limit to what the fastest cap needs
+        while turning at full rate, with some margin."""
         d = self.cfg.drive
         max_eff = self.art.get_dof_max_efforts().numpy()
+        max_vel = self.art.get_dof_max_velocities().numpy()
         stiff, damp = (g.numpy() for g in self.art.get_dof_gains())
+        top = max(d.max_linear_vel, getattr(d, "max_linear_vel_auto", None) or 0.0)
+        wheel_top = 1.2 * (top + d.max_angular_vel * d.wheel_separation / 2) / d.wheel_radius
         for i in (self.i_left, self.i_right):
             max_eff[0, i] = d.wheel_max_torque
+            max_vel[0, i] = max(max_vel[0, i], wheel_top)
             stiff[0, i] = 0.0
             damp[0, i] = d.wheel_damping
         self.art.set_dof_max_efforts(max_eff)
+        self.art.set_dof_max_velocities(max_vel)
         self.art.set_dof_gains(stiffnesses=stiff, dampings=damp)
 
     # --- physics callbacks ----------------------------------------------------
     def pre_step(self, dt: float) -> None:
         cmd = self.node.take_cmd()
         if cmd is not None and self.t >= self.hold_until:
-            self.limiter.set_target(cmd[0], cmd[1], self.t)
+            self.limiter.set_target(*cmd[:2], self.t, autonomous=cmd[2])
         if self.node.paused:  # a step or a collision: stop at once
             self.limiter.target = self.limiter.current = (0.0, 0.0)
         self.front_blocked = self.front_stop.update(self.limiter.current[0])
@@ -143,9 +151,7 @@ class SimRobot:
         sh = self.shelves
         ok, msg = sh.dock(self.gt) if dock else sh.undock()
         if ok:
-            d = self.cfg.drive
-            self.limiter.limits.max_linear_vel = (min(d.max_linear_vel, d.max_linear_vel_towing) if self.towing
-                                                  else d.max_linear_vel)
+            self.limiter.towing = self.towing
             self.lidar.ignore = {sh.docked_path} if self.towing else set()
             self.cliff_sensors.ignore = self.lidar.ignore
             self.node.publish_shelf_docked(sh.specs[sh.docked].id if self.towing else "")

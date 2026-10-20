@@ -5,7 +5,7 @@ the simulator's object detections to the real bridge's
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -20,6 +20,10 @@ def generate_launch_description():
             parameters=[{
                 "use_sim_time": LaunchConfiguration("use_sim_time"),
                 "kachaka_namespace": LaunchConfiguration("kachaka_namespace"),
+                # The simulator caps autonomous motion apart from manual cmd_vel.
+                "cmd_vel_topic": PythonExpression([
+                    "'sim/autonomous/cmd_vel' if '", LaunchConfiguration("use_sim_time"),
+                    "'.lower() == 'true' else 'manual_control/cmd_vel'"]),
             }],
         ),
         Node(

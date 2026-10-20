@@ -14,7 +14,7 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 ## Features
 
 - Robot model converted from the official URDF and meshes.
-- Differential drive with the real speed limits (0.3 m/s, 1.57 rad/s), torque-limited wheels and casters.
+- Differential drive with torque-limited wheels and casters; manual cmd_vel at the real bridge's 0.3 m/s, autonomous motion faster (see [Speed limits](#speed-limits)).
 - Sensors: 2D LiDAR, front/back RGB cameras, ToF depth camera, IMU.
 - Odometry (fused and wheel), TF, `joint_states`, `robot_description`, version stub.
 - Charging dock and battery: the battery drains while driving and charges on the dock.
@@ -172,8 +172,8 @@ Battery rates and the charger's size are estimates (`config/robot.yaml`).
 
 The room has one Kachaka Shelf (`S01`, home location `S01_home`) and one other
 location (`L01`). The robot drives in under a shelf forward, raises its pin and
-tows the shelf on its casters (≤ 0.5 m/s, `drive.max_linear_vel_towing`; Nav2's
-own limit of 0.3 m/s is lower). Nav2's footprint grows to the shelf's while towing.
+tows the shelf on its casters (≤ 0.5 m/s, see [Speed limits](#speed-limits)).
+Nav2's footprint grows to the shelf's while towing.
 Undocking lowers the pin and drives forward out of the shelf; it fails if
 something blocks the way.
 
@@ -196,6 +196,33 @@ Shelves are listed on `layout/shelves/list` and their homes on
 where SLAM puts the location, a few centimetres off the world.
 `robot_description` is the robot alone, as on the real Kachaka; RViz draws the
 shelves from `/shelf_markers` (MarkerArray, published by `shelf_markers`).
+
+### Speed limits
+
+| | Alone | Towing a shelf |
+|---|---|---|
+| Manual: `manual_control/cmd_vel`, `set_robot_velocity` | 0.3 m/s | 0.3 m/s *(assumed)* |
+| Autonomous: Nav2, kachaka-api commands (`sim/autonomous/cmd_vel`) | 0.8 m/s *(est.)* | 0.5 m/s *(est.)* |
+| Turning (both) | 1.57 rad/s | 1.57 rad/s (Nav2: 0.98 rad/s) |
+
+![1.0 m/s commands with a shelf docked reach 0.30 m/s on manual_control/cmd_vel and 0.50 m/s on sim/autonomous/cmd_vel; alone, 0.30 and 0.80 m/s](docs/speed.gif)
+
+The real bridge scales manual cmd_vel to 0.3 m/s and 1.57 rad/s. The
+Kachaka spec gives a top speed of 0.8 m/s alone and 0.5 m/s with a shelf;
+the simulator uses these for autonomous motion until they are measured on a
+real robot (#4). Whether the real robot also lowers the manual cap while
+towing is not known, and the 0.5 m/s towing cap is above 0.3 m/s anyway.
+
+Autonomous motion reaches the simulator on the simulator-only topic
+`sim/autonomous/cmd_vel`: `nav_bridge` forwards Nav2's `/cmd_vel` there when
+`use_sim_time` is true (to `manual_control/cmd_vel` for a real robot), and
+`command_server` drives MOVE_FORWARD, ROTATE_IN_PLACE and the like on it.
+Anything published on `manual_control/cmd_vel` stays at 0.3 m/s. While a shelf
+is docked, `command_server` also sends Nav2's controller a 0.5 m/s
+`speed_limit` (MPPI scales its turn rate with it, 1.57 → 0.98 rad/s) and
+lifts it after undocking. The caps are `drive.max_linear_vel`,
+`drive.max_linear_vel_auto` and `drive.max_linear_vel_towing` in
+`config/robot.yaml`; `tests/speed_limit_check.py` measures them.
 
 ### Object detection
 
@@ -382,7 +409,7 @@ Namespace `/kachaka`, as on the real robot.
 
 | Topic | Type | Rate |
 |---|---|---|
-| `manual_control/cmd_vel` | `geometry_msgs/Twist` (subscribed) | |
+| `manual_control/cmd_vel` | `geometry_msgs/Twist` (subscribed), ≤ 0.3 m/s | |
 | `goal_pose` | `geometry_msgs/PoseStamped` (subscribed): MOVE_TO_POSE | |
 | `odometry/odometry` | `nav_msgs/Odometry` | 20 Hz |
 | `wheel_odometry/wheel_odometry` | `nav_msgs/Odometry` | 20 Hz |
@@ -402,6 +429,7 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/shelf_detection` | `geometry_msgs/PoseArray`, shelves relative to the robot (simulator only) | 20 Hz |
 | `sim/shelf_docked` | `std_msgs/String`, id of the towed shelf or empty (simulator only, latched) | |
 | `sim/shelf_dock` | `std_srvs/SetBool` service: raise or lower the pin (simulator only) | |
+| `sim/autonomous/cmd_vel` | `geometry_msgs/Twist` (subscribed), autonomous motion from `nav_bridge` and `command_server`, ≤ 0.8 m/s (simulator only, see [Speed limits](#speed-limits)) | |
 | `sim/speech` | `std_msgs/String`, text of SPEAK and `tts_on_success` (simulator only) | |
 | `sim/front_stop/state` | `std_msgs/String`, JSON `{"enabled", "muted", "blocked"}` of the front obstacle stop (simulator only, latched, on change) | |
 | `sim/front_stop/set_enabled`, `sim/front_stop/mute` | `std_srvs/SetBool` services: switch the front obstacle stop (the app setting), or mute it while a command runs (`command_server`) (simulator only) | |
@@ -430,7 +458,9 @@ decisions behind them.
 
 `ros2_ws/src/kachaka_sim_bringup` only depends on the `/kachaka` topics, so it
 should also work with a real robot (`use_sim_time:=false`, `command_server:=false`). This has not been
-tested.
+tested. `nav_bridge` then sends Nav2's commands to `manual_control/cmd_vel`,
+which the real bridge caps at 0.3 m/s: lower MPPI's `vx_max` and the velocity
+smoother's `max_velocity` in `nav2_params.yaml` (0.8 m/s for the simulator) to match.
 
 ## kachaka-api (gRPC)
 
@@ -628,6 +658,7 @@ docker run --rm kachaka-isaac-sim-ros:jazzy bash -c \
 docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/nav2_config_check.py
 python3 scripts/build_usd.py --urdf-only                # build/kachaka.urdf, for the next one
 docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/api_fake_check.py
+docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/speed_limit_check.py
 ```
 
 The unit tests on the URDF need `scripts/fetch_assets.py` first.
@@ -636,6 +667,10 @@ navigation.launch.py on the saved map, with `fake_robot` (a point robot in an
 empty room, `ros2 run kachaka_sim_bringup fake_robot`) in place of the
 simulator. It checks that every lifecycle manager comes up and that Nav2
 goals succeed.
+
+`tests/speed_limit_check.py` measures the top speeds of manual and autonomous
+commands with and without a docked shelf in `scripts/fake_sim.py` (add
+`--external` to check a running simulator started with `--shelf 0 0 0 --no-people`).
 
 `tests/api_fake_check.py` runs `tests/api_check.py --no-cameras` (the
 kachaka-api regression check: move_to_pose, rotate_in_place, return_home,

@@ -85,6 +85,7 @@ from kachaka_interfaces.msg import (
     ShelfSize,
 )
 from nav2_msgs.action import DockRobot, NavigateToPose
+from nav2_msgs.msg import SpeedLimit
 from nav2_msgs.srv import ClearEntireCostmap, LoadMap
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
@@ -145,7 +146,10 @@ UNDOCK_SPEED = 0.15  # m/s
 UNDOCK_CLEARANCE = 0.10  # m, free space wanted beyond the undock distance
 STAGING_DISTANCE = 0.9  # m, shelf_docking_server's staging_x_offset (negated)
 STAGING_BUSY_COST = 50  # global costmap value (0-100) above which the other side is tried first
-MAX_SPEED = 0.3  # m/s, the simulator's cmd_vel limit (config/robot.yaml drive.max_linear_vel)
+# Autonomous top speed (config/robot.yaml drive.max_linear_vel_auto) and the
+# cap while towing a shelf (drive.max_linear_vel_towing); both est. until measured.
+MAX_SPEED = 0.8  # m/s
+MAX_TOWING_SPEED = 0.5  # m/s
 MOVE_SPEED = 0.2  # m/s, MOVE_FORWARD when no speed is given
 MIN_SPEED = 0.05  # m/s, slowest speed while closing in on the distance
 STOP_CLEARANCE = 0.05  # m, MOVE_FORWARD stops this far from what the LiDAR sees
@@ -271,7 +275,11 @@ class CommandServer(Node):
                                for c in ("local_costmap", "global_costmap")]
         self.clear_clients = [self.create_client(ClearEntireCostmap, f"{c}/clear_entirely_{c}", callback_group=group)
                               for c in ("local_costmap", "global_costmap")]
-        self.cmd_pub = self.create_publisher(Twist, f"{prefix}/manual_control/cmd_vel", 10)
+        # The simulator caps autonomous motion apart from manual cmd_vel.
+        self.cmd_pub = self.create_publisher(Twist, f"{prefix}/sim/autonomous/cmd_vel", 10)
+        # Nav2's controller_server slows down while a shelf is docked. It
+        # subscribes volatile, so the limit is sent again every second.
+        self.speed_limit_pub = self.create_publisher(SpeedLimit, "speed_limit", 10)
         self.speech_pub = self.create_publisher(String, f"{prefix}/sim/speech", 10)
         self.create_subscription(PoseStamped, f"{prefix}/sim/charger_pose", self._on_charger, LATCHED,
                                  callback_group=group)
@@ -299,8 +307,8 @@ class CommandServer(Node):
                                  self._on_odom, sensor, callback_group=group)
         self.create_subscription(OccupancyGrid, "global_costmap/costmap", lambda m: setattr(self, "costmap", m),
                                  LATCHED, callback_group=group)
-        self.create_subscription(Twist, f"{prefix}/manual_control/cmd_vel", self._on_cmd_vel,
-                                 sensor, callback_group=group)
+        for topic in ("manual_control/cmd_vel", "sim/autonomous/cmd_vel"):
+            self.create_subscription(Twist, f"{prefix}/{topic}", self._on_cmd_vel, sensor, callback_group=group)
         self.create_service(SetBool, f"{prefix}/auto_homing/set_enabled", self._on_set_auto_homing,
                             callback_group=group)
         self.dock_client = ActionClient(self, DockRobot, "dock_robot", callback_group=group)
@@ -329,6 +337,7 @@ class CommandServer(Node):
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
             callback_group=group)
         self.create_timer(1.0, self._check_auto_homing, callback_group=group)
+        self.create_timer(1.0, self._publish_speed_limit, callback_group=group)
         self.create_timer(0.05, self._relay_shelf, callback_group=group)
 
     # --- inputs ---------------------------------------------------------------
@@ -364,6 +373,18 @@ class CommandServer(Node):
                     client.call_async(ClearEntireCostmap.Request())
         if changed:
             self.get_logger().info(f"towing {self.docked_id}" if self.docked_id else "not towing")
+            self._publish_speed_limit()
+
+    def _max_speed(self) -> float:
+        return MAX_TOWING_SPEED if self.docked_id else MAX_SPEED
+
+    def _publish_speed_limit(self) -> None:
+        """Absolute limit while towing; 0 (none: Nav2's own vx_max) otherwise."""
+        msg = SpeedLimit()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.percentage = False
+        msg.speed_limit = MAX_TOWING_SPEED if self.docked_id else 0.0
+        self.speed_limit_pub.publish(msg)
 
     def _on_front_stop(self, msg: String) -> None:
         self.front_blocked = bool(json.loads(msg.data).get("blocked"))
@@ -914,7 +935,7 @@ class CommandServer(Node):
         With `look_ahead`, stop short of anything the LiDAR sees ahead."""
         if self.odom is None:
             return ERROR_SERVER_UNAVAILABLE, "no odometry"
-        speed = min(abs(speed), MAX_SPEED)
+        speed = min(abs(speed), self._max_speed())
         start = self.odom
         deadline = self._now() + 3.0 * abs(distance) / speed + 2.0
         blocked_since = None
@@ -1012,7 +1033,7 @@ class CommandServer(Node):
 
     def _move_by_velocity(self, stopped, velocity: float, duration: float) -> tuple[int, str]:
         cmd = Twist()
-        cmd.linear.x = max(-MAX_SPEED, min(MAX_SPEED, velocity))
+        cmd.linear.x = max(-self._max_speed(), min(self._max_speed(), velocity))
         with self._muted_sensors():
             end = self._now() + duration
             try:

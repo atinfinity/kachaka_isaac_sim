@@ -10,9 +10,14 @@ ros:
 drive:
   wheel_radius: 0.045       # m, official URDF
   wheel_separation: 0.200   # m, official URDF
-  max_linear_vel: 0.3       # m/s, full scale of the real bridge (spec top speed 0.8)
+  # Manual cmd_vel (manual_control/cmd_vel, SetRobotVelocity) is capped at the
+  # real bridge's full scale. Autonomous motion (Nav2 through nav_bridge and
+  # command_server, on the simulator-only sim/autonomous/cmd_vel) goes up to
+  # the spec top speed. Both are capped at the towing speed with a shelf.
+  max_linear_vel: 0.3       # m/s, manual: full scale of the real bridge
+  max_linear_vel_auto: 0.8  # m/s, autonomous: spec top speed (est. until measured, #4)
+  max_linear_vel_towing: 0.5  # m/s, with a shelf: spec top speed (est. until measured, #4)
   max_angular_vel: 1.57     # rad/s, full scale of the real bridge
-  max_linear_vel_towing: 0.5  # m/s, cap while towing a shelf (spec top speed with a shelf)
   max_linear_accel: 2.0     # m/s^2 (est.)
   max_angular_accel: 3.0    # rad/s^2 (est.)
   wheel_max_torque: 2.0     # Nm per wheel, Kachaka Pro max motor torque
