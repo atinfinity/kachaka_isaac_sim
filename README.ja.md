@@ -574,12 +574,24 @@ uv run --no-project --with pytest --with numpy --with pyyaml --with pillow pytho
 docker run --rm kachaka-isaac-sim-ros:jazzy bash -c \
     'colcon test --packages-select kachaka_sim_bringup && colcon test-result --verbose'
 docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/nav2_config_check.py
+python3 scripts/build_usd.py --urdf-only                # 次のテスト用の build/kachaka.urdf
+docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/api_fake_check.py
 ```
 
 URDF の単体テストには先に `scripts/fetch_assets.py` が必要です。
 `tests/nav2_config_check.py` はシミュレータの代わりに `fake_robot`（何もない部屋の中の点ロボット、
 `ros2 run kachaka_sim_bringup fake_robot`）を使い、slam.launch.py（Nav2 付き）、続いて保存した地図で
 navigation.launch.py を起動します。すべての lifecycle manager が active になり、Nav2 のゴールが成功することを確かめます。
+
+`tests/api_fake_check.py` は `scripts/fake_sim.py` に対して、シミュレータと同じく SLAM・Nav2・コマンドサーバを
+起動し、`tests/api_check.py --no-cameras`（kachaka-api の回帰テスト: move_to_pose、rotate_in_place、return_home、
+シェルフ、エラーコード、履歴など）を実行します。`fake_sim.py` はシミュレータの ROS ノードと gRPC サーバを
+そのまま使い、Isaac Sim の代わりに既定の部屋を 2D にした世界で運動学モデルのロボットを動かします。
+LiDAR は壁・箱・人・シェルフの脚を見て、充電器とシェルフも動き、ロボットはぶつかる手前で止まります。
+`-e FAKE_SIM_ARGS=--trace` を付けると、ロボットの姿勢と指令を 1 秒ごとに記録します（`CHECK_LOG_DIR` の `fake_sim.log`）。
+物理とカメラはないため、次はシミュレータでの確認が必要です: カメラ画像と物体検出、段差と衝突の検知、
+物理での動き（車輪の滑り、衝突、シェルフを押すこと）、Isaac のシーン、保存済み地図への切り替え
+（`tests/api_map_check.py`、`navigation.launch.py`）。
 
 CI には GPU がないため、シミュレータ自体はローカルで確認します。`scripts/smoke_test.sh --nav` は
 シミュレータをヘッドレスで起動して `tests/ros_smoke_check.py` を実行し、続いて SLAM + Nav2 で
