@@ -8,6 +8,7 @@
 #                                        # (both views follow the robot)
 #   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
 #   scripts/record_demo.sh front_stop  # front obstacle stop on/off at a wall -> build/front_stop.mp4
+#   scripts/record_demo.sh cliff  # step sensors at a drop, power button, a collision -> docs/cliff.gif
 #
 # Needs the ROS image (docker compose -f docker/compose.yaml build) and
 # ffmpeg on the host. Runs headless: RViz draws into Xvfb inside the container.
@@ -65,7 +66,15 @@ case "$DEMO" in
         # Captions go to the host's build/ directory, written as the host user.
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_front_stop_demo.py /build/front_stop/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|scene <world>|api|front_stop]" >&2; exit 2 ;;
+    cliff)
+        GIF=docs/cliff.gif
+        VIEW=(0.6 -1.8 2.2 0.6 0.6 0.0)  # from the south (+x right like RViz), over the drop and the north wall
+        SIM_ARGS=(--drop 1.0 0.0 0.4 0.8)
+        LABEL="RViz: step sensors and collisions"
+        COMPOSE_ARGS=(--height 540)
+        EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
+        RUN="python3 /tests/ros_cliff_demo.py /build/cliff/captions.csv" ;;
+    *) echo "usage: $0 [nav|dock|shelf|scene <world>|api|front_stop|cliff]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 DISPLAY_NUM=99

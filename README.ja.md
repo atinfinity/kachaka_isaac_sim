@@ -226,6 +226,8 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 - 電源ボタンは `sim/power_button`（`std_srvs/Trigger`）です。kachaka-api の `RestartRobot` と
   `sim/reset` でも復帰します。センサーがまだ段差の上にある間は前進だけを止め、後退と旋回はできます。
 
+![段差の手前で 21051/21052 を出して一時停止し、電源ボタンで再開、後退した後、前方停止を切って北の壁に衝突（sim/collision に 1 件）](docs/cliff.gif)
+
 標準のワールドは平らです。`--drop X Y SX SY` で (X, Y) を中心に SX × SY m の穴を床に開けます
 （深さ 0.15 m、`drop.depth`）。複数指定できます。
 

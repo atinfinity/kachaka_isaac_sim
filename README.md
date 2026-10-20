@@ -245,6 +245,8 @@ The simulator does the same:
   and `sim/reset` also resume. While a sensor still looks over the edge, forward motion
   stays blocked; backing up and turning are allowed.
 
+![The robot pauses at the edge of a drop with errors 21051 and 21052, resumes with the power button, backs up, and drives into the north wall with the front stop off: one event on sim/collision](docs/cliff.gif)
+
 The built-in worlds are flat. `--drop X Y SX SY` cuts an SX × SY m hole centred
 at (X, Y) into the floor, 0.15 m deep (`drop.depth`); repeat it for more:
 
