@@ -29,10 +29,11 @@ from rclpy.qos import (
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import BatteryState, CameraInfo, Image, Imu, JointState, LaserScan
 from std_msgs.msg import String
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 from tf2_msgs.msg import TFMessage
 
 from .drive import Pose2D, quat_from_yaw
+from .hazards import ERROR_COLLISION, ERROR_EMERGENCY_STOP, ERROR_PAUSED, ERROR_STEP_DETECTED
 from .urdf_tools import read_joints
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
@@ -60,6 +61,8 @@ class KachakaSimNode:
         self.cmd: tuple[float, float] | None = None  # newest Twist, consumed by the sim loop
         self.shelf_reset_handler = None  # shelf_id -> (ok, message); set when the world has shelves
         self.emergency_stop = False  # set by the gRPC SetEmergencyStop: velocity commands are ignored
+        self.cliff = None  # hazards.Cliff, set by the sim
+        self.collision_stopped = False  # collision.stop: a collision stopped the robot
         self._pending: list = []  # (function, Future) to run in the sim loop, see run_in_sim
         self._pending_lock = threading.Lock()
         # Sees every message published here: tap(name, msg...). Set by the
@@ -114,6 +117,15 @@ class KachakaSimNode:
         self.front_stop_pub = n.create_publisher(String, f"{ns}/sim/front_stop/state", LATCHED)
         n.create_service(SetBool, f"{ns}/sim/front_stop/set_enabled", self._on_front_stop_enabled)
         n.create_service(SetBool, f"{ns}/sim/front_stop/mute", self._on_front_stop_mute)
+        # Hazards (simulator only): step sensors, collisions and the errors
+        # they raise (GetError). The power button resumes from a pause.
+        self.cancel_pub = n.create_publisher(String, f"{ns}/sim/command/cancel", 10)
+        self.cliff_pub = n.create_publisher(String, f"{ns}/sim/cliff", LATCHED)
+        self.collision_pub = n.create_publisher(String, f"{ns}/sim/collision", 10)
+        self.errors_pub = n.create_publisher(String, f"{ns}/sim/errors", LATCHED)
+        self._cliff_state = None
+        self._errors = None
+        n.create_service(Trigger, f"{ns}/sim/power_button", self._on_power_button)
         # Torch levels (simulator only; the real robot cannot read them back).
         self.torches = None  # torches.Torches, set by the sim
         self.torch_pub = n.create_publisher(String, f"{ns}/sim/torch", LATCHED)
@@ -205,6 +217,9 @@ class KachakaSimNode:
         # can be changed right here.
         self.reset_handler(bool(req.data))
         self.emergency_stop = False
+        self.collision_stopped = False
+        if self.cliff is not None:
+            self.cliff.reset()
         self.manual_control_enabled = True
         self.cmd = None
         if self.torches is not None:
@@ -215,8 +230,77 @@ class KachakaSimNode:
         info = {"id": self.reset_count, "clear_map": bool(req.data)}
         self.reset_pub.publish(String(data=json.dumps(info)))
         self.tap("reset", info)
+        self.publish_errors()
+        self.publish_cliff()
         res.success, res.message = True, json.dumps(info)
         return res
+
+    def _on_power_button(self, req: Trigger.Request, res: Trigger.Response) -> Trigger.Response:
+        res.success = self.power_button()
+        res.message = "resumed" if res.success else "not paused"
+        return res
+
+    # --- hazards and errors ---------------------------------------------------
+    @property
+    def paused(self) -> bool:
+        """Stopped by a step or a collision until the power button."""
+        return self.collision_stopped or (self.cliff is not None and self.cliff.paused)
+
+    def error_codes(self) -> list[int]:
+        """The errors GetError lists now."""
+        codes = []
+        if self.emergency_stop:
+            codes.append(ERROR_EMERGENCY_STOP)
+        if self.cliff is not None and self.cliff.paused:
+            codes += [ERROR_PAUSED, ERROR_STEP_DETECTED]
+        if self.collision_stopped:
+            codes.append(ERROR_COLLISION)
+        return codes
+
+    def publish_errors(self) -> None:
+        """Hand the errors to GetError and publish them (latched JSON list)."""
+        codes = self.error_codes()
+        self.tap("errors", codes)
+        if codes != self._errors:
+            self._errors = codes
+            self.errors_pub.publish(String(data=json.dumps(codes)))
+
+    def pause(self, collision: bool = False) -> None:
+        """A step or (with collision.stop) a collision: drop the velocity
+        command, cancel all commands and raise the errors. The sim has
+        already stopped the wheels."""
+        if collision:
+            self.collision_stopped = True
+        self.cmd = None
+        self.cancel_pub.publish(String(data=json.dumps({"all": True})))
+        self.publish_errors()
+
+    def power_button(self) -> bool:
+        """Resume from a pause; True if the robot was paused. Runs in the sim loop."""
+        was = self.paused
+        self.collision_stopped = False
+        if self.cliff is not None:
+            self.cliff.resume()
+        self.publish_errors()
+        self.publish_cliff()
+        return was
+
+    def publish_cliff(self) -> None:
+        """Step sensor state on change (latched JSON)."""
+        c = self.cliff
+        if c is None:
+            return
+        state = {"enabled": c.enabled, "paused": c.paused, "over": c.over}
+        if state != self._cliff_state:
+            self._cliff_state = state
+            self.cliff_pub.publish(String(data=json.dumps(state)))
+
+    def publish_collision(self, t: float, count: int, other: str, pose: Pose2D) -> None:
+        """A counted collision (JSON event with the running count)."""
+        event = {"stamp": round(t, 4), "count": count, "with": other,
+                 "pose": [round(pose.x, 3), round(pose.y, 3), round(pose.yaw, 3)]}
+        self.collision_pub.publish(String(data=json.dumps(event)))
+        self.tap("collision", event)
 
     # --- called from the sim loop --------------------------------------------
     def spin_once(self, max_callbacks: int = 200) -> None:
@@ -233,7 +317,7 @@ class KachakaSimNode:
 
     def take_cmd(self) -> tuple[float, float] | None:
         cmd, self.cmd = self.cmd, None
-        if self.emergency_stop:
+        if self.emergency_stop or self.paused:
             return 0.0, 0.0
         return cmd
 

@@ -24,7 +24,8 @@ from .drive import (
     wheel_speeds,
     yaw_from_quat,
 )
-from .physics_sensors import Imu, Lidar, quat_to_matrix
+from .hazards import Cliff, CollisionCounter
+from .physics_sensors import CliffSensors, ContactSensor, Imu, Lidar, quat_to_matrix
 from .power import Battery, Charger
 from .ros_node import KachakaSimNode
 from .safety import FrontStop, FrontStopZone, front_clearance
@@ -38,7 +39,7 @@ DOCKING_JOINT = "docking_joint"
 class SimRobot:
     def __init__(self, articulation_path: str, robot_path: str, urdf_path: Path, cfg: SimpleNamespace,
                  node: KachakaSimNode, start_time: float, seed: int | None = None, charger: Charger | None = None,
-                 shelves=None, map_origin: Pose2D | None = None):
+                 shelves=None, map_origin: Pose2D | None = None, contacts: ContactSensor | None = None):
         self.cfg = cfg
         self.node = node
         self.t = start_time
@@ -84,6 +85,17 @@ class SimRobot:
         self.front_blocked = False
         node.front_stop = self.front_stop
         node.publish_front_stop(False)
+        # Step sensors and collisions (hazards.py).
+        c = cfg.cliff
+        self.cliff_sensors = CliffSensors(c, robot_path, self.start_z)
+        self.cliff = Cliff(len(c.sensors), bool(c.enabled))
+        node.cliff = self.cliff
+        node.publish_cliff()
+        self.contacts = contacts
+        col = cfg.collision
+        self.collisions = CollisionCounter(tuple(col.ignore), float(col.debounce))
+        self.collision_stop = bool(col.stop)
+        node.publish_errors()
         self.imu = Imu(cfg.imu, *frame_pose(joints, cfg.imu.frame_id), read_com(urdf_path), seed)
         self.imu_period = 1.0 / cfg.imu.rate
         self.next_imu = start_time
@@ -105,8 +117,10 @@ class SimRobot:
         cmd = self.node.take_cmd()
         if cmd is not None and self.t >= self.hold_until:
             self.limiter.set_target(cmd[0], cmd[1], self.t)
+        if self.node.paused:  # a step or a collision: stop at once
+            self.limiter.target = self.limiter.current = (0.0, 0.0)
         self.front_blocked = self.front_stop.update(self.limiter.current[0])
-        v, w = self.limiter.update(self.t, dt, self.front_blocked)
+        v, w = self.limiter.update(self.t, dt, self.front_blocked or self.cliff.blocked)
         d = self.cfg.drive
         wl, wr = wheel_speeds(v, w, d.wheel_radius, d.wheel_separation)
         targets = [[0.0] * len(self.dof_names)]
@@ -133,6 +147,7 @@ class SimRobot:
             self.limiter.limits.max_linear_vel = (min(d.max_linear_vel, d.max_linear_vel_towing) if self.towing
                                                   else d.max_linear_vel)
             self.lidar.ignore = {sh.docked_path} if self.towing else set()
+            self.cliff_sensors.ignore = self.lidar.ignore
             self.node.publish_shelf_docked(sh.specs[sh.docked].id if self.towing else "")
         return ok, msg
 
@@ -168,6 +183,10 @@ class SimRobot:
         self.gt = Pose2D(o.x, o.y, o.yaw)
         self.on_charger = self.charger is not None and self.charger.docked(self.gt)
         self.battery.reset()
+        self.cliff.reset()
+        self.collisions.reset()
+        if self.contacts is not None:
+            self.contacts.take()
         self.front_stop.enabled = bool(self.cfg.front_stop.enabled)
         self.front_stop.muted = False
         self.front_stop.blocked = False
@@ -186,6 +205,7 @@ class SimRobot:
         lin, ang = (a.numpy()[0].astype(float) for a in self.art.get_velocities())  # at the COM, world frame
         rot = quat_to_matrix(*quat)  # quat is (w, x, y, z)
         self.imu.update(rot, lin, ang, dt)
+        self._hazards(t, pos, rot)
         if t + 1e-9 >= self.next_imu:
             self.next_imu += self.imu_period
             node.publish_imu(t, self.imu)
@@ -234,6 +254,26 @@ class SimRobot:
             self.next_battery += 1.0
             level = self.battery.update(1.0, self.on_charger)
             node.publish_battery(t, level, self.on_charger)
+
+    def _hazards(self, t: float, pos, rot) -> None:
+        """Step sensors every step; contact events since the last step."""
+        node = self.node
+        if self.cliff.update(self.cliff_sensors.read(pos, rot)):
+            self.limiter.target = self.limiter.current = (0.0, 0.0)
+            node.pause()
+        node.publish_cliff()
+        if self.contacts is None:
+            return
+        docked = self.shelves.docked_path if self.towing else None
+        for other, found in self.contacts.take():
+            if docked is not None and (other == docked or other.startswith(docked + "/")):
+                continue
+            if self.collisions.contact(other, t, found):
+                gt = Pose2D(float(pos[0]), float(pos[1]), math.atan2(rot[1, 0], rot[0, 0]))
+                node.publish_collision(t, self.collisions.count, other, gt)
+                if self.collision_stop and not node.collision_stopped:
+                    self.limiter.target = self.limiter.current = (0.0, 0.0)
+                    node.pause(collision=True)
 
     @property
     def sensors_paused(self) -> bool:

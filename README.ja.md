@@ -22,6 +22,8 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
   前進を止めます。スマホアプリと同じく OFF にできます
 - 前後のトーチライト。実機と同じく kachaka-api で点灯します
 - 前方カメラでの物体検出（人・シェルフ・充電器）。シーンの正解データから作ります
+- 段差センサー: 段差で停止して一時停止します（実機と同じエラー 21051/21052）。
+  本体の衝突は回数を数えて publish します。`--drop` で床に穴を開けられます
 - topic 名・メッセージ型・QoS は実機ブリッジと同じ
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
@@ -211,6 +213,37 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 シミュレータは `sim/object_detection` に JSON を出し、`bridge.launch.py` の
 `object_detection_relay` がそれを変換します。
 
+### 段差と衝突
+
+実機のカチャカは前方に段差センサーを 2 つ持っています。床が見えなくなると停止してコマンドを
+キャンセルし、電源ボタンが押されるまでエラー **21052「段差を検知」** と **21051「一時停止中」**
+で一時停止します。シミュレータも同じように動きます。
+
+- 前キャスターのすぐ前から下向きのレイを 2 本飛ばし、物理ステップごと（120 Hz）に床を確認します
+  （位置と検出距離は推定。`config/robot.yaml` の `cliff`）。
+- 新しく段差を見つけると車輪をすぐ止め、全コマンドをキャンセルし、速度指令を無視します。
+  `GetError` は `[21051, 21052]` を返し、新しいコマンドは 21051 で失敗します。
+- 電源ボタンは `sim/power_button`（`std_srvs/Trigger`）です。kachaka-api の `RestartRobot` と
+  `sim/reset` でも復帰します。センサーがまだ段差の上にある間は前進だけを止め、後退と旋回はできます。
+
+![段差の手前で 21051/21052 を出して一時停止し、電源ボタンで再開、後退した後、前方停止を切って北の壁に衝突（sim/collision に 1 件）](docs/cliff.gif)
+
+標準のワールドは平らです。`--drop X Y SX SY` で (X, Y) を中心に SX × SY m の穴を床に開けます
+（深さ 0.15 m、`drop.depth`）。複数指定できます。
+
+```bash
+scripts/run_sim.sh --drop 1.0 0.0 0.4 0.8   # スポーン位置の 0.8 m 東に段差
+ros2 topic echo /kachaka/sim/cliff          # {"enabled": true, "paused": true, "over": [true, true]}
+ros2 topic echo /kachaka/sim/errors         # [21051, 21052]
+ros2 service call /kachaka/sim/power_button std_srvs/srv/Trigger
+```
+
+実機のバンパーは公表されていないため、既定では衝突しても止まりません。本体（車輪・キャスター・床を除く）
+の PhysX 接触レポートを数え、衝突ごとに `sim/collision` へ `{"stamp", "count", "with", "pose"}`
+を出します（シナリオの評価指標などに）。同じ物体との接触は、0.5 秒離れてから再び数えます。
+`collision.stop: true` にすると段差と同じように停止し、電源ボタンまでシミュレータのエラー −18 を
+出します（推定の挙動）。`sim/reset` で回数は 0 に戻ります。
+
 ## 動作環境
 
 - Ubuntu 24.04、x86_64
@@ -270,6 +303,7 @@ scripts/run_sim.sh --shelf X Y YAW       # シェルフを置く（複数可。�
 scripts/run_sim.sh --no-shelves
 scripts/run_sim.sh --person X Y YAW      # 人を置く（複数可。デフォルトは部屋に 2 人）
 scripts/run_sim.sh --no-people
+scripts/run_sim.sh --drop X Y SX SY      # 床に穴を開ける（複数可。「段差と衝突」を参照）
 scripts/run_sim.sh --api-port 26400      # kachaka-api の gRPC ポート（既定 26400。0 で無効）
 scripts/run_sim.sh --help
 ```
@@ -336,6 +370,10 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/shelf_dock` | `std_srvs/SetBool` サービス、ピンの上げ下げ（シミュレータのみ） | |
 | `sim/speech` | `std_msgs/String`、SPEAK と `tts_on_success` のテキスト（シミュレータのみ） | |
 | `sim/front_stop/state` | `std_msgs/String`、前方障害物停止の状態 JSON `{"enabled", "muted", "blocked"}`（シミュレータのみ、latched、変化時） | |
+| `sim/cliff` | `std_msgs/String`、段差センサーの状態 JSON `{"enabled", "paused", "over"}`（シミュレータのみ、latched、変化時） | |
+| `sim/collision` | `std_msgs/String`、本体の衝突ごとの JSON `{"stamp", "count", "with", "pose"}`（シミュレータのみ） | |
+| `sim/errors` | `std_msgs/String`、`GetError` が返すエラーコードの JSON リスト（シミュレータのみ、latched、変化時） | |
+| `sim/power_button` | `std_srvs/Trigger` サービス: 段差や衝突による一時停止から復帰（シミュレータのみ） | |
 | `sim/object_detection` | `std_msgs/String`、前方カメラの画像ごとの検出結果の JSON（シミュレータのみ） | 10 Hz |
 | `sim/torch` | `std_msgs/String`、トーチの明るさ 0〜255 の JSON `{"front", "back"}`（シミュレータのみ、latched） | |
 | `sim/reset` | `std_srvs/SetBool` サービス、開始時の状態に戻す。`data: true` で SLAM の地図も消す（シミュレータのみ、[シミュレータのリセット](#シミュレータのリセット)を参照） | |
@@ -388,7 +426,7 @@ client.return_home()
 
 | 分類 | RPC | シミュレータでの動作 |
 |---|---|---|
-| ロボット情報 | `GetRobotSerialNumber`、`GetRobotVersion`、`IsReady`、`GetError`、`GetRobotErrorCodeJson`、`GetRobotPose`、`GetBatteryInfo` | |
+| ロボット情報 | `GetRobotSerialNumber`、`GetRobotVersion`、`IsReady`、`GetError`、`GetRobotErrorCodeJson`、`GetRobotPose`、`GetBatteryInfo` | `GetError` は −14（非常停止）、21051 + 21052（段差で一時停止）、−18（`collision.stop` 時の衝突）を返す。[段差と衝突](#段差と衝突)を参照 |
 | センサー | `GetRosImu`、`GetRosOdometry`、`GetRosWheelOdometry`、`GetRosLaserScan`、`Get{Front,Back,Tof}CameraRos{CameraInfo,Image,CompressedImage}`、`GetStaticTransform`、`GetDynamicTransform` | |
 | 地図 | `GetPngMap`、`GetMapList`、`GetCurrentMapId`、`LoadMapPreview`、`ExportMap`、`ImportMap`、`ImportImageAsMap` | [地図](#地図)を参照 |
 | 地図（保存済み地図） | `SwitchMap`、`SetRobotPose` | `navigation.launch.py`（map_server と AMCL）が必要。SLAM 中は −16 で失敗。`inherit_docking_state_and_docked_shelf` はカチャカ Pro 専用（−17） |
@@ -396,7 +434,7 @@ client.return_home()
 | ショートカット | `GetShortcuts`、`StartShortcutCommand` | `config/robot.yaml`（`api.shortcuts`）で定義 |
 | レイアウト | `GetLocations`、`GetLocationsDigest`、`GetShelves`、`GetShelvesDigest`、`GetMovingShelfId`、`ResetShelfPose` | `ResetShelfPose` はシェルフをホームに戻す。ロボットが運搬中なら失敗 |
 | 操作 | `SetManualControlEnabled`、`GetManualControlEnabled`、`SetRobotVelocity`、`SetAutoHomingEnabled`、`GetAutoHomingEnabled`、`SetSpeakerVolume`、`GetSpeakerVolume` | |
-| 安全 | `SetEmergencyStop`、`RestartRobot` | 非常停止で車輪を止め、全コマンドをキャンセルし、`RestartRobot` で解除するまで新しいコマンドを拒否（−14）。シミュレータ自体は再起動しない |
+| 安全 | `SetEmergencyStop`、`RestartRobot` | 非常停止で車輪を止め、全コマンドをキャンセルし、`RestartRobot` で解除するまで新しいコマンドを拒否（−14）。`RestartRobot` は段差や衝突による一時停止からも復帰する。シミュレータ自体は再起動しない |
 | サウンド | `GetSoundList`、`PlaySound`、`StopSound`、`AddSound`、`DeleteSound` | 音声なし。サウンド名を `sim/sound` に出す。追加したサウンドはシミュレータを止めると消える |
 | トーチ | `SetFrontTorchIntensity`、`SetBackTorchIntensity` | 各カメラの位置のスポットライト（[トーチライト](#トーチライト)を参照）。値は 0〜255 に丸め、`sim/torch` に出します |
 | 物体検出 | `GetObjectDetection`、`GetObjectDetectionFeatures` | シーンの人・シェルフ・充電器（[物体検出](#物体検出)を参照）。特徴量は常に空 |
@@ -545,7 +583,7 @@ navigation.launch.py を起動します。すべての lifecycle manager が act
 
 CI には GPU がないため、シミュレータ自体はローカルで確認します。`scripts/smoke_test.sh --nav` は
 シミュレータをヘッドレスで起動して `tests/ros_smoke_check.py` を実行し、続いて SLAM + Nav2 で
-ナビゲーション・充電・シェルフ・コマンド・物体検出のチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。
+ナビゲーション・充電・シェルフ・コマンド・物体検出のチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。最後に段差を開けたシミュレータを起動し直して `tests/ros_hazard_check.py` を実行します。Nav2 のチェック中の衝突は `build/smoke_collisions.log` に記録します。
 
 ### シミュレータあり
 
@@ -562,6 +600,7 @@ python3 /tests/ros_dock_check.py     # 充電器、バッテリー、RETURN_HOME
 python3 /tests/ros_shelf_check.py    # シェルフのドッキング、牽引、設置（同上）
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK、goal_pose、cancel_all（同上）
 python3 /tests/ros_detection_check.py   # その場で旋回しながら object_detection/result を確認（同上）
+python3 /tests/ros_hazard_check.py   # 段差と衝突（Nav2 不要。シミュレータは --drop 1.0 0.0 0.4 0.8 で起動）
 ```
 
 kachaka-api のテストはホストで公式クライアントを使って実行します（準備は同上）:

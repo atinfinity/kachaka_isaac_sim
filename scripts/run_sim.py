@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from kachaka_isaac_sim.config import DEFAULT_CONFIG, load_config
+from kachaka_isaac_sim.hazards import hole_rect
 
 ROBOT_USD = ROOT / "assets/generated/kachaka/kachaka.usda"
 ROBOT_URDF = ROOT / "build/kachaka.urdf"
@@ -47,6 +48,9 @@ def parse_args() -> argparse.Namespace:
                    help="place a standing person (static) at X, Y facing YAW (world frame; repeatable). "
                         "Default: the people in config 'people.room' in 'room', none elsewhere")
     p.add_argument("--no-people", action="store_true", help="no people")
+    p.add_argument("--drop", type=float, nargs=4, action="append", metavar=("X", "Y", "SX", "SY"),
+                   help="a drop (hole in the floor) centred at X, Y, SX by SY metres; repeatable "
+                        "(depth: drop.depth in the config)")
     p.add_argument("--physics-hz", type=int, default=120)
     p.add_argument("--render-hz", type=float, default=10.0,
                    help="render and main-loop rate; keep it a multiple of the camera rate")
@@ -168,7 +172,10 @@ def main() -> int:
     stage = stage_utils.create_new_stage()
     world.setup_stage(stage, args.physics_hz, args.dome_light)
     builtin = args.world in ("room", "empty")
-    world.add_ground(stage, visible=builtin)
+    holes = [hole_rect(*d) for d in args.drop or []]
+    world.add_ground(stage, visible=builtin, z=-float(cfg.drop.depth) if holes else 0.0)
+    if holes:
+        world.add_floor_with_drops(stage, holes)
     if args.world == "room":
         world.add_simple_room(stage)
     elif not builtin:
@@ -190,6 +197,7 @@ def main() -> int:
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
     world.disable_pin_collision(stage)
+    world.enable_contact_report(stage)
     from kachaka_isaac_sim.torches import Torches
     from kachaka_isaac_sim.urdf_tools import read_joints
 
@@ -275,8 +283,11 @@ def main() -> int:
              for s in shelf_specs],
             [{"id": loc["id"], "name": loc["name"], "pose": in_map(loc["pose"])} for loc in locations])
     sim_start = SimulationManager.get_simulation_time()
+    from kachaka_isaac_sim.physics_sensors import ContactSensor
+
+    contacts = ContactSensor(world.BASE_LINK, world.CASTER_SHAPES)
     robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed, charger,
-                     shelves, spawn)
+                     shelves, spawn, contacts)
     node.reset_handler = robot.reset
     callbacks = [
         SimulationManager.register_callback(lambda dt, ctx: robot.pre_step(dt), SimulationEvent.PHYSICS_PRE_STEP),

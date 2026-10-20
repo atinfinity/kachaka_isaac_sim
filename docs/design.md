@@ -378,3 +378,41 @@ network; it reads the answer from the renderer.
   invisible box collider, so the PhysX LiDAR, Nav2 and the front stop see them
   as obstacles. Two stand in the room by default (`people.room`); they do not
   move.
+
+## Steps and collisions
+
+Sources: the real error codes and texts are in kachaka-api
+`docs/api/ERROR_HANDLING.md` (21051 "Kachaka is paused", 21052 "Step
+detected", resumed with the power button). That the robot has two step
+sensors at the front comes from secondary sources; their positions, height
+and range are not published, so `cliff` in `config/robot.yaml` is assumed.
+No bumper is published.
+
+- **Step sensors** (`physics_sensors.CliffSensors`, `hazards.Cliff`): two
+  downward PhysX raycasts from the base link every physics step, ignoring the
+  robot and a towed shelf. A sensor sees a drop when no floor is within
+  `height + threshold`. A floor-to-drop transition pauses the robot: the
+  velocity limiter is zeroed at once (the wheels' torque limit does the
+  braking), `{"all": true}` goes to `sim/command/cancel` (command_server and
+  the API server drop their commands), `take_cmd` returns zero and the API
+  refuses commands with 21051. After the power button, a sensor that still
+  sees the drop only blocks forward motion (the same limiter input as the
+  front obstacle stop), so the robot can back away without pausing again.
+  At 0.3 m/s the casters stop about 1.5 cm before the edge.
+- **Errors**: `KachakaSimNode.error_codes()` derives the list from the state
+  (emergency stop, cliff pause, collision stop) and `publish_errors()` hands
+  it to GetError and `sim/errors`, so SetEmergencyStop, RestartRobot, the
+  power button and sim/reset cannot leave stale codes behind.
+- **Collisions** (`physics_sensors.ContactSensor`, `hazards.CollisionCounter`):
+  `PhysxContactReportAPI` on the base link (applied before play) and
+  `subscribe_contact_report_events`. The wheels are separate links and are
+  not reported; the casters are colliders of the base link and are filtered
+  by collider path. The floor and a towed shelf never count. Events are
+  queued in the callback and handled in `post_step`. A contact with an
+  object counts when it starts 0.5 s after the last event with that object,
+  so one push against a wall is one collision.
+- **Drops** (`world.add_floor_with_drops`, `hazards.floor_tiles`): the floor
+  is a set of static boxes around the holes, the ground plane lies
+  `drop.depth` below. The boxes are triangle-mesh colliders: cooked convex
+  hulls of 40 m × 20 m × 2 cm boxes came out a few millimetres short at the
+  edges, and the step sensors saw a drop at the seam between two tiles.

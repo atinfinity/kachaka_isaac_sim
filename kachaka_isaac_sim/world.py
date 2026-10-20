@@ -52,17 +52,19 @@ def resolve_world(name: str) -> str:
     return name
 
 
-def add_ground(stage: Usd.Stage, visible: bool = True) -> None:
-    """Flat collider at z=0. Hidden under loaded scenes whose own floor may
-    lack collision; visibility does not affect physics."""
+def add_ground(stage: Usd.Stage, visible: bool = True, z: float = 0.0) -> None:
+    """Flat collider at z=0 (or below, under a floor with drops). Hidden under
+    loaded scenes whose own floor may lack collision; visibility does not
+    affect physics."""
     from isaacsim.core.experimental.objects import GroundPlane
 
-    GroundPlane("/World/GroundPlane")
+    GroundPlane("/World/GroundPlane", positions=[0.0, 0.0, z])
     if not visible:
         UsdGeom.Imageable(stage.GetPrimAtPath("/World/GroundPlane")).MakeInvisible()
 
 
-def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78), collider: bool = True) -> None:
+def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78), collider: bool = True,
+            approximation: str = "convexHull") -> None:
     """Static box as an explicit mesh (scaled Cube colliders misbehave)."""
     hx, hy, hz = (s / 2 for s in size)
     pts = [Gf.Vec3f(x * hx, y * hy, z * hz) for z in (-1, 1) for y in (-1, 1) for x in (-1, 1)]
@@ -76,7 +78,32 @@ def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78), c
     mesh.AddTranslateOp().Set(Gf.Vec3d(*center))
     if collider:
         UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
-        UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("convexHull")
+        UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(approximation)
+
+
+def add_floor_with_drops(stage: Usd.Stage, holes, extent: float = 20.0, thickness: float = 0.02,
+                         overlap: float = 0.001) -> None:
+    """A floor at z=0 made of boxes around the holes (hazards.floor_tiles);
+    the ground plane lies lower (add_ground(z=-depth)). The tiles are exact
+    triangle meshes: cooked convex hulls of such large thin boxes come out a
+    few millimetres short at the edges, so the step sensors saw a drop at the
+    seams. They also overlap by `overlap`."""
+    from .hazards import floor_tiles
+
+    UsdGeom.Xform.Define(stage, "/World/Floor")
+    for i, (x0, y0, x1, y1) in enumerate(floor_tiles(list(holes), extent)):
+        add_box(stage, f"/World/Floor/tile_{i:02d}", ((x0 + x1) / 2, (y0 + y1) / 2, -thickness / 2),
+                (x1 - x0 + 2 * overlap, y1 - y0 + 2 * overlap, thickness), (0.62, 0.66, 0.72),
+                approximation="none")
+
+
+def enable_contact_report(stage: Usd.Stage, path: str = BASE_LINK) -> None:
+    """PhysX contact reports for the robot body (physics_sensors.ContactSensor).
+    Apply before the simulation starts."""
+    from pxr import PhysxSchema
+
+    api = PhysxSchema.PhysxContactReportAPI.Apply(stage.GetPrimAtPath(path))
+    api.CreateThresholdAttr().Set(0.0)
 
 
 def add_simple_room(stage: Usd.Stage, size_x: float = 5.0, size_y: float = 4.0, height: float = 2.4) -> None:

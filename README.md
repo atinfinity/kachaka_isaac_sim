@@ -22,6 +22,8 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
   from any source (teleop, Nav2, kachaka-api). It can be switched off, like in the smartphone app.
 - Front and back torch lights, set through kachaka-api like on the real robot.
 - Object detection (people, shelves, the charger) on the front camera, from the scene's ground truth.
+- Step sensors: the robot stops and pauses at a drop (errors 21051/21052, as on the real robot);
+  collisions of the body are counted and published. `--drop` cuts a hole in the floor.
 - Same topic names, message types and QoS as the real bridge.
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
@@ -228,6 +230,41 @@ The results are on `GetObjectDetection` and on the real bridge's ROS 2 topic
 The simulator publishes JSON on `sim/object_detection` and
 `object_detection_relay` in `bridge.launch.py` converts it.
 
+### Steps and collisions
+
+The real Kachaka has two step sensors at the front. When one sees no floor,
+the robot stops, cancels its command and pauses with errors **21052 "Step
+detected"** and **21051 "Kachaka is paused"** until its power button is pressed.
+The simulator does the same:
+
+- Two downward rays just ahead of the front casters (positions and range assumed,
+  `cliff` in `config/robot.yaml`) check the floor every physics step (120 Hz).
+- At a new drop the wheels stop at once, all commands are cancelled, velocity
+  commands are ignored and `GetError` lists `[21051, 21052]`. New commands fail with 21051.
+- The power button is `sim/power_button` (`std_srvs/Trigger`); kachaka-api `RestartRobot`
+  and `sim/reset` also resume. While a sensor still looks over the edge, forward motion
+  stays blocked; backing up and turning are allowed.
+
+![The robot pauses at the edge of a drop with errors 21051 and 21052, resumes with the power button, backs up, and drives into the north wall with the front stop off: one event on sim/collision](docs/cliff.gif)
+
+The built-in worlds are flat. `--drop X Y SX SY` cuts an SX × SY m hole centred
+at (X, Y) into the floor, 0.15 m deep (`drop.depth`); repeat it for more:
+
+```bash
+scripts/run_sim.sh --drop 1.0 0.0 0.4 0.8   # a drop 0.8 m east of the spawn pose
+ros2 topic echo /kachaka/sim/cliff          # {"enabled": true, "paused": true, "over": [true, true]}
+ros2 topic echo /kachaka/sim/errors         # [21051, 21052]
+ros2 service call /kachaka/sim/power_button std_srvs/srv/Trigger
+```
+
+No bumper is published for the real robot, so collisions do not stop it by
+default: PhysX contact reports of the body (not the wheels or casters, nor the
+floor) are counted, and each collision is published on `sim/collision` as
+`{"stamp", "count", "with", "pose"}`, e.g. for scenario metrics. Contact with
+the same object counts again after 0.5 s without contact. `collision.stop: true`
+makes a collision stop the robot like a step, with the simulator error -18,
+until the power button (assumed behaviour). `sim/reset` sets the count back to zero.
+
 ## Requirements
 
 - Ubuntu 24.04, x86_64
@@ -288,6 +325,7 @@ scripts/run_sim.sh --shelf X Y YAW       # place a shelf (repeatable; default: o
 scripts/run_sim.sh --no-shelves
 scripts/run_sim.sh --person X Y YAW      # place a person (repeatable; default: two in the room)
 scripts/run_sim.sh --no-people
+scripts/run_sim.sh --drop X Y SX SY      # a hole in the floor (repeatable), see Steps and collisions
 scripts/run_sim.sh --api-port 26400      # kachaka-api gRPC port (default 26400; 0 turns it off)
 scripts/run_sim.sh --help
 ```
@@ -367,6 +405,10 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/speech` | `std_msgs/String`, text of SPEAK and `tts_on_success` (simulator only) | |
 | `sim/front_stop/state` | `std_msgs/String`, JSON `{"enabled", "muted", "blocked"}` of the front obstacle stop (simulator only, latched, on change) | |
 | `sim/front_stop/set_enabled`, `sim/front_stop/mute` | `std_srvs/SetBool` services: switch the front obstacle stop (the app setting), or mute it while a command runs (`command_server`) (simulator only) | |
+| `sim/cliff` | `std_msgs/String`, JSON `{"enabled", "paused", "over"}` of the step sensors (simulator only, latched, on change) | |
+| `sim/collision` | `std_msgs/String`, JSON `{"stamp", "count", "with", "pose"}` for each collision of the body (simulator only) | |
+| `sim/errors` | `std_msgs/String`, JSON list of the error codes `GetError` lists (simulator only, latched, on change) | |
+| `sim/power_button` | `std_srvs/Trigger` service: resume from a pause after a step or a collision (simulator only) | |
 | `sim/object_detection` | `std_msgs/String`, JSON detections of each front camera image (simulator only) | 10 Hz |
 | `sim/torch` | `std_msgs/String`, JSON `{"front", "back"}`: torch levels 0-255 (simulator only, latched) | |
 | `sim/reset` | `std_srvs/SetBool` service: back to the start state, `data: true` also clears the SLAM map (simulator only, see [Resetting the simulator](#resetting-the-simulator)) | |
@@ -423,7 +465,7 @@ The client methods are the RPC names in snake_case
 
 | Area | RPCs | In the simulator |
 |---|---|---|
-| Robot info | `GetRobotSerialNumber`, `GetRobotVersion`, `IsReady`, `GetError`, `GetRobotErrorCodeJson`, `GetRobotPose`, `GetBatteryInfo` | |
+| Robot info | `GetRobotSerialNumber`, `GetRobotVersion`, `IsReady`, `GetError`, `GetRobotErrorCodeJson`, `GetRobotPose`, `GetBatteryInfo` | `GetError` lists −14 (emergency stop), 21051 + 21052 (paused at a step) and −18 (collision with `collision.stop`), see [Steps and collisions](#steps-and-collisions) |
 | Sensors | `GetRosImu`, `GetRosOdometry`, `GetRosWheelOdometry`, `GetRosLaserScan`, `Get{Front,Back,Tof}CameraRos{CameraInfo,Image,CompressedImage}`, `GetStaticTransform`, `GetDynamicTransform` | |
 | Map | `GetPngMap`, `GetMapList`, `GetCurrentMapId`, `LoadMapPreview`, `ExportMap`, `ImportMap`, `ImportImageAsMap` | see [Maps](#maps) |
 | Map (saved map) | `SwitchMap`, `SetRobotPose` | need `navigation.launch.py` (map_server and AMCL); fail with −16 under SLAM. `inherit_docking_state_and_docked_shelf` is Kachaka Pro only (−17) |
@@ -431,7 +473,7 @@ The client methods are the RPC names in snake_case
 | Shortcuts | `GetShortcuts`, `StartShortcutCommand` | defined in `config/robot.yaml` (`api.shortcuts`) |
 | Layout | `GetLocations`, `GetLocationsDigest`, `GetShelves`, `GetShelvesDigest`, `GetMovingShelfId`, `ResetShelfPose` | `ResetShelfPose` puts the shelf back at its home; fails while the robot tows it |
 | Control | `SetManualControlEnabled`, `GetManualControlEnabled`, `SetRobotVelocity`, `SetAutoHomingEnabled`, `GetAutoHomingEnabled`, `SetSpeakerVolume`, `GetSpeakerVolume` | |
-| Safety | `SetEmergencyStop`, `RestartRobot` | the emergency stop halts the wheels, cancels all commands and refuses new ones (−14) until `RestartRobot`, which clears it; the simulator itself does not restart |
+| Safety | `SetEmergencyStop`, `RestartRobot` | the emergency stop halts the wheels, cancels all commands and refuses new ones (−14) until `RestartRobot`, which clears it and also resumes from a pause after a step or a collision; the simulator itself does not restart |
 | Sound | `GetSoundList`, `PlaySound`, `StopSound`, `AddSound`, `DeleteSound` | no audio: the sound name goes to `sim/sound`; added sounds live until the simulator stops |
 | Torches | `SetFrontTorchIntensity`, `SetBackTorchIntensity` | a spotlight at each camera, see [Torch lights](#torch-lights); levels are clamped to 0-255 and published on `sim/torch` |
 | Object detection | `GetObjectDetection`, `GetObjectDetectionFeatures` | people, shelves and the charger from the scene, see [Object detection](#object-detection); features are always empty |
@@ -597,7 +639,8 @@ CI has no GPU, so the simulator itself is checked locally:
 `scripts/smoke_test.sh --nav` starts it headless and runs
 `tests/ros_smoke_check.py`, then with SLAM + Nav2 the navigation, docking,
 shelf, command and object detection checks one after another in the same simulator run (each
-starts with `sim/reset`).
+starts with `sim/reset`). It ends with `tests/ros_hazard_check.py` in a second run with a
+drop, and logs the collisions seen during the Nav2 checks to `build/smoke_collisions.log`.
 
 ### With the simulator
 
@@ -614,6 +657,7 @@ python3 /tests/ros_dock_check.py     # charger, battery and RETURN_HOME (same)
 python3 /tests/ros_shelf_check.py    # shelf docking, towing and placing (same)
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, goal_pose, cancel_all (same)
 python3 /tests/ros_detection_check.py   # object_detection/result while turning in place (same)
+python3 /tests/ros_hazard_check.py   # steps and collisions (no Nav2; sim started with --drop 1.0 0.0 0.4 0.8)
 ```
 
 The kachaka-api check runs on the host with the official client (same setup):

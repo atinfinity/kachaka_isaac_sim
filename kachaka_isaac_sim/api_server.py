@@ -49,6 +49,7 @@ from tf2_msgs.msg import TFMessage
 
 from .config import ROOT
 from .drive import Pose2D
+from .hazards import ERROR_COLLISION, ERROR_EMERGENCY_STOP, ERROR_PAUSED, ERROR_STEP_DETECTED
 from .maps import MapError, MapFile, MapStore
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
@@ -77,12 +78,18 @@ ERROR_CODES = {
     -16: ("Needs a saved map", ("Switching maps and setting the robot pose need navigation.launch.py "
                                 "(map_server and AMCL); slam.launch.py maps as it goes.")),
     -17: ("Kachaka Pro only", "The standard Kachaka does not support this."),
+    ERROR_COLLISION: ("Collision", ("The body hit something and the robot stopped (collision.stop); "
+                                    "RestartRobot or sim/power_button resumes.")),
+    # Real robot codes (kachaka-api docs/api/ERROR_HANDLING.md).
+    ERROR_PAUSED: ("Kachaka is paused", "Press the power button to resume (RestartRobot or sim/power_button)."),
+    ERROR_STEP_DETECTED: ("Step detected", ("Kachaka has paused because a step was detected. Move it to a flat "
+                                            "surface and press the power button.")),
 }
+ERROR_TYPES = {ERROR_PAUSED: "warn"}
 ERROR_UNKNOWN_SHELF = -8
 ERROR_SERVER_UNAVAILABLE = -6
 ERROR_OTHER_SHELF_DOCKED = -11
 ERROR_MANUAL_CONTROL_DISABLED = -12
-ERROR_EMERGENCY_STOP = -14
 ERROR_MAP = -15
 ERROR_NEEDS_SAVED_MAP = -16
 ERROR_PRO_ONLY = -17
@@ -479,6 +486,8 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
     def _start(self, command: pb2.Command, cancel_all: bool, tts_on_success: str = "") -> tuple[pb2.Result, str]:
         if self.sim.emergency_stop:
             return pb2.Result(success=False, error_code=ERROR_EMERGENCY_STOP), ""
+        if self.sim.paused:
+            return pb2.Result(success=False, error_code=ERROR_PAUSED), ""
         if self.cmd_pub.get_subscription_count() == 0:
             return pb2.Result(success=False, error_code=ERROR_SERVER_UNAVAILABLE), ""
         command_type, fields = command_to_json(command)
@@ -562,7 +571,7 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         return pb2.GetErrorResponse(metadata=self._meta(cursor), error_codes=errors)
 
     def GetRobotErrorCodeJson(self, request, context):
-        items = [{"code": code, "error_type": "error", "title": title, "description": desc, "title_en": title,
+        items = [{"code": code, "error_type": ERROR_TYPES.get(code, "error"), "title": title, "description": desc, "title_en": title,
                   "description_en": desc, "ref_url": ""} for code, (title, desc) in ERROR_CODES.items()]
         return pb2.GetRobotErrorCodeJsonResponse(json=json.dumps(items), result=pb2.Result(success=True))
 
@@ -998,14 +1007,17 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         self.sim.emergency_stop = True
         self.cancel_pub.publish(String(data=json.dumps({"all": True})))
         self.vel_pub.publish(self._twist())
-        self.store.set("errors", [ERROR_EMERGENCY_STOP])
+        self.sim.publish_errors()
         return pb2.SetEmergencyStopResponse(result=pb2.Result(success=True))
 
     def RestartRobot(self, request, context):
-        """Does not restart the simulator: stops all commands and releases the
-        emergency stop."""
+        """Does not restart the simulator: stops all commands, releases the
+        emergency stop and resumes from a pause (like the power button)."""
         self.cancel_pub.publish(String(data=json.dumps({"all": True})))
         self.vel_pub.publish(self._twist())
         self.sim.emergency_stop = False
-        self.store.set("errors", [])
+        try:
+            self.sim.run_in_sim(self.sim.power_button).result(timeout=5.0)
+        except Exception:  # noqa: BLE001 - timeout or a simulator error
+            self.sim.publish_errors()
         return pb2.RestartRobotResponse(result=pb2.Result(success=True))
