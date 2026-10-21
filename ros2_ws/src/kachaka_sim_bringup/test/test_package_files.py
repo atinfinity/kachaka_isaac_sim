@@ -77,3 +77,27 @@ def test_fake_robot_scan():
     # Facing the pillar at (1, 1) from the origin.
     towards = scan_ranges(-LASER_XYZ[0] * math.sqrt(0.5), -LASER_XYZ[0] * math.sqrt(0.5), math.pi / 4)
     assert min(towards) < math.sqrt(2) - 0.15
+
+
+def test_costmaps_mark_parked_shelves():
+    """Nav2 would plan between a parked shelf's legs (all the LiDAR sees)."""
+    params = load_yaml("nav2_params.yaml")
+    for costmap, layer in (("local_costmap", "voxel_layer"), ("global_costmap", "obstacle_layer")):
+        p = params[costmap][costmap]["ros__parameters"][layer]
+        assert "parked_shelves" in p["observation_sources"].split()
+        src = p["parked_shelves"]
+        assert src["topic"] == "/parked_shelves" and src["data_type"] == "PointCloud2"
+        assert src["marking"] and not src["clearing"]
+        assert src["obstacle_max_range"] >= 20.0  # measured from the map origin
+
+
+def test_shelf_outline():
+    from kachaka_sim_bringup.command_server import P2, shelf_outline
+
+    pts = shelf_outline(P2(1.0, 2.0, math.pi / 2), depth=0.328, width=0.488)
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    # Turned 90 degrees: depth along world y, width along world x.
+    assert min(xs) == pytest.approx(1.0 - 0.244) and max(xs) == pytest.approx(1.0 + 0.244)
+    assert min(ys) == pytest.approx(2.0 - 0.164) and max(ys) == pytest.approx(2.0 + 0.164)
+    gaps = [math.dist(a, b) for a, b in zip(pts, pts[1:] + pts[:1])]
+    assert max(gaps) <= 0.025 + 1e-9

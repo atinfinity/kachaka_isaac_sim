@@ -305,9 +305,23 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   robot's current footprint (plus 5 cm) set free, and the global costmap's
   static layer reads `/nav_map`. A robot is never inside an obstacle, so this
   holds without a shelf too.
-- **Undocking** lowers the pin and drives 0.40 m forward at 0.15 m/s on
+- **Undocking** lowers the pin and drives 0.50 m forward at 0.15 m/s on
   `sim/autonomous/cmd_vel`. It refuses (error −9) when the LiDAR sees
-  something in that path, since the robot does not reverse.
+  something in that path, since the robot does not reverse. At 0.40 m the
+  robot's front corners (0.28 m from its centre) hit the shelf's legs when
+  it then turned around, and it stayed stuck there (#39).
+- **Parked shelves in the costmaps.** The LiDAR sees only the four legs, and
+  the robot fits between them, so Nav2 planned straight through a parked
+  shelf and the robot ran into its legs. `command_server` publishes the
+  outlines of the shelves not on the robot on `/parked_shelves`
+  (PointCloud2, map frame, 2 Hz), a marking-only source for both costmaps.
+  The shelf being docked to stays in: the docking controller skips its
+  collision checks near it. A towed shelf's old outline is cleared with the
+  costmaps when it is docked, or by the LiDAR's rays later.
+- **Squaring up.** The docking controller stops on position alone and put
+  shelves down up to ~0.13 rad off the location's heading. MOVE_SHELF and
+  RETURN_SHELF turn on the spot onto the location's axis (either direction)
+  before lowering the pin when the robot is more than 0.02 rad off.
 - **RViz.** `robot_description` stays the official URDF without the shelf, as
   on the real robot. `shelf_markers` draws the shelves as a MarkerArray on
   `/shelf_markers`: standing shelves in the map frame from
