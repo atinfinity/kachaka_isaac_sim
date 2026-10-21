@@ -450,10 +450,16 @@ network; it reads the answer from the renderer.
   republishes it as `ObjectDetectionListStamped` with the real bridge's label
   numbers (PERSON 0, SHELF 1, CHARGER 2, DOOR 3; UNSPECIFIED is dropped, as
   the bridge does).
-- **People.** Simple figures built from capsules (`world.add_person`) with one
-  invisible box collider, so the PhysX LiDAR, Nav2 and the front stop see them
-  as obstacles. Two stand in the room by default (`people.room`); they do not
-  move.
+- **People.** Isaac Sim's characters (`Isaac/People/Characters`,
+  `people.characters`, taken in turn; `world.add_person`) with one invisible
+  box collider, so the PhysX LiDAR, Nav2 and the front stop see them as
+  obstacles. Two stand in the room by default (`people.room`); they do not
+  move. The characters' rest pose is a T-pose, and the bundled animations
+  (`Isaac/People/Animations`) are for another rig, played through the
+  animation graph's retargeting; so `world.add_actor` binds a one-frame
+  SkelAnimation of the rest pose with the upper arms turned down. The
+  characters face −y, so they are turned 90° to face along the pose's yaw.
+  Without the asset server, people are capsule mannequins.
 
 ## Steps and collisions
 

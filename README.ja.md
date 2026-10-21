@@ -231,8 +231,9 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 （`config/robot.yaml` の `object_detection`）。ドアは検出しません。ネットワークがないので
 `GetObjectDetectionFeatures` は常に空です。
 
-部屋には人が 2 人います（`config/robot.yaml` の `people.room`）。高さ 1.7 m の簡単な人形で、
-コライダーがあるので LiDAR と Nav2 にも見えます。`--person X Y YAW` で人を置き、`--no-people` で
+部屋には人が 2 人います（`config/robot.yaml` の `people.room`）。Isaac Sim 同梱のキャラクター
+（`people.characters`、腕を下ろして立ったまま）で、高さ 1.7 m の箱のコライダーがあるので LiDAR と
+Nav2 にも見えます。アセットサーバーに届かないときはカプセルの人形になります。`--person X Y YAW` で人を置き、`--no-people` で
 なくせます。Isaac Sim のシーンには既定では人はいません。
 
 結果は `GetObjectDetection` と、実機ブリッジと同じ ROS 2 の topic

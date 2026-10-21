@@ -152,6 +152,21 @@ def place_people(args, cfg, layout) -> list[tuple[float, float, float]]:
     return []
 
 
+def people_assets(cfg) -> list[str]:
+    """Character URLs for config 'people.characters', or [] for mannequins
+    (none configured or no asset server)."""
+    names = list(getattr(cfg.people, "characters", None) or [])
+    if not names:
+        return []
+    from isaacsim.storage.native import get_assets_root_path
+
+    root = get_assets_root_path()
+    if root is None:
+        print("[kachaka] Isaac Sim asset server not reachable: people are mannequins", flush=True)
+        return []
+    return [f"{root}/Isaac/People/Characters/{n}/{n}.usd" for n in names]
+
+
 def detection_targets(people, shelf_specs, charger_pose):
     from kachaka_isaac_sim.detection import LABEL_CHARGER, LABEL_PERSON, LABEL_SHELF, Target
 
@@ -329,8 +344,10 @@ def main() -> int:
     for spec in shelf_specs:
         world.add_shelf(stage, spec.path, SHELF_STL, (spec.home.x, spec.home.y, spec.home.yaw), cfg.shelf)
     people = place_people(args, cfg, layout)
+    actors = people_assets(cfg) if people else []
     for i, pose in enumerate(people):
-        world.add_person(stage, f"/World/People/P{i + 1:02d}", pose, float(cfg.people.height))
+        character = actors[i % len(actors)] if actors else None
+        world.add_person(stage, f"/World/People/P{i + 1:02d}", pose, float(cfg.people.height), character)
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
     world.disable_pin_collision(stage)

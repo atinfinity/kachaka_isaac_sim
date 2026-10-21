@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
-from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
+from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade, UsdSkel, Vt
 
 from kachaka_isaac_sim.meshes import read_stl
 from kachaka_isaac_sim.scenes import (
@@ -284,15 +284,74 @@ def add_charger(stage: Usd.Stage, path: str, pose, cfg: SimpleNamespace) -> None
             collider=False)
 
 
-def add_person(stage: Usd.Stage, path: str, pose, height: float = 1.7) -> None:
-    """A standing person as a static mannequin of capsules, for object
-    detection and for the LiDAR to see. `pose` (x, y, yaw): feet centre and
-    facing direction. One invisible box collider covers the body."""
+def add_person(stage: Usd.Stage, path: str, pose, height: float = 1.7, character: str | None = None) -> None:
+    """A standing person, for object detection and for the LiDAR to see.
+    `pose` (x, y, yaw): feet centre and facing direction. `character`: an
+    Isaac Sim people USD (URL), standing with the arms down; without one, a
+    mannequin of capsules. One invisible box collider covers the body."""
     x, y, yaw = pose
     root = UsdGeom.Xform.Define(stage, path)
     xf = UsdGeom.Xformable(root.GetPrim())
     xf.AddTranslateOp().Set(Gf.Vec3d(x, y, 0.0))
     xf.AddRotateZOp().Set(math.degrees(yaw))
+    if character:
+        add_actor(stage, f"{path}/actor", character)
+    else:
+        add_mannequin(stage, path, height)
+    add_box(stage, f"{path}/collider", (0.0, 0.0, height / 2),
+            (PERSON_COLLIDER[0] * height / 1.7, PERSON_COLLIDER[1] * height / 1.7, height))
+    UsdGeom.Imageable(stage.GetPrimAtPath(f"{path}/collider")).MakeInvisible()
+
+
+# Upper arm joints of the Isaac Sim people rig (Reallusion) and where the
+# arms point when standing, in skeleton space: down, a little out to the side.
+ARM_JOINTS = {"L_Upperarm": (0.15, 0.0, -1.0), "R_Upperarm": (-0.15, 0.0, -1.0)}
+
+
+def add_actor(stage: Usd.Stage, path: str, character: str) -> None:
+    """Reference an Isaac Sim people character at `path`, standing with the
+    arms down. The characters' rest pose has the arms out (T-pose), and the
+    bundled animations target another rig (they need the animation graph's
+    retargeting), so a one-frame SkelAnimation lowers the upper arms."""
+    UsdGeom.Xformable(UsdGeom.Xform.Define(stage, path).GetPrim()).AddRotateZOp().Set(90.0)  # they face -y
+    prim = stage.DefinePrim(f"{path}/character", "Xform")
+    prim.GetReferences().AddReference(character)
+    skel_prim = next((p for p in Usd.PrimRange(prim) if p.IsA(UsdSkel.Skeleton)), None)
+    if skel_prim is None:
+        return
+    skel = UsdSkel.Skeleton(skel_prim)
+    joints = list(skel.GetJointsAttr().Get())
+    local = [Gf.Matrix4d(m) for m in skel.GetRestTransformsAttr().Get()]
+    index = {j: i for i, j in enumerate(joints)}
+    parent = [index.get(j.rpartition("/")[0], -1) for j in joints]
+
+    def skel_space(i):  # row vectors: local, then the parents'
+        m = Gf.Matrix4d(local[i])
+        while parent[i] >= 0:
+            i = parent[i]
+            m = m * local[i]
+        return m
+
+    for i, j in enumerate(joints):
+        name = j.rpartition("/")[2]
+        if name not in ARM_JOINTS:
+            continue
+        m = skel_space(i)
+        bone = m.TransformDir(Gf.Vec3d(0.0, 1.0, 0.0))  # the rig's bones run along +y
+        turn = Gf.Matrix4d().SetRotate(Gf.Rotation(bone, Gf.Vec3d(*ARM_JOINTS[name])))
+        rot = m.ExtractRotationMatrix() * turn.ExtractRotationMatrix()
+        if parent[i] >= 0:
+            rot = rot * skel_space(parent[i]).ExtractRotationMatrix().GetInverse()
+        t = local[i].ExtractTranslation()
+        local[i] = Gf.Matrix4d().SetRotate(rot).SetTranslateOnly(t)
+    anim = UsdSkel.Animation.Define(stage, f"{path}/pose")
+    anim.CreateJointsAttr(joints)
+    anim.SetTransforms(Vt.Matrix4dArray(local))
+    UsdSkel.BindingAPI.Apply(skel_prim).CreateAnimationSourceRel().SetTargets([anim.GetPath()])
+
+
+def add_mannequin(stage: Usd.Stage, path: str, height: float = 1.7) -> None:
+    """A static mannequin of capsules under `path`."""
     k = height / 1.7
     skin, shirt, pants, shoes = (0.8, 0.6, 0.48), (0.2, 0.42, 0.65), (0.13, 0.14, 0.2), (0.06, 0.05, 0.05)
 
@@ -318,8 +377,6 @@ def add_person(stage: Usd.Stage, path: str, pose, height: float = 1.7) -> None:
     head.CreateRadiusAttr(0.11 * k)
     head.CreateDisplayColorAttr([Gf.Vec3f(*skin)])
     UsdGeom.Xformable(head.GetPrim()).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 1.58 * k))
-    add_box(stage, f"{path}/collider", (0.0, 0.0, height / 2), (PERSON_COLLIDER[0] * k, PERSON_COLLIDER[1] * k, height))
-    UsdGeom.Imageable(stage.GetPrimAtPath(f"{path}/collider")).MakeInvisible()
 
 
 def add_robot(stage: Usd.Stage, usd_path: Path, x: float = 0.0, y: float = 0.0, yaw: float = 0.0) -> Usd.Prim:
