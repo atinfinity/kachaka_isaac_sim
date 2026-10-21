@@ -56,7 +56,11 @@ bt_navigator:
     robot_base_frame: base_footprint
     odom_topic: /odom
     bt_loop_duration: 10
-    default_server_timeout: 20
+    # ms the BT waits for an action server (planner, controller) to accept a
+    # goal. Nav2's 20 ms is too short while the planner is busy, as right
+    # after startup when the global costmap resizes with the growing SLAM
+    # map: the goal then fails at once with status 6.
+    default_server_timeout: 500
     wait_for_service_timeout: 1000
     action_server_result_timeout: 900.0
     navigators: ["navigate_to_pose", "navigate_through_poses"]
