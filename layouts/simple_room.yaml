@@ -1,0 +1,12 @@
+# Isaac Sim simple room: charger beside the table, a shelf placed at random
+# in the east half, and the room's corners as locations.
+#   scripts/run_sim.sh --layout layouts/simple_room.yaml [--layout-seed N]
+world: simple_room
+seed: 1
+spawn: [-2.5, 0.0, 0.0]
+charger: [-2.5, 0.0, 0.0]         # starts docked
+shelves:
+  - {id: S01, name: Shelf 1, pose: [[1.8, 2.6], [-1.0, 1.0], [-0.3, 0.3]]}
+locations:
+  - {id: L01, name: North-east, pose: [2.5, 2.5, -1.5708]}
+  - {id: L02, name: South-east, pose: [2.5, -2.5, 3.1416]}

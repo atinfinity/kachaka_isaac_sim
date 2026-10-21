@@ -6,6 +6,7 @@ up the ROS 2 environment that Isaac Sim needs before the process starts.
     scripts/run_sim.sh --world empty   # floor only
     scripts/run_sim.sh --world office  # Isaac Sim indoor scene (needs internet)
     scripts/run_sim.sh --world /path/to/scene.usd
+    scripts/run_sim.sh --layout layouts/room.yaml   # charger, shelves, ... from a file
 """
 
 from __future__ import annotations
@@ -31,8 +32,15 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", default=str(DEFAULT_CONFIG), help="robot parameters (YAML)")
     p.add_argument("--headless", action="store_true", help="run without a window")
-    p.add_argument("--world", default="room",
-                   help="'room', 'empty', an Isaac scene (office, hospital, warehouse, simple_room) or a USD path/URL")
+    p.add_argument("--world",
+                   help="'room', 'empty', an Isaac scene (office, hospital, warehouse, simple_room) or a USD path/URL "
+                        "(default: the layout's world, else 'room')")
+    p.add_argument("--layout", metavar="FILE",
+                   help="world layout (YAML): spawn pose, charger, shelves, locations, people, boxes, walls, doors "
+                        "and drops; see kachaka_isaac_sim/layout.py and layouts/. The options below override it "
+                        "(--wall, --door and --drop add to it)")
+    p.add_argument("--layout-seed", type=int, metavar="N",
+                   help="seed for the layout's ranges (default: the layout's seed, else a random one)")
     p.add_argument("--x", type=float, help="spawn x [m] (default: the world's spawn pose, else 0)")
     p.add_argument("--y", type=float, help="spawn y [m]")
     p.add_argument("--yaw", type=float, help="spawn yaw [rad]")
@@ -83,14 +91,33 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--record-hz", type=float, default=10.0, help="frame rate for --record")
     p.add_argument("--record-view", type=float, nargs=6, default=[0.0, -2.4, 7.5, 0.0, -0.1, 0.0],
                    metavar=("EX", "EY", "EZ", "TX", "TY", "TZ"), help="--record camera position and target [m]")
-    args = p.parse_args()
+    return p.parse_args()
+
+
+def resolve_layout(args, cfg):
+    """Read --layout (if any), settle the world and the spawn pose."""
+    from kachaka_isaac_sim.layout import parse_layout, read_layout
     from kachaka_isaac_sim.scenes import SPAWN
 
-    default = SPAWN.get(args.world, (0.0, 0.0, 0.0))
+    layout = None
+    data = read_layout(args.layout) if args.layout else {}
+    args.world = args.world or data.get("world") or "room"
+    if args.layout:
+        room = args.world == "room"
+        defaults = {"spawn": [SPAWN.get(args.world, (0.0, 0.0, 0.0))],
+                    "charger": [cfg.charger.room_pose] if room else [],
+                    "shelves": [e.pose for e in cfg.shelf.room] if room else [],
+                    "locations": [e.pose for e in cfg.shelf.room_locations] if room else [],
+                    "people": list(cfg.people.room) if room else []}
+        layout = parse_layout(data, args.layout_seed, args.world, args.layout, defaults)
+        seed = f" (seed {layout.seed})" if layout.randomised else ""
+        print(f"[kachaka] layout {args.layout}{seed}", flush=True)
+    spawn = layout.spawn if layout and layout.spawn else None
+    default = (spawn.x, spawn.y, spawn.yaw) if spawn else SPAWN.get(args.world, (0.0, 0.0, 0.0))
     for i, k in enumerate(("x", "y", "yaw")):
         if getattr(args, k) is None:
             setattr(args, k, default[i])
-    return args
+    return layout
 
 
 def publish_cameras(node, cameras, t: float, tof_off: bool = False, detector=None) -> None:
@@ -113,11 +140,13 @@ def publish_cameras(node, cameras, t: float, tof_off: bool = False, detector=Non
             node.publish_image(t, cam.name, cam.cfg.frame_id, data, "32FC1", cam.fx)
 
 
-def place_people(args, cfg) -> list[tuple[float, float, float]]:
+def place_people(args, cfg, layout) -> list[tuple[float, float, float]]:
     if args.no_people:
         return []
     if args.person:
         return [tuple(p) for p in args.person]
+    if layout and layout.people is not None:
+        return [(p.x, p.y, p.yaw) for p in layout.people]
     if args.world == "room":
         return [tuple(p) for p in cfg.people.room]
     return []
@@ -148,41 +177,121 @@ def detection_targets(people, shelf_specs, charger_pose):
     return targets
 
 
-def place_shelves(args, cfg):
+def place_shelves(args, cfg, layout):
     """Shelf specs and extra locations for this world."""
     from kachaka_isaac_sim.drive import Pose2D
-
-    if args.no_shelves or not SHELF_STL.exists():
-        return [], []
-    if args.shelf:
-        entries = [{"id": f"S{i + 1:02d}", "name": f"Shelf {i + 1}", "pose": pose}
-                   for i, pose in enumerate(args.shelf)]
-        locations = []
-    elif args.world == "room":
-        entries = [vars(e) for e in cfg.shelf.room]
-        locations = [{"id": e.id, "name": e.name, "pose": Pose2D(*e.pose)} for e in cfg.shelf.room_locations]
-    else:
-        return [], []
     from kachaka_isaac_sim.shelves import ShelfSpec
 
-    specs = [ShelfSpec(e["id"], e["name"], f"/World/Shelves/{e['id']}", Pose2D(*e["pose"])) for e in entries]
-    return specs, locations
+    room = args.world == "room"
+    if args.no_shelves or not SHELF_STL.exists():
+        entries = []
+    elif args.shelf:
+        entries = [(f"S{i + 1:02d}", f"Shelf {i + 1}", Pose2D(*pose)) for i, pose in enumerate(args.shelf)]
+    elif layout and layout.shelves is not None:
+        entries = layout.shelves
+    elif room:
+        entries = [(e.id, e.name, Pose2D(*e.pose)) for e in cfg.shelf.room]
+    else:
+        entries = []
+    if layout and layout.locations is not None:
+        locations = layout.locations
+    elif room and not args.shelf and not args.no_shelves:
+        locations = [(e.id, e.name, Pose2D(*e.pose)) for e in cfg.shelf.room_locations]
+    else:
+        locations = []
+    specs = [ShelfSpec(i, name, f"/World/Shelves/{i}", pose) for i, name, pose in entries]
+    return specs, [{"id": i, "name": name, "pose": pose} for i, name, pose in locations]
 
 
-def place_doors(args, cfg):
+def place_charger(args, cfg, layout):
+    if args.no_charger:
+        return None
+    if args.charger:
+        return tuple(args.charger)
+    if layout and (layout.charger or layout.no_charger):
+        return (layout.charger.x, layout.charger.y, layout.charger.yaw) if layout.charger else None
+    if args.world == "room":
+        return tuple(cfg.charger.room_pose)
+    return None
+
+
+def place_doors(args, cfg, layout):
+    """The layout's doors, then --door ones. --door-kind and --door-width are
+    the defaults for the layout's doors too."""
     from kachaka_isaac_sim.doors import DoorSpec
     from kachaka_isaac_sim.drive import Pose2D
 
     kind = args.door_kind or cfg.door.kind
     width = args.door_width or float(cfg.door.width)
     cycle = tuple(args.door_cycle) if args.door_cycle else None
-    return [DoorSpec(f"D{i + 1:02d}", f"/World/Doors/D{i + 1:02d}", Pose2D(*pose), width, kind,
-                     open=not args.door_closed, cycle=cycle) for i, pose in enumerate(args.door or [])]
+    doors = [(d.pose, d.kind or kind, d.width or width, d.open, d.cycle) for d in (layout.doors if layout else [])]
+    doors += [(Pose2D(*pose), kind, width, not args.door_closed, cycle) for pose in args.door or []]
+    return [DoorSpec(f"D{i + 1:02d}", f"/World/Doors/D{i + 1:02d}", pose, w, k, open=o, cycle=c)
+            for i, (pose, k, w, o, c) in enumerate(doors)]
+
+
+def layout_objects(layout, charger_pose, shelf_specs, people, boxes_root):
+    """(name, prim path or None, pose, half size x, y, height) of what the
+    layout placed, for the overlap check."""
+    from kachaka_isaac_sim.drive import Pose2D
+    from kachaka_isaac_sim.scenes import PERSON_COLLIDER, SHELF_SIZE
+
+    objs = []
+    if charger_pose:
+        objs.append(("charger", "/World/Charger", Pose2D(*charger_pose), 0.12, 0.13, 0.09))
+    for s in shelf_specs:
+        objs.append((s.id, s.path, s.home, SHELF_SIZE[0] / 2, SHELF_SIZE[1] / 2, 0.66))
+    for i, p in enumerate(people):
+        objs.append((f"P{i + 1:02d}", f"/World/People/P{i + 1:02d}", Pose2D(*p), PERSON_COLLIDER[0] / 2,
+                     PERSON_COLLIDER[1] / 2, 1.7))
+    for b in layout.boxes:
+        objs.append((b.name, f"{boxes_root}/{b.name}", b.pose, b.size[0] / 2, b.size[1] / 2, b.size[2]))
+    return objs
+
+
+def check_overlaps(objs, spawn) -> list[str]:
+    """Warnings for objects whose outline overlaps another collider (PhysX
+    overlap query, from 3 cm above the floor). Needs the simulation running."""
+    import carb
+    from omni.physx import get_physx_scene_query_interface
+
+    from kachaka_isaac_sim.drive import Pose2D, quat_from_yaw
+    from kachaka_isaac_sim.world import ROBOT_PATH
+
+    query = get_physx_scene_query_interface()
+    warnings = []
+    # The robot may start docked on the charger or under a shelf.
+    spawn_obj = ("spawn", (ROBOT_PATH, "/World/Charger", "/World/Shelves"), Pose2D(*spawn), 0.2, 0.13, 0.2)
+    for name, own, pose, hx, hy, h in objs + [spawn_obj]:
+        hits = set()
+        own = (own,) if isinstance(own, str) else own
+
+        def report(hit, own=own, hits=hits):
+            col = str(hit.collision)
+            if not col.startswith(own + (ROBOT_PATH,)):
+                hits.add(col)
+            return True
+
+        z0 = 0.03
+        w, x, y, z = (float(v) for v in quat_from_yaw(pose.yaw))
+        query.overlap_box(carb.Float3(hx, hy, (h - z0) / 2), carb.Float3(pose.x, pose.y, z0 + (h - z0) / 2),
+                          carb.Float4(x, y, z, w), report, False)
+        if hits:
+            more = f" and {len(hits) - 3} more" if len(hits) > 3 else ""
+            warnings.append(f"{name} at ({pose.x:.2f}, {pose.y:.2f}) overlaps {', '.join(sorted(hits)[:3])}{more}")
+    return warnings
 
 
 def main() -> int:
     args = parse_args()
     cfg = load_config(args.config)
+    from kachaka_isaac_sim.layout import LayoutError
+
+    try:
+        layout = resolve_layout(args, cfg)
+    except (LayoutError, OSError) as e:
+        print(f"layout: {e}", file=sys.stderr)
+        return 1
     if not ROBOT_USD.exists() or not ROBOT_URDF.exists():
         print("Robot assets missing: run scripts/fetch_assets.py and scripts/build_usd.py first", file=sys.stderr)
         return 1
@@ -210,7 +319,7 @@ def main() -> int:
     stage = stage_utils.create_new_stage()
     world.setup_stage(stage, args.physics_hz, args.dome_light)
     builtin = args.world in ("room", "empty")
-    holes = [hole_rect(*d) for d in args.drop or []]
+    holes = [hole_rect(*d) for d in (layout.drops if layout else []) + [tuple(d) for d in args.drop or []]]
     world.add_ground(stage, visible=builtin, z=-float(cfg.drop.depth) if holes else 0.0)
     if holes:
         world.add_floor_with_drops(stage, holes)
@@ -218,23 +327,23 @@ def main() -> int:
         world.add_simple_room(stage)
     elif not builtin:
         world.load_world_usd(stage, world.resolve_world(args.world))
-    for i, (x0, y0, x1, y1) in enumerate(args.wall or []):
+    walls = (layout.walls if layout else []) + [tuple(w) for w in args.wall or []]
+    for i, (x0, y0, x1, y1) in enumerate(walls):
         world.add_wall(stage, f"/World/Walls/W{i + 1:02d}", (x0, y0), (x1, y1))
-    door_specs = place_doors(args, cfg)
+    door_specs = place_doors(args, cfg, layout)
     for spec in door_specs:
         world.add_door(stage, spec, cfg.door)
-    charger_pose = None
-    if not args.no_charger:
-        if args.charger:
-            charger_pose = tuple(args.charger)
-        elif args.world == "room":
-            charger_pose = tuple(cfg.charger.room_pose)
+    boxes_root = "/World/Boxes"
+    for b in layout.boxes if layout else []:
+        world.add_box(stage, f"{boxes_root}/{b.name}", (b.pose.x, b.pose.y, b.size[2] / 2), b.size, b.color,
+                      yaw=b.pose.yaw)
+    charger_pose = place_charger(args, cfg, layout)
     if charger_pose:
         world.add_charger(stage, "/World/Charger", charger_pose, cfg.charger)
-    shelf_specs, locations = place_shelves(args, cfg)
+    shelf_specs, locations = place_shelves(args, cfg, layout)
     for spec in shelf_specs:
         world.add_shelf(stage, spec.path, SHELF_STL, (spec.home.x, spec.home.y, spec.home.yaw), cfg.shelf)
-    people = place_people(args, cfg)
+    people = place_people(args, cfg, layout)
     actors = people_assets(cfg) if people else []
     for i, pose in enumerate(people):
         character = actors[i % len(actors)] if actors else None
@@ -287,6 +396,10 @@ def main() -> int:
     carb.settings.get_settings().set_int("/persistent/simulation/minFrameRate", 1)
     app_utils.play()
     app.update()
+    if layout:
+        for w in check_overlaps(layout_objects(layout, charger_pose, shelf_specs, people, boxes_root),
+                                (args.x, args.y, args.yaw)):
+            print(f"[kachaka] layout warning: {w}", flush=True)
 
     node = KachakaSimNode(cfg, ROBOT_URDF)
     for cam in cameras:
@@ -314,10 +427,11 @@ def main() -> int:
     shelves = None
     if shelf_specs:
         from kachaka_isaac_sim.shelves import Shelves
-        from kachaka_isaac_sim.world import SHELF_SIZE
 
         shelves = Shelves(stage, shelf_specs, cfg.shelf)
         node.shelf_reset_handler = shelves.reset
+    if shelf_specs or locations:
+        from kachaka_isaac_sim.world import SHELF_SIZE
 
         def in_map(p):
             m = relative_pose(spawn, p)

@@ -86,10 +86,10 @@ stop_sim() {
 }
 
 if $NAV; then
-    # A partition wall with a door (tests/ros_door_check.py DOOR_ARGS).
+    # A partition wall with a door (tests/ros_door_check.py).
     stop_sim
     LOG=build/smoke_sim_door.log
-    start_sim --no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708
+    start_sim --layout layouts/room_door.yaml
     start_nav
     echo "[smoke] running ros_door_check"
     ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_door_check.py || FAILED+=(ros_door_check)

@@ -1,7 +1,7 @@
 """Nav2 around a door that closes and opens (#26).
 
-Run against the simulator started with a partition wall and a door (see
-DOOR_ARGS; scripts/smoke_test.sh --nav does this) and SLAM + Nav2 up
+Run against the simulator started with layouts/room_door.yaml (a partition
+wall and a door; scripts/smoke_test.sh --nav does this) and SLAM + Nav2 up
 (slam.launch.py nav:=true). A wall at x = 0.6 splits the room. It has the
 door at y = -0.6 and an open gap at its north end (y 1.2-2.0).
 
@@ -39,9 +39,7 @@ from slam_toolbox.srv import Pause
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
-# scripts/run_sim.py arguments for this check.
-DOOR_ARGS = ("--no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 "
-             "--door 0.6 -0.6 1.5708")
+# The geometry of layouts/room_door.yaml.
 WALL_X = 0.6
 DOORWAY = (-1.0, -0.2)  # y range of the doorway
 GAP = (1.2, 2.0)  # y range of the open gap at the north end
@@ -146,7 +144,7 @@ def main():
     if not args.no_reset:
         reset_sim(node, args.clear_map)
     if not node.client.wait_for_server(timeout_sec=60.0) or not node.door.wait_for_service(timeout_sec=10.0):
-        print("navigate_to_pose or sim/doors/D01/set_open not found (simulator started with DOOR_ARGS?)")
+        print("navigate_to_pose or sim/doors/D01/set_open not found (simulator started with layouts/room_door.yaml?)")
         return 1
     results = []
 

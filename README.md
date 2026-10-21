@@ -26,6 +26,7 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
   collisions of the body are counted and published. `--drop` cuts a hole in the floor.
 - Same topic names, message types and QoS as the real bridge.
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
+  Layout files place the charger, shelves, locations, people, boxes, walls and doors, optionally at random.
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
   Nav2 never drives backwards, since Kachaka has no rear range sensor.
 - `kachaka_command/execute` with every command type of the real bridge: MOVE_TO_POSE,
@@ -319,13 +320,66 @@ safety sensor stops it).
   `opening` (0-1) and `cycling`. `sim/reset` puts the doors back to their start state.
 
 ```bash
-# A wall at x = 0.6 with a door at y = -0.6 and a gap at the north end
+# A wall at x = 0.6 with a door at y = -0.6 and a gap at the north end (layouts/room_door.yaml)
 scripts/run_sim.sh --no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708
+scripts/run_sim.sh --layout layouts/room_door.yaml   # the same
 ros2 service call /kachaka/sim/doors/D01/set_open std_srvs/srv/SetBool "{data: false}"
 ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closing", ...}]}
 ```
 
 Elevators between floors are not simulated.
+
+### Layout files
+
+`--layout FILE` reads a YAML file that says where the robot starts and where
+the charger, shelves, locations, people, boxes, walls, doors and drops are, on
+top of any world. Examples are in [`layouts/`](layouts): `room.yaml`,
+`room_door.yaml` (the door setup above), and `office.yaml`, `hospital.yaml`,
+`warehouse.yaml`, `simple_room.yaml` for the Isaac Sim scenes.
+
+![layouts/room.yaml with four seeds: the fixed objects stay; Shelf 2, the person and the green box are drawn from their ranges](docs/layout.gif)
+
+```yaml
+world: room                 # --world overrides it
+seed: 7                     # for the ranges below
+clearance: 0.15             # m kept between randomised objects (default 0.1)
+spawn: [0.0, 0.0, 0.0]      # x, y, yaw (m, rad)
+charger: [-2.27, 0.0, 0.0]  # null: no charger
+shelves:
+  - {id: S01, name: Shelf 1, pose: [1.3, -1.2, 0.0]}
+  - {id: S02, name: Shelf 2, pose: [[0.6, 2.0], [0.3, 1.5], [-0.3, 0.3]]}  # ranges
+locations:
+  - {id: L01, name: Kitchen, pose: [0.5, 1.0, 1.5708]}
+people: [[2.0, 1.5, -2.5]]
+boxes:
+  - {name: crate, pose: [0.2, -1.6, 0.4], size: [0.5, 0.35, 0.45], color: [0.45, 0.55, 0.35]}
+walls: [[0.6, -2.0, 0.6, -1.0]]              # x0, y0, x1, y1
+doors:
+  - {pose: [0.6, -0.6, 1.5708], kind: sliding, width: 0.8, open: true, cycle: [10, 5]}
+drops: [[1.0, 0.0, 0.4, 0.8]]                # x, y, size x, size y
+```
+
+- A key that is left out keeps the world's default (the room has a charger, a
+  shelf, a location and two people); a key that is given replaces it, so
+  `shelves: []` means no shelves and `charger: null` no charger.
+- Any number in a pose can be a range `[lo, hi]`, drawn with the seed. A
+  randomised object is drawn again until it keeps `clearance` from the other
+  objects (and, in the room, from its walls). `--layout-seed N` overrides the
+  file's seed; with neither, a seed is picked and printed
+  (`[kachaka] layout layouts/room.yaml (seed 7)`), so a run can be repeated.
+- Shelves and locations go to kachaka-api (`GetShelves`, `GetLocations`) and the
+  dashboard, so `MOVE_TO_LOCATION` and the shelf commands use them.
+- Command-line options still apply: `--shelf`, `--charger`, `--person`, the
+  `--no-*` options and `--x/--y/--yaw` replace the layout's; `--wall`, `--door`
+  and `--drop` add to them.
+- After the start, the simulator checks each object for overlaps with the
+  scene and prints `[kachaka] layout warning: ...` for one that is placed into a
+  wall or furniture.
+
+```bash
+scripts/run_sim.sh --layout layouts/room.yaml --layout-seed 3
+scripts/run_sim.sh --layout layouts/office.yaml   # also sets --world office
+```
 
 ## Requirements
 
@@ -378,6 +432,7 @@ machine through DDS discovery.
 scripts/run_sim.sh --world office        # Isaac Sim scenes: office, hospital, warehouse, simple_room
 scripts/run_sim.sh --world /path/to.usd  # any USD scene
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
+scripts/run_sim.sh --layout layouts/room.yaml   # a layout file (--layout-seed N), see Layout files
 scripts/run_sim.sh --no-cameras          # faster, when you only need LiDAR and odometry
 scripts/run_sim.sh --dome-light 0        # dark scene (ambient light, default 800), e.g. to see the torches
 scripts/run_sim.sh --render-hz 20        # render/camera loop rate (see Performance)
@@ -750,7 +805,7 @@ python3 /tests/ros_shelf_check.py    # shelf docking, towing and placing (same)
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, goal_pose, cancel_all (same)
 python3 /tests/ros_detection_check.py   # object_detection/result while turning in place (same)
 python3 /tests/ros_hazard_check.py   # steps and collisions (no Nav2; sim started with --drop 1.0 0.0 0.4 0.8)
-python3 /tests/ros_door_check.py     # Nav2 and a door (sim started with DOOR_ARGS in the script)
+python3 /tests/ros_door_check.py     # Nav2 and a door (sim started with --layout layouts/room_door.yaml)
 ```
 
 The kachaka-api check runs on the host with the official client (same setup):

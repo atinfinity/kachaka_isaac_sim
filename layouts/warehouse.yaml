@@ -1,0 +1,10 @@
+# Isaac Sim warehouse: one aisle, with the charger at its south end and a
+# shelf waiting at the north end.
+#   scripts/run_sim.sh --layout layouts/warehouse.yaml
+world: warehouse
+spawn: [-13.0, 11.0, 1.5708]
+charger: [-13.0, 11.0, 1.5708]    # starts docked
+shelves:
+  - {id: S01, name: Parts, pose: [-13.0, 22.0, 1.5708]}
+locations:
+  - {id: L01, name: Aisle middle, pose: [-13.0, 18.0, 1.5708]}

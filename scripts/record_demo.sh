@@ -46,8 +46,7 @@ case "$DEMO" in
     door)
         GIF=docs/door.gif
         VIEW=(0.3 -2.0 5.5 0.3 0.0 0.0)  # from the south (+x right like RViz), along the partition
-        # tests/ros_door_check.py DOOR_ARGS
-        SIM_ARGS=(--no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708)
+        SIM_ARGS=(--layout layouts/room_door.yaml)
         LABEL="RViz: Nav2 and a door"
         SPEED=${SPEED:-4}
         RUN="python3 /tests/ros_door_check.py" ;;

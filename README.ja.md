@@ -26,6 +26,7 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
   本体の衝突は回数を数えて publish します。`--drop` で床に穴を開けられます
 - topic 名・メッセージ型・QoS は実機ブリッジと同じ
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
+  レイアウトファイルで充電器・シェルフ・ロケーション・人・箱・壁・ドアを配置（ランダム配置も可）
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
   カチャカには後方の距離センサーがないので、Nav2 は後退しない設定です
 - 実機ブリッジの全コマンドに対応した `kachaka_command/execute`（Nav2 ベース）: MOVE_TO_POSE、
@@ -289,13 +290,63 @@ LiDAR に映り、閉じている間は Nav2 がコストマップに載せて�
   `sim/reset` でドアは開始時の状態に戻ります。
 
 ```bash
-# x = 0.6 の壁、y = -0.6 にドア、北端にすき間
+# x = 0.6 の壁、y = -0.6 にドア、北端にすき間（layouts/room_door.yaml）
 scripts/run_sim.sh --no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708
+scripts/run_sim.sh --layout layouts/room_door.yaml   # 同じ
 ros2 service call /kachaka/sim/doors/D01/set_open std_srvs/srv/SetBool "{data: false}"
 ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closing", ...}]}
 ```
 
 フロア間のエレベーターはシミュレートしません。
+
+### レイアウトファイル
+
+`--layout FILE` で YAML ファイルを読み、ロボットの開始位置と、充電器・シェルフ・
+ロケーション・人・箱・壁・ドア・段差の配置をワールドに重ねます。どのワールドとも
+組み合わせられます。例は [`layouts/`](layouts) にあります: `room.yaml`、
+`room_door.yaml`（上のドアの構成）、Isaac Sim のシーン用の `office.yaml`、
+`hospital.yaml`、`warehouse.yaml`、`simple_room.yaml`。
+
+![layouts/room.yaml を 4 つのシードで起動。固定の物体はそのままで、Shelf 2・人・緑の箱がそれぞれの範囲内で引かれる](docs/layout.gif)
+
+```yaml
+world: room                 # --world が優先
+seed: 7                     # 下の範囲指定用
+clearance: 0.15             # ランダム配置の物体どうしの間隔 [m]（既定 0.1）
+spawn: [0.0, 0.0, 0.0]      # x, y, yaw (m, rad)
+charger: [-2.27, 0.0, 0.0]  # null なら充電器なし
+shelves:
+  - {id: S01, name: Shelf 1, pose: [1.3, -1.2, 0.0]}
+  - {id: S02, name: Shelf 2, pose: [[0.6, 2.0], [0.3, 1.5], [-0.3, 0.3]]}  # 範囲指定
+locations:
+  - {id: L01, name: Kitchen, pose: [0.5, 1.0, 1.5708]}
+people: [[2.0, 1.5, -2.5]]
+boxes:
+  - {name: crate, pose: [0.2, -1.6, 0.4], size: [0.5, 0.35, 0.45], color: [0.45, 0.55, 0.35]}
+walls: [[0.6, -2.0, 0.6, -1.0]]              # x0, y0, x1, y1
+doors:
+  - {pose: [0.6, -0.6, 1.5708], kind: sliding, width: 0.8, open: true, cycle: [10, 5]}
+drops: [[1.0, 0.0, 0.4, 0.8]]                # x, y, x 方向の大きさ, y 方向の大きさ
+```
+
+- 書かなかったキーはワールドの既定のまま（部屋には充電器、シェルフ 1 台、ロケーション 1 つ、
+  人 2 人）。書いたキーは置き換えるので、`shelves: []` ならシェルフなし、`charger: null`
+  なら充電器なしです。
+- 姿勢のどの数値も範囲 `[lo, hi]` にでき、シードで値を引きます。ランダム配置の物体は
+  他の物体（部屋ではその壁も）から `clearance` 離れるまで引き直します。`--layout-seed N`
+  はファイルのシードより優先し、どちらもなければシードを選んで表示します
+  （`[kachaka] layout layouts/room.yaml (seed 7)`）。同じ配置を再現できます。
+- シェルフとロケーションは kachaka-api（`GetShelves`、`GetLocations`）とダッシュボードに
+  渡るので、`MOVE_TO_LOCATION` やシェルフのコマンドで使えます。
+- コマンドラインのオプションも効きます。`--shelf`、`--charger`、`--person`、`--no-*`、
+  `--x/--y/--yaw` はレイアウトの値を置き換え、`--wall`、`--door`、`--drop` は追加します。
+- 起動後、各物体がシーンと重なっていないかを調べ、壁や家具にめり込んでいれば
+  `[kachaka] layout warning: ...` を表示します。
+
+```bash
+scripts/run_sim.sh --layout layouts/room.yaml --layout-seed 3
+scripts/run_sim.sh --layout layouts/office.yaml   # --world office にもなる
+```
 
 ## 動作環境
 
@@ -347,6 +398,7 @@ docker compose -f docker/compose.yaml up navigation
 scripts/run_sim.sh --world office        # Isaac Sim のシーン: office, hospital, warehouse, simple_room
 scripts/run_sim.sh --world /path/to.usd  # 任意の USD シーン
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
+scripts/run_sim.sh --layout layouts/room.yaml   # レイアウトファイル（--layout-seed N）、レイアウトファイルの節を参照
 scripts/run_sim.sh --no-cameras          # LiDAR とオドメトリだけでよいとき（速い）
 scripts/run_sim.sh --dome-light 0        # 暗いシーン（環境光。既定 800）。トーチを見たいときなど
 scripts/run_sim.sh --render-hz 20        # 描画・カメラのループ周期（「性能」を参照）
@@ -677,7 +729,7 @@ python3 /tests/ros_shelf_check.py    # シェルフのドッキング、牽引�
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK、goal_pose、cancel_all（同上）
 python3 /tests/ros_detection_check.py   # その場で旋回しながら object_detection/result を確認（同上）
 python3 /tests/ros_hazard_check.py   # 段差と衝突（Nav2 不要。シミュレータは --drop 1.0 0.0 0.4 0.8 で起動）
-python3 /tests/ros_door_check.py     # Nav2 とドア（シミュレータはスクリプト内の DOOR_ARGS で起動）
+python3 /tests/ros_door_check.py     # Nav2 とドア（シミュレータは --layout layouts/room_door.yaml で起動）
 ```
 
 kachaka-api のテストはホストで公式クライアントを使って実行します（準備は同上）:

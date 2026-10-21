@@ -76,8 +76,9 @@ def add_ground(stage: Usd.Stage, visible: bool = True, z: float = 0.0) -> None:
 
 
 def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78), collider: bool = True,
-            approximation: str = "convexHull") -> None:
-    """Static box as an explicit mesh (scaled Cube colliders misbehave)."""
+            approximation: str = "convexHull", yaw: float = 0.0) -> None:
+    """Static box as an explicit mesh (scaled Cube colliders misbehave),
+    turned by `yaw` [rad] about z."""
     hx, hy, hz = (s / 2 for s in size)
     pts = [Gf.Vec3f(x * hx, y * hy, z * hz) for z in (-1, 1) for y in (-1, 1) for x in (-1, 1)]
     faces = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
@@ -88,6 +89,8 @@ def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78), c
     mesh.CreateExtentAttr([Gf.Vec3f(-hx, -hy, -hz), Gf.Vec3f(hx, hy, hz)])
     mesh.CreateDisplayColorAttr([Gf.Vec3f(*color)])
     mesh.AddTranslateOp().Set(Gf.Vec3d(*center))
+    if yaw:
+        mesh.AddRotateZOp().Set(math.degrees(yaw))
     if collider:
         UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(approximation)
