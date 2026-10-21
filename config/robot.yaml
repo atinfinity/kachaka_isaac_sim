@@ -150,9 +150,12 @@ object_detection:
   roi_noise_px: 2.0         # stddev of each ROI edge [px] (est.)
   miss_rate: 0.02           # chance to miss an object in a frame (est.)
 
-# People: static mannequins, seen by the cameras, the detector and the LiDAR.
+# People: standing still, seen by the cameras, the detector and the LiDAR.
 people:
-  height: 1.7               # m
+  height: 1.7               # m, of the collider (and the mannequin)
+  # Isaac Sim characters (Isaac/People/Characters/<name>/<name>.usd), taken in
+  # turn, standing with the arms down; [] or no asset server: mannequins of capsules.
+  characters: [F_Business_02, M_Medical_01, male_adult_construction_05_new, F_Medical_01]
   room:                     # in the default room ([x, y, yaw], world frame)
     - [2.0, 1.5, -2.5]      # north-east corner, half behind box_a
     - [-2.1, -1.55, 0.6]    # south-west corner, half behind box_b, off the test routes
