@@ -170,6 +170,10 @@ Battery rates and the charger's size are estimates (`config/robot.yaml`).
 
 *DOCK_SHELF, then MOVE_SHELF to another location and UNDOCK_SHELF (3× speed).*
 
+![After leaving the shelf, the robot goes around it, docks under it again from the other side and tows it back home](docs/shelf_return.gif)
+
+*RETURN_SHELF from there: Nav2 plans around the parked shelf, which is in the costmaps as a whole (the LiDAR sees only its legs).*
+
 The room has one Kachaka Shelf (`S01`, home location `S01_home`) and one other
 location (`L01`). The robot drives in under a shelf forward, raises its pin and
 tows the shelf on its casters (≤ 0.5 m/s, see [Speed limits](#speed-limits)).

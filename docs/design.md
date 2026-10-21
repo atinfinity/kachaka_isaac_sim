@@ -318,6 +318,11 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   The shelf being docked to stays in: the docking controller skips its
   collision checks near it. A towed shelf's old outline is cleared with the
   costmaps when it is docked, or by the LiDAR's rays later.
+- **Loop closures under a shelf.** slam_toolbox's `loop_search_space_dimension`
+  is 3 m, so a loop closure moves the pose by at most 1.5 m. At the default
+  8 m, a scan taken while turning on the spot with a shelf just docked
+  matched the wrong end of the 5 x 4 m room and threw the map pose 3.7 m
+  off (#39).
 - **Squaring up.** The docking controller stops on position alone and put
   shelves down up to ~0.13 rad off the location's heading. MOVE_SHELF and
   RETURN_SHELF turn on the spot onto the location's axis (either direction)
