@@ -42,6 +42,11 @@ def test_nav2_params_point_at_our_behavior_trees():
         assert (PKG / m.group(1)).exists()
 
 
+def test_bt_navigator_waits_for_busy_servers():
+    params = load_yaml("nav2_params.yaml")["bt_navigator"]["ros__parameters"]
+    assert params["default_server_timeout"] >= 200  # ms; 20 failed the first goal on a slow CI runner
+
+
 def test_nav2_params_frames_and_topics():
     params = load_yaml("nav2_params.yaml")
     slam = load_yaml("slam_toolbox.yaml")["slam_toolbox"]["ros__parameters"]
