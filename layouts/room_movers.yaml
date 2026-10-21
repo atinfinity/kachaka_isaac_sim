@@ -1,0 +1,15 @@
+# The room with people and a cart that move across the robot's routes
+# (tests/ros_nav_check.py --no-collisions, smoke_test.sh --nav).
+#   scripts/run_sim.sh --layout layouts/room_movers.yaml [--layout-seed N]
+world: room
+seed: 3
+shelves: []
+people:
+  # Up and down the east half, across the way to (1.6, -0.3).
+  - {pose: [0.8, -1.6, 1.5708], route: [[0.8, 1.6]], pause: 2.0}
+  # Here and there between the pillar and the kitchen.
+  - {pose: [0.0, 1.2, 0.0], wander: [[-0.1, 0.2], [0.6, 1.6]], speed: 0.5, pause: 1.0}
+boxes:
+  # A cart pushed along the west half, now and then wheeled away.
+  - {name: cart, pose: [-1.6, -0.3, 0.0], size: [0.5, 0.4, 0.8], color: [0.35, 0.45, 0.6],
+     route: [[-0.5, -0.3]], speed: 0.3, pause: 3.0, appear: [25, 8]}

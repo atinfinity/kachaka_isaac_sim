@@ -10,7 +10,9 @@
 # Both end with tests/ros_hazard_check.py (step sensors, collisions) in a
 # second simulator run with a drop in the floor. With --nav, collisions seen
 # during the Nav2 checks are logged to build/smoke_collisions.log, and
-# tests/ros_door_check.py runs in a third simulator run with a door.
+# tests/ros_door_check.py runs in a third simulator run with a door, and
+# tests/ros_nav_check.py --no-collisions in a fourth with people and a cart
+# moving across the way (layouts/room_movers.yaml).
 #
 # Needs the ROS image: docker compose -f docker/compose.yaml build
 set -euo pipefail
@@ -93,6 +95,16 @@ if $NAV; then
     start_nav
     echo "[smoke] running ros_door_check"
     ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_door_check.py || FAILED+=(ros_door_check)
+    docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
+
+    # People and a cart moving across the robot's way: reach the goals
+    # without touching them.
+    stop_sim
+    LOG=build/smoke_sim_movers.log
+    start_sim --layout layouts/room_movers.yaml
+    start_nav
+    echo "[smoke] running ros_nav_check --no-collisions (moving people)"
+    ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_nav_check.py --no-collisions || FAILED+=(ros_nav_check_movers)
     docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
 fi
 

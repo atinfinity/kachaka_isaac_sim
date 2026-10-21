@@ -26,7 +26,8 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
   collisions of the body are counted and published. `--drop` cuts a hole in the floor.
 - Same topic names, message types and QoS as the real bridge.
 - Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
-  Layout files place the charger, shelves, locations, people, boxes, walls and doors, optionally at random.
+  Layout files place the charger, shelves, locations, people, boxes, walls and doors, optionally at random;
+  people and boxes can walk routes, wander and come and go.
 - Docker image with slam_toolbox, Nav2, RViz and teleop, set up for Kachaka.
   Nav2 never drives backwards, since Kachaka has no rear range sensor.
 - `kachaka_command/execute` with every command type of the real bridge: MOVE_TO_POSE,
@@ -334,7 +335,8 @@ Elevators between floors are not simulated.
 `--layout FILE` reads a YAML file that says where the robot starts and where
 the charger, shelves, locations, people, boxes, walls, doors and drops are, on
 top of any world. Examples are in [`layouts/`](layouts): `room.yaml`,
-`room_door.yaml` (the door setup above), and `office.yaml`, `hospital.yaml`,
+`room_door.yaml` (the door setup above), `room_movers.yaml` (see
+[Moving people and boxes](#moving-people-and-boxes)), and `office.yaml`, `hospital.yaml`,
 `warehouse.yaml`, `simple_room.yaml` for the Isaac Sim scenes.
 
 ![layouts/room.yaml with four seeds: the fixed objects stay; Shelf 2, the person and the green box are drawn from their ranges](docs/layout.gif)
@@ -379,6 +381,41 @@ drops: [[1.0, 0.0, 0.4, 0.8]]                # x, y, size x, size y
 ```bash
 scripts/run_sim.sh --layout layouts/room.yaml --layout-seed 3
 scripts/run_sim.sh --layout layouts/office.yaml   # also sets --world office
+```
+
+### Moving people and boxes
+
+People and boxes in a layout file can move. Each moving one is a kinematic body
+moved every physics step, so the LiDAR, the cameras, the ToF camera and object
+detection see it where it is. Nothing moves unless a layout asks for it;
+[`layouts/room_movers.yaml`](layouts/room_movers.yaml) is an example.
+
+![layouts/room_movers.yaml: Nav2 reaches four goals while two people and a cart move across the room, without touching them](docs/movers.gif)
+
+```yaml
+people:
+  - {pose: [0.8, -1.6, 1.5708], route: [[0.8, 1.6]], pause: 2.0}   # there and back
+  - {pose: [0.0, 1.2, 0.0], wander: [[-0.1, 0.2], [0.6, 1.6]], speed: 0.5}  # x range, y range
+boxes:
+  - {name: cart, pose: [-1.6, -0.3, 0.0], size: [0.5, 0.4, 0.8],
+     route: [[-0.5, -0.3]], speed: 0.3, pause: 3.0, appear: [25, 8]}
+```
+
+- `route`: waypoints walked in turn, then back to the start, over and over.
+  `wander`: random points inside an area, drawn with the layout's seed. Not both.
+- `speed` (m/s; default `movers.person_speed` 0.7 and `movers.box_speed` 0.4 in
+  `config/robot.yaml`), `pause` (s at each waypoint), `appear: [present, away]`
+  (s; there for a while, then gone, starting at a point of the cycle drawn with
+  the seed).
+- A mover turns towards its next waypoint, then walks. It waits while the robot
+  is right in its way, and does not appear on top of the robot. Nothing else
+  stops it: the robot has to keep out of its way.
+- Characters swing their legs and arms as they walk.
+- `sim/reset` puts them back at the start.
+
+```bash
+scripts/run_sim.sh --layout layouts/room_movers.yaml
+python3 /tests/ros_nav_check.py --no-collisions   # with SLAM + Nav2: goals, and no collisions
 ```
 
 ## Requirements
@@ -786,7 +823,9 @@ CI has no GPU, so the simulator itself is checked locally:
 shelf, command and object detection checks one after another in the same simulator run (each
 starts with `sim/reset`). A second run with a wall and a door runs `tests/ros_door_check.py`
 (Nav2 through the door, round it while it is closed, and through it again once it opens).
-It ends with `tests/ros_hazard_check.py` in a third run with a
+A third run with `layouts/room_movers.yaml` runs `tests/ros_nav_check.py --no-collisions`
+(the Nav2 goals among people and a cart on the move, without touching them).
+It ends with `tests/ros_hazard_check.py` in a fourth run with a
 drop, and logs the collisions seen during the Nav2 checks to `build/smoke_collisions.log`.
 
 ### With the simulator
@@ -806,6 +845,7 @@ python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, go
 python3 /tests/ros_detection_check.py   # object_detection/result while turning in place (same)
 python3 /tests/ros_hazard_check.py   # steps and collisions (no Nav2; sim started with --drop 1.0 0.0 0.4 0.8)
 python3 /tests/ros_door_check.py     # Nav2 and a door (sim started with --layout layouts/room_door.yaml)
+python3 /tests/ros_nav_check.py --no-collisions   # Nav2 goals among moving people (sim started with --layout layouts/room_movers.yaml)
 ```
 
 The kachaka-api check runs on the host with the official client (same setup):

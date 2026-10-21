@@ -96,6 +96,18 @@ def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78), c
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(approximation)
 
 
+def add_moving_box(stage: Usd.Stage, path: str, pose, size, color) -> None:
+    """A box as a kinematic body at `pose` (x, y, yaw) on the floor, which
+    movers.Movers moves."""
+    x, y, yaw = pose
+    body = UsdGeom.Xform.Define(stage, path)
+    xf = UsdGeom.Xformable(body.GetPrim())
+    xf.AddTranslateOp().Set(Gf.Vec3d(x, y, 0.0))
+    xf.AddRotateZOp().Set(math.degrees(yaw))
+    UsdPhysics.RigidBodyAPI.Apply(body.GetPrim()).CreateKinematicEnabledAttr(True)
+    add_box(stage, f"{path}/box", (0.0, 0.0, size[2] / 2), size, color)
+
+
 def add_floor_with_drops(stage: Usd.Stage, holes, extent: float = 20.0, thickness: float = 0.02,
                          overlap: float = 0.001) -> None:
     """A floor at z=0 made of boxes around the holes (hazards.floor_tiles);
@@ -284,16 +296,20 @@ def add_charger(stage: Usd.Stage, path: str, pose, cfg: SimpleNamespace) -> None
             collider=False)
 
 
-def add_person(stage: Usd.Stage, path: str, pose, height: float = 1.7, character: str | None = None) -> None:
+def add_person(stage: Usd.Stage, path: str, pose, height: float = 1.7, character: str | None = None,
+               kinematic: bool = False) -> None:
     """A standing person, for object detection and for the LiDAR to see.
     `pose` (x, y, yaw): feet centre and facing direction. `character`: an
     Isaac Sim people USD (URL), standing with the arms down; without one, a
-    mannequin of capsules. One invisible box collider covers the body."""
+    mannequin of capsules. One invisible box collider covers the body.
+    `kinematic`: a kinematic body that movers.Movers moves."""
     x, y, yaw = pose
     root = UsdGeom.Xform.Define(stage, path)
     xf = UsdGeom.Xformable(root.GetPrim())
     xf.AddTranslateOp().Set(Gf.Vec3d(x, y, 0.0))
     xf.AddRotateZOp().Set(math.degrees(yaw))
+    if kinematic:
+        UsdPhysics.RigidBodyAPI.Apply(root.GetPrim()).CreateKinematicEnabledAttr(True)
     if character:
         add_actor(stage, f"{path}/actor", character)
     else:
@@ -348,6 +364,43 @@ def add_actor(stage: Usd.Stage, path: str, character: str) -> None:
     anim.CreateJointsAttr(joints)
     anim.SetTransforms(Vt.Matrix4dArray(local))
     UsdSkel.BindingAPI.Apply(skel_prim).CreateAnimationSourceRel().SetTargets([anim.GetPath()])
+
+
+# The characters' skeleton space is z up with the character facing -y, so
+# turning a leg or an arm forward is turning it about -x.
+FORWARD_AXIS = (-1.0, 0.0, 0.0)
+
+
+class Gait:
+    """Poses a character made by add_actor: sets joint angles about the
+    lateral axis on top of its standing pose (its SkelAnimation)."""
+
+    def __init__(self, anim: UsdSkel.Animation):
+        self.anim = anim
+        joints = list(anim.GetJointsAttr().Get())
+        self.base = [Gf.Matrix4d(m) for m in anim.GetTransforms(Usd.TimeCode.Default())]
+        index = {j: i for i, j in enumerate(joints)}
+        parent = [index.get(j.rpartition("/")[0], -1) for j in joints]
+        self.axes = {}  # joint name -> (index, the lateral axis in the joint's own frame)
+        for i, j in enumerate(joints):
+            rot, k = self.base[i].ExtractRotationMatrix(), parent[i]
+            while k >= 0:
+                rot, k = rot * self.base[k].ExtractRotationMatrix(), parent[k]
+            self.axes[j.rpartition("/")[2]] = (i, Gf.Vec3d(*FORWARD_AXIS) * rot.GetInverse())
+
+    @classmethod
+    def of(cls, stage: Usd.Stage, path: str) -> Gait | None:
+        prim = stage.GetPrimAtPath(path)
+        return cls(UsdSkel.Animation(prim)) if prim and prim.IsA(UsdSkel.Animation) else None
+
+    def set(self, angles: dict[str, float]) -> None:
+        """`angles`: joint name -> rad forward. The others stand."""
+        local = list(self.base)
+        for name, a in angles.items():
+            if name in self.axes and a != 0.0:
+                i, axis = self.axes[name]
+                local[i] = Gf.Matrix4d().SetRotate(Gf.Rotation(axis, math.degrees(a))) * self.base[i]
+        self.anim.SetTransforms(Vt.Matrix4dArray(local))
 
 
 def add_mannequin(stage: Usd.Stage, path: str, height: float = 1.7) -> None:

@@ -12,6 +12,7 @@ up the ROS 2 environment that Isaac Sim needs before the process starts.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -150,6 +151,30 @@ def place_people(args, cfg, layout) -> list[tuple[float, float, float]]:
     if args.world == "room":
         return [tuple(p) for p in cfg.people.room]
     return []
+
+
+def people_motions(args, layout, people) -> list:
+    """layout.Motion (or None: standing) for each person in `people`."""
+    if layout and layout.people is not None and not args.person and not args.no_people:
+        return list(layout.people_motion)
+    return [None] * len(people)
+
+
+def mover_specs(cfg, layout, people, motions, boxes_root) -> list:
+    """movers.MoverSpec for the people and boxes that move."""
+    from kachaka_isaac_sim.drive import Pose2D
+    from kachaka_isaac_sim.layout import BOX_RADIUS_MIN, PERSON_RADIUS
+    from kachaka_isaac_sim.movers import MoverSpec
+
+    seed = layout.seed if layout and layout.seed is not None else 0
+    items = [(f"/World/People/P{i + 1:02d}", Pose2D(*p), PERSON_RADIUS, float(cfg.movers.person_speed), m)
+             for i, (p, m) in enumerate(zip(people, motions))]
+    for b in layout.boxes if layout else []:
+        radius = max(BOX_RADIUS_MIN, math.hypot(*b.size[:2]) / 2)
+        items.append((f"{boxes_root}/{b.name}", b.pose, radius, float(cfg.movers.box_speed), b.motion))
+    return [MoverSpec(path, pose, radius, m.speed or speed, route=m.route, wander=m.wander, pause=m.pause,
+                      appear=m.appear, seed=seed * 1000 + k)
+            for k, (path, pose, radius, speed, m) in enumerate(items) if m is not None]
 
 
 def people_assets(cfg) -> list[str]:
@@ -335,8 +360,11 @@ def main() -> int:
         world.add_door(stage, spec, cfg.door)
     boxes_root = "/World/Boxes"
     for b in layout.boxes if layout else []:
-        world.add_box(stage, f"{boxes_root}/{b.name}", (b.pose.x, b.pose.y, b.size[2] / 2), b.size, b.color,
-                      yaw=b.pose.yaw)
+        if b.motion:
+            world.add_moving_box(stage, f"{boxes_root}/{b.name}", (b.pose.x, b.pose.y, b.pose.yaw), b.size, b.color)
+        else:
+            world.add_box(stage, f"{boxes_root}/{b.name}", (b.pose.x, b.pose.y, b.size[2] / 2), b.size, b.color,
+                          yaw=b.pose.yaw)
     charger_pose = place_charger(args, cfg, layout)
     if charger_pose:
         world.add_charger(stage, "/World/Charger", charger_pose, cfg.charger)
@@ -344,10 +372,13 @@ def main() -> int:
     for spec in shelf_specs:
         world.add_shelf(stage, spec.path, SHELF_STL, (spec.home.x, spec.home.y, spec.home.yaw), cfg.shelf)
     people = place_people(args, cfg, layout)
+    motions = people_motions(args, layout, people)
     actors = people_assets(cfg) if people else []
-    for i, pose in enumerate(people):
+    for i, (pose, motion) in enumerate(zip(people, motions)):
         character = actors[i % len(actors)] if actors else None
-        world.add_person(stage, f"/World/People/P{i + 1:02d}", pose, float(cfg.people.height), character)
+        world.add_person(stage, f"/World/People/P{i + 1:02d}", pose, float(cfg.people.height), character,
+                         kinematic=motion is not None)
+    moving = mover_specs(cfg, layout, people, motions, boxes_root)
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
     world.disable_pin_collision(stage)
@@ -453,19 +484,30 @@ def main() -> int:
     contacts = ContactSensor(world.BASE_LINK, world.CASTER_SHAPES)
     robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed, charger,
                      shelves, spawn, contacts)
-    node.reset_handler = robot.reset
-    if doors:
-        def reset(clear_odometry: bool = False) -> None:
-            robot.reset(clear_odometry)
-            doors.reset()
+    movers = None
+    if moving:
+        from kachaka_isaac_sim.movers import Movers
 
-        node.reset_handler = reset
+        movers = Movers(stage, moving, cfg.movers, lambda: robot.gt)
+        print(f"[kachaka] {len(moving)} moving: {', '.join(m.path.rpartition('/')[2] for m in moving)}", flush=True)
+
+    def reset(clear_odometry: bool = False) -> None:
+        robot.reset(clear_odometry)
+        if doors:
+            doors.reset()
+        if movers:
+            movers.reset()
+
+    node.reset_handler = reset
     callbacks = [
         SimulationManager.register_callback(lambda dt, ctx: robot.pre_step(dt), SimulationEvent.PHYSICS_PRE_STEP),
         SimulationManager.register_callback(lambda dt, ctx: robot.post_step(dt), SimulationEvent.PHYSICS_POST_STEP),
     ]
     if doors:
         callbacks.append(SimulationManager.register_callback(lambda dt, ctx: doors.step(dt),
+                                                             SimulationEvent.PHYSICS_PRE_STEP))
+    if movers:
+        callbacks.append(SimulationManager.register_callback(lambda dt, ctx: movers.step(dt),
                                                              SimulationEvent.PHYSICS_PRE_STEP))
 
     timing = [0.0, 0.0, 0]  # update seconds, camera seconds, loop count

@@ -12,9 +12,12 @@ are, on top of a world (the built-in room or an Isaac Sim scene).
       - pose: [[0.5, 1.5], [0.8, 1.4], 0.0]   # x and y drawn from a range
     locations:
       - {id: L01, name: Kitchen, pose: [0.5, 1.0, 1.5708]}
-    people: [[2.0, 1.5, -2.5]]
+    people:
+      - [2.0, 1.5, -2.5]
+      - {pose: [-1.5, 1.5, 0.0], route: [[1.0, 1.5], [1.0, -1.5]], speed: 0.6, pause: 1.0}
     boxes:
       - {name: crate, pose: [0.0, -1.5, 0.0], size: [0.4, 0.3, 0.4], color: [0.5, 0.4, 0.3]}
+      - {name: cart, pose: [0.0, 1.0, 0.0], size: [0.5, 0.4, 0.8], wander: [[-1, 1], [0.5, 1.5]], appear: [20, 10]}
     walls: [[0.6, -2.0, 0.6, -1.0]]
     doors:
       - {pose: [0.6, -0.6, 1.5708], kind: sliding, width: 0.8, open: true, cycle: [10, 5]}
@@ -26,6 +29,16 @@ a randomised object is drawn again until it keeps `clearance` from the other
 objects (and, in the room, from its walls and boxes). A key that is left out
 keeps the world's default (the room has a charger, a shelf, a location and two
 people); a key that is given replaces it, so `shelves: []` means no shelves.
+
+People and boxes stand still unless they are given
+- route: [[x, y], ...]: walk to each waypoint in turn, then back to the
+  start pose, and again;
+- wander: [[x lo, x hi], [y lo, y hi]]: walk to random points in that area
+  (drawn with the layout's seed). Keep the area free of obstacles: movers
+  walk straight and through anything that is not the robot;
+and optionally speed (m/s; config 'movers'), pause (s at each waypoint) and
+appear: [there s, away s] (gone part of the time, from a random phase).
+A mover waits while the robot is in its way.
 
 Plain Python: the simulator reads it before Isaac Sim starts.
 """
@@ -52,6 +65,7 @@ SHELF_RADIUS = math.hypot(*SHELF_SIZE) / 2
 CHARGER_RADIUS = 0.2  # panel and floor plate (est.)
 PERSON_RADIUS = math.hypot(*PERSON_COLLIDER) / 2
 LOCATION_RADIUS = ROBOT_RADIUS  # the robot stands there
+BOX_RADIUS_MIN = 0.1  # a moving box keeps at least this far out of the robot's way
 TRIES = 200
 
 
@@ -60,11 +74,23 @@ class LayoutError(ValueError):
 
 
 @dataclass
+class Motion:
+    """How a person or box moves (see movers.MoverSpec). speed None: the config's."""
+
+    route: list[tuple[float, float]] = field(default_factory=list)
+    wander: tuple[tuple[float, float], tuple[float, float]] | None = None
+    speed: float | None = None
+    pause: float = 0.0
+    appear: tuple[float, float] | None = None
+
+
+@dataclass
 class Box:
     name: str
     pose: Pose2D
     size: tuple[float, float, float]
     color: tuple[float, float, float] = (0.6, 0.55, 0.5)
+    motion: Motion | None = None
 
 
 @dataclass
@@ -90,6 +116,7 @@ class Layout:
     shelves: list[tuple[str, str, Pose2D]] | None = None  # id, name, pose
     locations: list[tuple[str, str, Pose2D]] | None = None
     people: list[Pose2D] | None = None
+    people_motion: list[Motion | None] = field(default_factory=list)  # one per person
     boxes: list[Box] = field(default_factory=list)
     walls: list[tuple[float, float, float, float]] = field(default_factory=list)
     doors: list[Door] = field(default_factory=list)
@@ -181,11 +208,14 @@ def parse_layout(data: dict, seed: int | None = None, world: str | None = None, 
                           poses[("locations", i)]) for i, e in enumerate(_list(data, "locations", path))]
         _unique([loc[0] for loc in out.locations], "location", path)
     if "people" in data:
-        out.people = [poses[("people", i)] for i in range(len(_list(data, "people", path)))]
+        people = _list(data, "people", path)
+        out.people = [poses[("people", i)] for i in range(len(people))]
+        out.people_motion = [_motion(e, f"people[{i}]", path, PERSON_KEYS) for i, e in enumerate(people)]
     for i, e in enumerate(_list(data, "boxes", path)):
         size = _numbers(e["size"], 3, f"boxes[{i}].size", path)
         color = _numbers(e.get("color", Box.color), 3, f"boxes[{i}].color", path)
-        out.boxes.append(Box(str(e.get("name", f"box{i + 1:02d}")), poses[("boxes", i)], size, color))
+        out.boxes.append(Box(str(e.get("name", f"box{i + 1:02d}")), poses[("boxes", i)], size, color,
+                             _motion(e, f"boxes[{i}]", path, BOX_KEYS)))
     for i, e in enumerate(_list(data, "doors", path)):
         if not isinstance(e, dict) or "pose" not in e:
             raise LayoutError(f"{path}: doors[{i}] needs a pose")
@@ -200,6 +230,49 @@ def parse_layout(data: dict, seed: int | None = None, world: str | None = None, 
         width = float(e["width"]) if e.get("width") is not None else None
         out.doors.append(Door(pose, kind, width, bool(e.get("open", True)), cycle))
     return out
+
+
+MOTION_KEYS = ("route", "wander", "speed", "pause", "appear")
+PERSON_KEYS = ("pose",) + MOTION_KEYS
+BOX_KEYS = ("name", "pose", "size", "color") + MOTION_KEYS
+
+
+def _motion(e, name: str, path: str, known: tuple[str, ...]) -> Motion | None:
+    """The motion keys of a person or box entry, or None if it stands still."""
+    if not isinstance(e, dict):
+        return None
+    unknown = set(e) - set(known)
+    if unknown:
+        raise LayoutError(f"{path}: {name}: unknown key(s) {', '.join(sorted(unknown))}; known: {', '.join(known)}")
+    if not any(k in e for k in MOTION_KEYS):
+        return None
+    m = Motion()
+    if e.get("route") is not None:
+        route = e["route"]
+        if not isinstance(route, list) or not route:
+            raise LayoutError(f"{path}: {name}.route must be a list of [x, y] waypoints")
+        m.route = [tuple(_numbers(p, 2, f"{name}.route[{k}]", path)) for k, p in enumerate(route)]
+    if e.get("wander") is not None:
+        w = e["wander"]
+        if not isinstance(w, list) or len(w) != 2:
+            raise LayoutError(f"{path}: {name}.wander must be [[x lo, x hi], [y lo, y hi]]")
+        rx, ry = (_numbers(r, 2, f"{name}.wander", path) for r in w)
+        if rx[0] > rx[1] or ry[0] > ry[1]:
+            raise LayoutError(f"{path}: {name}.wander: a range is [lo, hi] with lo <= hi")
+        m.wander = (rx, ry)
+    if m.route and m.wander:
+        raise LayoutError(f"{path}: {name}: give a route or a wander area, not both")
+    if e.get("speed") is not None:
+        m.speed = float(e["speed"])
+        if m.speed <= 0:
+            raise LayoutError(f"{path}: {name}.speed must be positive")
+    m.pause = float(e.get("pause") or 0.0)
+    if e.get("appear") is not None:
+        a = _numbers(e["appear"], 2, f"{name}.appear", path)
+        if a[0] <= 0 or a[1] < 0:
+            raise LayoutError(f"{path}: {name}.appear is [there s > 0, away s >= 0]")
+        m.appear = a
+    return m
 
 
 def _list(data: dict, key: str, path: str) -> list:
