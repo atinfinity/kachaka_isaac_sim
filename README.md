@@ -337,7 +337,7 @@ top of any world. Examples are in [`layouts/`](layouts): `room.yaml`,
 `room_door.yaml` (the door setup above), and `office.yaml`, `hospital.yaml`,
 `warehouse.yaml`, `simple_room.yaml` for the Isaac Sim scenes.
 
-![layouts/room.yaml with two seeds: the fixed objects stay, Shelf 2 is drawn in the north-east quarter](docs/layout.png)
+![layouts/room.yaml with four seeds: the fixed objects stay; Shelf 2, the person and the green box are drawn from their ranges](docs/layout.gif)
 
 ```yaml
 world: room                 # --world overrides it

@@ -1,5 +1,5 @@
-# The built-in room with two shelves, one of them placed at random, two
-# locations, a person and an extra box.
+# The built-in room with two shelves, two locations, a person and an extra
+# box. Shelf 2, the person and the box are placed at random.
 #   scripts/run_sim.sh --layout layouts/room.yaml [--layout-seed N]
 world: room
 seed: 7
@@ -8,12 +8,12 @@ spawn: [0.0, 0.0, 0.0]
 charger: [-2.27, 0.0, 0.0]        # back panel on the west wall
 shelves:
   - {id: S01, name: Shelf 1, pose: [1.3, -1.2, 0.0]}
-  # Somewhere in the north-east quarter, facing east or west.
-  - {id: S02, name: Shelf 2, pose: [[0.6, 2.0], [0.3, 1.5], [-0.3, 0.3]]}
+  # Somewhere in the north-east quarter, roughly facing east.
+  - {id: S02, name: Shelf 2, pose: [[0.4, 2.0], [0.2, 1.6], [-0.5, 0.5]]}
 locations:
   - {id: L01, name: Kitchen, pose: [0.5, 1.0, 1.5708]}
   - {id: L02, name: Entrance, pose: [-1.6, -1.4, 3.1416]}
-people:
-  - [2.0, 1.5, -2.5]
+people:                            # east half, facing anywhere
+  - [[0.8, 2.1], [-0.4, 1.7], [-3.14, 3.14]]
 boxes:
-  - {name: crate, pose: [0.2, -1.6, 0.4], size: [0.5, 0.35, 0.45], color: [0.45, 0.55, 0.35]}
+  - {name: crate, pose: [[-1.4, 0.4], [-1.7, -1.0], [-0.6, 0.6]], size: [0.5, 0.35, 0.45], color: [0.45, 0.55, 0.35]}

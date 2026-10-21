@@ -307,7 +307,7 @@ ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closin
 `room_door.yaml`（上のドアの構成）、Isaac Sim のシーン用の `office.yaml`、
 `hospital.yaml`、`warehouse.yaml`、`simple_room.yaml`。
 
-![layouts/room.yaml を 2 つのシードで起動。固定の物体はそのままで、Shelf 2 は北東の範囲内で引かれる](docs/layout.png)
+![layouts/room.yaml を 4 つのシードで起動。固定の物体はそのままで、Shelf 2・人・緑の箱がそれぞれの範囲内で引かれる](docs/layout.gif)
 
 ```yaml
 world: room                 # --world が優先
