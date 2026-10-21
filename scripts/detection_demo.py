@@ -11,6 +11,7 @@ pip package, not ROS:
 import argparse
 import io
 import math
+import os
 import time
 
 from kachaka_api import KachakaApiClient
@@ -58,6 +59,18 @@ def draw(im: Image.Image, objects, t: float) -> Image.Image:
     return im
 
 
+def to_gif(frames: list[Image.Image], step: int = 4) -> list[Image.Image]:
+    """One 256-colour palette for all frames, with dithering. A palette per
+    frame spends most colours on the floor and walls, which greys out small
+    objects such as the people's skin."""
+    sample = frames[::step]
+    strip = Image.new("RGB", (frames[0].width, frames[0].height * len(sample)))
+    for i, f in enumerate(sample):
+        strip.paste(f, (0, f.height * i))
+    palette = strip.quantize(colors=256, method=Image.Quantize.FASTOCTREE)
+    return [f.quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG) for f in frames]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", default="127.0.0.1:26400")
@@ -65,6 +78,7 @@ def main() -> None:
     ap.add_argument("--turns", type=float, default=1.0)
     ap.add_argument("--rate", type=float, default=0.6, help="turn rate [rad/s]")
     ap.add_argument("--scale", type=float, default=0.75, help="GIF size relative to the camera image")
+    ap.add_argument("--frames", help="also save the frames as PNG into this directory")
     args = ap.parse_args()
 
     client = KachakaApiClient(args.target)
@@ -81,8 +95,13 @@ def main() -> None:
     client.set_robot_velocity(0.0, 0.0)
     size = (round(frames[0].width * args.scale), round(frames[0].height * args.scale))
     frames = [f.resize(size, Image.LANCZOS) for f in frames]
-    frames[0].save(args.out, save_all=True, append_images=frames[1:], duration=round(duration / len(frames) * 1000),
-                   loop=0, optimize=True)
+    if args.frames:
+        os.makedirs(args.frames, exist_ok=True)
+        for i, f in enumerate(frames):
+            f.save(os.path.join(args.frames, f"{i:04d}.png"))
+    gif = to_gif(frames)
+    gif[0].save(args.out, save_all=True, append_images=gif[1:], duration=round(duration / len(frames) * 1000),
+                loop=0)
     print(f"saved {len(frames)} frames to {args.out}")
 
 
