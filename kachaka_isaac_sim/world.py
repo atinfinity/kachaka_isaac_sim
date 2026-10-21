@@ -132,6 +132,39 @@ def add_simple_room(stage: Usd.Stage) -> None:
         add_box(stage, f"{root}/{name}", center, size, color)
 
 
+def add_wall(stage: Usd.Stage, path: str, start, end, thickness: float = ROOM_WALL,
+             height: float = ROOM_HEIGHT) -> None:
+    """A straight wall from `start` to `end` (x, y), centred on that line."""
+    (x0, y0), (x1, y1) = start, end
+    length = math.hypot(x1 - x0, y1 - y0)
+    add_box(stage, path, ((x0 + x1) / 2, (y0 + y1) / 2, height / 2), (length, thickness, height))
+    mesh = UsdGeom.Xformable(stage.GetPrimAtPath(path))
+    mesh.AddRotateZOp().Set(math.degrees(math.atan2(y1 - y0, x1 - x0)))
+
+
+def add_door(stage: Usd.Stage, spec, cfg: SimpleNamespace, wall: float = ROOM_WALL) -> str:
+    """A door panel (doors.DoorSpec) as a kinematic body, placed for its
+    start state; doors.Doors moves it. Returns the body path."""
+    from .doors import panel_pose, panel_size
+    from .drive import quat_from_yaw
+
+    length, t = panel_size(spec, float(cfg.thickness))
+    h = float(cfg.height)
+    p = panel_pose(spec, 1.0 if spec.open else 0.0, t, wall)
+    body = UsdGeom.Xform.Define(stage, spec.path)
+    xf = UsdGeom.Xformable(body.GetPrim())
+    xf.AddTranslateOp().Set(Gf.Vec3d(p.x, p.y, h / 2))
+    xf.AddOrientOp().Set(Gf.Quatf(*map(float, quat_from_yaw(p.yaw))))
+    rb = UsdPhysics.RigidBodyAPI.Apply(body.GetPrim())
+    rb.CreateKinematicEnabledAttr(True)
+    add_box(stage, f"{spec.path}/panel", (0.0, 0.0, 0.0), (length, t, h - 0.01), (0.62, 0.45, 0.28))
+    # A handle on both faces, to tell the panel from a wall.
+    for side in (-1, 1):
+        add_box(stage, f"{spec.path}/handle_{'a' if side > 0 else 'b'}", (length / 2 - 0.08, side * (t / 2 + 0.015), 0.0),
+                (0.03, 0.03, 0.15), (0.8, 0.8, 0.82), collider=False)
+    return spec.path
+
+
 def add_shelf(stage: Usd.Stage, path: str, stl: Path, pose, cfg: SimpleNamespace) -> str:
     """Kachaka Shelf as a rigid body on four casters, with the mesh as its
     visual. `pose` (x, y, yaw) is the base_footprint pose of a robot docked

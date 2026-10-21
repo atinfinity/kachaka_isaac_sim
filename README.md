@@ -296,6 +296,36 @@ the same object counts again after 0.5 s without contact. `collision.stop: true`
 makes a collision stop the robot like a step, with the simulator error -18,
 until the power button (assumed behaviour). `sim/reset` sets the count back to zero.
 
+### Doors
+
+`--door X Y YAW` puts a door into a doorway centred at (X, Y); the doorway
+runs along YAW (x along the wall). The doorway's walls are separate:
+`--wall X0 Y0 X1 Y1` adds a wall segment (both repeatable). A door is a
+kinematic panel: the LiDAR sees it, Nav2 marks it in the costmap and plans
+round it while it is closed, and it pushes whatever stands in its way (no
+safety sensor stops it).
+
+![A wall splits the room. The robot drives east through the open door; the door closes as it heads back, so Nav2 goes round through the gap at the north end; the door opens again and the robot goes through it](docs/door.gif)
+
+- `--door-kind sliding|hinged` (`door.kind`): a sliding panel runs along the wall,
+  a hinged one swings 90° about the doorway's −x side.
+- `--door-width` (0.8 m), `--door-closed` (start closed), `--door-cycle OPEN_S CLOSED_S`
+  (open and close on a fixed cycle until the first command). Speeds, thickness and
+  height are in `door` in `config/robot.yaml`.
+- Doors are named D01, D02, ... in the order given. `sim/doors/<id>/set_open`
+  (`std_srvs/SetBool`) opens or closes one; `sim/doors` (latched JSON) lists each door's
+  `id`, `kind`, `pose` (map frame), `width`, `state` (open, closed, opening, closing),
+  `opening` (0-1) and `cycling`. `sim/reset` puts the doors back to their start state.
+
+```bash
+# A wall at x = 0.6 with a door at y = -0.6 and a gap at the north end
+scripts/run_sim.sh --no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708
+ros2 service call /kachaka/sim/doors/D01/set_open std_srvs/srv/SetBool "{data: false}"
+ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closing", ...}]}
+```
+
+Elevators between floors are not simulated.
+
 ## Requirements
 
 - Ubuntu 24.04, x86_64
@@ -357,6 +387,8 @@ scripts/run_sim.sh --no-shelves
 scripts/run_sim.sh --person X Y YAW      # place a person (repeatable; default: two in the room)
 scripts/run_sim.sh --no-people
 scripts/run_sim.sh --drop X Y SX SY      # a hole in the floor (repeatable), see Steps and collisions
+scripts/run_sim.sh --wall X0 Y0 X1 Y1    # a wall segment (repeatable), see Doors
+scripts/run_sim.sh --door X Y YAW        # a door (repeatable; --door-kind, --door-width, --door-closed, --door-cycle)
 scripts/run_sim.sh --api-port 26400      # kachaka-api gRPC port (default 26400; 0 turns it off)
 scripts/run_sim.sh --help
 ```
@@ -445,6 +477,8 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/torch` | `std_msgs/String`, JSON `{"front", "back"}`: torch levels 0-255 (simulator only, latched) | |
 | `sim/reset` | `std_srvs/SetBool` service: back to the start state, `data: true` also clears the SLAM map (simulator only, see [Resetting the simulator](#resetting-the-simulator)) | |
 | `sim/reset/event` | `std_msgs/String`, JSON `{"id", "clear_map"}` after each reset (simulator only) | |
+| `sim/doors` | `std_msgs/String`, JSON `{"doors": [...]}`: each door's state (simulator only, latched, on change, see [Doors](#doors)) | |
+| `sim/doors/<id>/set_open` | `std_srvs/SetBool` service: open (`true`) or close a door (simulator only) | |
 | `sim/command/start`, `sim/command/cancel` | `std_msgs/String`, JSON: commands from the kachaka-api server to `command_server` (simulator only) | |
 | `sim/command/state` | `std_msgs/String`, JSON: running command and last result (simulator only, latched) | |
 
@@ -694,7 +728,9 @@ CI has no GPU, so the simulator itself is checked locally:
 `scripts/smoke_test.sh --nav` starts it headless and runs
 `tests/ros_smoke_check.py`, then with SLAM + Nav2 the navigation, docking,
 shelf, command and object detection checks one after another in the same simulator run (each
-starts with `sim/reset`). It ends with `tests/ros_hazard_check.py` in a second run with a
+starts with `sim/reset`). A second run with a wall and a door runs `tests/ros_door_check.py`
+(Nav2 through the door, round it while it is closed, and through it again once it opens).
+It ends with `tests/ros_hazard_check.py` in a third run with a
 drop, and logs the collisions seen during the Nav2 checks to `build/smoke_collisions.log`.
 
 ### With the simulator
@@ -713,6 +749,7 @@ python3 /tests/ros_shelf_check.py    # shelf docking, towing and placing (same)
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, goal_pose, cancel_all (same)
 python3 /tests/ros_detection_check.py   # object_detection/result while turning in place (same)
 python3 /tests/ros_hazard_check.py   # steps and collisions (no Nav2; sim started with --drop 1.0 0.0 0.4 0.8)
+python3 /tests/ros_door_check.py     # Nav2 and a door (sim started with DOOR_ARGS in the script)
 ```
 
 The kachaka-api check runs on the host with the official client (same setup):

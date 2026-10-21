@@ -270,6 +270,32 @@ ros2 service call /kachaka/sim/power_button std_srvs/srv/Trigger
 `collision.stop: true` にすると段差と同じように停止し、電源ボタンまでシミュレータのエラー −18 を
 出します（推定の挙動）。`sim/reset` で回数は 0 に戻ります。
 
+### ドア
+
+`--door X Y YAW` で (X, Y) を中心とする出入口にドアを置きます。出入口は YAW の向き（壁に沿って x）です。
+出入口の両側の壁は別に `--wall X0 Y0 X1 Y1` で足します（どちらも複数可）。ドアはキネマティックな板で、
+LiDAR に映り、閉じている間は Nav2 がコストマップに載せて迂回します。進路にあるものは押しのけます
+（安全センサーで止まりません）。
+
+![壁で部屋を仕切り、開いたドアを東へ通過。戻るときにドアが閉まり、Nav2 は北端のすき間を回る。ドアが再び開くとそこを通る](docs/door.gif)
+
+- `--door-kind sliding|hinged`（`door.kind`）: 引き戸は壁に沿って動き、開き戸は出入口の −x 側を軸に 90° 回ります。
+- `--door-width`（0.8 m）、`--door-closed`（閉じた状態で開始）、`--door-cycle OPEN_S CLOSED_S`
+  （最初のコマンドまで一定周期で開閉）。速さ・厚さ・高さは `config/robot.yaml` の `door` にあります。
+- ドアは指定順に D01、D02、... と名付けます。`sim/doors/<id>/set_open`（`std_srvs/SetBool`）で開閉し、
+  `sim/doors`（latched の JSON）に各ドアの `id`、`kind`、`pose`（map 座標系）、`width`、
+  `state`（open、closed、opening、closing）、`opening`（0〜1）、`cycling` を出します。
+  `sim/reset` でドアは開始時の状態に戻ります。
+
+```bash
+# x = 0.6 の壁、y = -0.6 にドア、北端にすき間
+scripts/run_sim.sh --no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708
+ros2 service call /kachaka/sim/doors/D01/set_open std_srvs/srv/SetBool "{data: false}"
+ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closing", ...}]}
+```
+
+フロア間のエレベーターはシミュレートしません。
+
 ## 動作環境
 
 - Ubuntu 24.04、x86_64
@@ -330,6 +356,8 @@ scripts/run_sim.sh --no-shelves
 scripts/run_sim.sh --person X Y YAW      # 人を置く（複数可。デフォルトは部屋に 2 人）
 scripts/run_sim.sh --no-people
 scripts/run_sim.sh --drop X Y SX SY      # 床に穴を開ける（複数可。「段差と衝突」を参照）
+scripts/run_sim.sh --wall X0 Y0 X1 Y1    # 壁（複数可。「ドア」を参照）
+scripts/run_sim.sh --door X Y YAW        # ドア（複数可。--door-kind、--door-width、--door-closed、--door-cycle）
 scripts/run_sim.sh --api-port 26400      # kachaka-api の gRPC ポート（既定 26400。0 で無効）
 scripts/run_sim.sh --help
 ```
@@ -405,6 +433,8 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/torch` | `std_msgs/String`、トーチの明るさ 0〜255 の JSON `{"front", "back"}`（シミュレータのみ、latched） | |
 | `sim/reset` | `std_srvs/SetBool` サービス、開始時の状態に戻す。`data: true` で SLAM の地図も消す（シミュレータのみ、[シミュレータのリセット](#シミュレータのリセット)を参照） | |
 | `sim/reset/event` | `std_msgs/String`、リセットのたびに JSON `{"id", "clear_map"}`（シミュレータのみ） | |
+| `sim/doors` | `std_msgs/String`、JSON `{"doors": [...]}`: 各ドアの状態（シミュレータのみ、latched、変化時、[ドア](#ドア)を参照） | |
+| `sim/doors/<id>/set_open` | `std_srvs/SetBool` サービス: ドアを開ける（`true`）/閉める（シミュレータのみ） | |
 | `sim/front_stop/set_enabled`、`sim/front_stop/mute` | `std_srvs/SetBool` サービス。前方障害物停止の ON/OFF（アプリの設定に相当）と、コマンド実行中の一時無効化（`command_server` が使う）（シミュレータのみ） | |
 | `sim/command/start`、`sim/command/cancel` | `std_msgs/String`、JSON。kachaka-api サーバーから `command_server` へのコマンド（シミュレータのみ） | |
 | `sim/command/state` | `std_msgs/String`、JSON。実行中のコマンドと最後の結果（シミュレータのみ、latched） | |
@@ -628,7 +658,7 @@ LiDAR は壁・箱・人・シェルフの脚を見て、充電器とシェル�
 
 CI には GPU がないため、シミュレータ自体はローカルで確認します。`scripts/smoke_test.sh --nav` は
 シミュレータをヘッドレスで起動して `tests/ros_smoke_check.py` を実行し、続いて SLAM + Nav2 で
-ナビゲーション・充電・シェルフ・コマンド・物体検出のチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。最後に段差を開けたシミュレータを起動し直して `tests/ros_hazard_check.py` を実行します。Nav2 のチェック中の衝突は `build/smoke_collisions.log` に記録します。
+ナビゲーション・充電・シェルフ・コマンド・物体検出のチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。次に壁とドアのあるシミュレータを起動し直して `tests/ros_door_check.py`（ドアの通過、閉まったドアの迂回、開いたドアの再通過）を実行し、最後に段差を開けたシミュレータを起動し直して `tests/ros_hazard_check.py` を実行します。Nav2 のチェック中の衝突は `build/smoke_collisions.log` に記録します。
 
 ### シミュレータあり
 
@@ -646,6 +676,7 @@ python3 /tests/ros_shelf_check.py    # シェルフのドッキング、牽引�
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK、goal_pose、cancel_all（同上）
 python3 /tests/ros_detection_check.py   # その場で旋回しながら object_detection/result を確認（同上）
 python3 /tests/ros_hazard_check.py   # 段差と衝突（Nav2 不要。シミュレータは --drop 1.0 0.0 0.4 0.8 で起動）
+python3 /tests/ros_door_check.py     # Nav2 とドア（シミュレータはスクリプト内の DOOR_ARGS で起動）
 ```
 
 kachaka-api のテストはホストで公式クライアントを使って実行します（準備は同上）:

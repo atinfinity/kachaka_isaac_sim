@@ -9,7 +9,8 @@
 #
 # Both end with tests/ros_hazard_check.py (step sensors, collisions) in a
 # second simulator run with a drop in the floor. With --nav, collisions seen
-# during the Nav2 checks are logged to build/smoke_collisions.log.
+# during the Nav2 checks are logged to build/smoke_collisions.log, and
+# tests/ros_door_check.py runs in a third simulator run with a door.
 #
 # Needs the ROS image: docker compose -f docker/compose.yaml build
 set -euo pipefail
@@ -51,7 +52,7 @@ FAILED=()
 echo "[smoke] running checks"
 ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_smoke_check.py
 
-if $NAV; then
+start_nav() {
     echo "[smoke] starting SLAM + Nav2 (log: $NAV_LOG)"
     ros --name "$NAV_CONTAINER" kachaka-isaac-sim-ros:jazzy \
         ros2 launch kachaka_sim_bringup slam.launch.py nav:=true rviz:=false > "$NAV_LOG" 2>&1 &
@@ -63,6 +64,10 @@ if $NAV; then
     done
     grep -q "\[lifecycle_manager_navigation\]: .*Managed nodes are active" "$NAV_LOG" \
         || { echo "[smoke] Nav2 did not become active; see $NAV_LOG"; exit 1; }
+}
+
+if $NAV; then
+    start_nav
     # Each check resets the simulator first, so one failure does not spoil the
     # next: run them all and report the failures at the end.
     ros --name "$COLLISION_CONTAINER" kachaka-isaac-sim-ros:jazzy \
@@ -75,9 +80,24 @@ if $NAV; then
     echo "[smoke] collisions during the Nav2 checks: $(grep -c '^data:' "$COLLISION_LOG" || true) (see $COLLISION_LOG)"
 fi
 
+stop_sim() {
+    pgrep -f "^\S*/bin/python \S*run_sim.py" | xargs -r kill 2>/dev/null || true
+    wait "$SIM" 2>/dev/null || true
+}
+
+if $NAV; then
+    # A partition wall with a door (tests/ros_door_check.py DOOR_ARGS).
+    stop_sim
+    LOG=build/smoke_sim_door.log
+    start_sim --no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708
+    start_nav
+    echo "[smoke] running ros_door_check"
+    ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_door_check.py || FAILED+=(ros_door_check)
+    docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
+fi
+
 # Step sensors and collisions need a drop in the floor: restart the simulator.
-pgrep -f "^\S*/bin/python \S*run_sim.py" | xargs -r kill 2>/dev/null || true
-wait "$SIM" 2>/dev/null || true
+stop_sim
 LOG=build/smoke_sim_drop.log
 start_sim --drop 1.0 0.0 0.4 0.8
 echo "[smoke] running ros_hazard_check"

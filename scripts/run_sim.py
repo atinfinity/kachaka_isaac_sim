@@ -48,6 +48,18 @@ def parse_args() -> argparse.Namespace:
                    help="place a standing person (static) at X, Y facing YAW (world frame; repeatable). "
                         "Default: the people in config 'people.room' in 'room', none elsewhere")
     p.add_argument("--no-people", action="store_true", help="no people")
+    p.add_argument("--wall", type=float, nargs=4, action="append", metavar=("X0", "Y0", "X1", "Y1"),
+                   help="a straight wall from X0, Y0 to X1, Y1 (world frame; repeatable)")
+    p.add_argument("--door", type=float, nargs=3, action="append", metavar=("X", "Y", "YAW"),
+                   help="a door whose doorway is centred at X, Y, with the wall along YAW (world frame; "
+                        "repeatable; ids D01, D02, ...). Leave a gap for it between --wall segments. "
+                        "Open and close it with the sim/doors/<id>/set_open service")
+    p.add_argument("--door-kind", choices=("sliding", "hinged"), help="door type (default: door.kind in the config)")
+    p.add_argument("--door-width", type=float, help="doorway width [m] (default: door.width in the config)")
+    p.add_argument("--door-closed", action="store_true", help="doors start closed")
+    p.add_argument("--door-cycle", type=float, nargs=2, metavar=("OPEN_S", "CLOSED_S"),
+                   help="open and close the doors on their own, OPEN_S open then CLOSED_S closed, "
+                        "until a sim/doors command")
     p.add_argument("--drop", type=float, nargs=4, action="append", metavar=("X", "Y", "SX", "SY"),
                    help="a drop (hole in the floor) centred at X, Y, SX by SY metres; repeatable "
                         "(depth: drop.depth in the config)")
@@ -142,6 +154,17 @@ def place_shelves(args, cfg):
     return specs, locations
 
 
+def place_doors(args, cfg):
+    from kachaka_isaac_sim.doors import DoorSpec
+    from kachaka_isaac_sim.drive import Pose2D
+
+    kind = args.door_kind or cfg.door.kind
+    width = args.door_width or float(cfg.door.width)
+    cycle = tuple(args.door_cycle) if args.door_cycle else None
+    return [DoorSpec(f"D{i + 1:02d}", f"/World/Doors/D{i + 1:02d}", Pose2D(*pose), width, kind,
+                     open=not args.door_closed, cycle=cycle) for i, pose in enumerate(args.door or [])]
+
+
 def main() -> int:
     args = parse_args()
     cfg = load_config(args.config)
@@ -180,6 +203,11 @@ def main() -> int:
         world.add_simple_room(stage)
     elif not builtin:
         world.load_world_usd(stage, world.resolve_world(args.world))
+    for i, (x0, y0, x1, y1) in enumerate(args.wall or []):
+        world.add_wall(stage, f"/World/Walls/W{i + 1:02d}", (x0, y0), (x1, y1))
+    door_specs = place_doors(args, cfg)
+    for spec in door_specs:
+        world.add_door(stage, spec, cfg.door)
     charger_pose = None
     if not args.no_charger:
         if args.charger:
@@ -282,6 +310,12 @@ def main() -> int:
             [{"id": s.id, "name": s.name, "home": in_map(s.home), "width": SHELF_SIZE[1], "depth": SHELF_SIZE[0]}
              for s in shelf_specs],
             [{"id": loc["id"], "name": loc["name"], "pose": in_map(loc["pose"])} for loc in locations])
+    doors = None
+    if door_specs:
+        from kachaka_isaac_sim.doors import Doors
+
+        doors = Doors(stage, door_specs, cfg.door, world.ROOM_WALL)
+        node.add_doors(doors, lambda p: relative_pose(spawn, p))
     sim_start = SimulationManager.get_simulation_time()
     from kachaka_isaac_sim.physics_sensors import ContactSensor
 
@@ -289,10 +323,19 @@ def main() -> int:
     robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed, charger,
                      shelves, spawn, contacts)
     node.reset_handler = robot.reset
+    if doors:
+        def reset(clear_odometry: bool = False) -> None:
+            robot.reset(clear_odometry)
+            doors.reset()
+
+        node.reset_handler = reset
     callbacks = [
         SimulationManager.register_callback(lambda dt, ctx: robot.pre_step(dt), SimulationEvent.PHYSICS_PRE_STEP),
         SimulationManager.register_callback(lambda dt, ctx: robot.post_step(dt), SimulationEvent.PHYSICS_POST_STEP),
     ]
+    if doors:
+        callbacks.append(SimulationManager.register_callback(lambda dt, ctx: doors.step(dt),
+                                                             SimulationEvent.PHYSICS_PRE_STEP))
 
     timing = [0.0, 0.0, 0]  # update seconds, camera seconds, loop count
     wall_start = time.monotonic()
@@ -306,6 +349,8 @@ def main() -> int:
             node.spin_once()
             node.run_pending()
             app.update()
+            if doors and doors.take_changed():
+                node.publish_doors()
             t1 = time.perf_counter()
             publish_cameras(node, cameras, robot.t, tof_off=robot.sensors_paused, detector=detector)
             if recorder:
