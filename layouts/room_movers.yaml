@@ -1,5 +1,5 @@
 # The room with people and a cart that move across the robot's routes
-# (tests/ros_nav_check.py with --layout, smoke_test.sh --nav).
+# (tests/ros_nav_check.py --no-collisions, smoke_test.sh --nav).
 #   scripts/run_sim.sh --layout layouts/room_movers.yaml [--layout-seed N]
 world: room
 seed: 3

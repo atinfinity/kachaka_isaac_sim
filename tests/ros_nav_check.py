@@ -9,9 +9,14 @@ range sensor.
 
     python3 tests/ros_nav_check.py                  # default room
     python3 tests/ros_nav_check.py --world office   # simulator started with --world office
+
+With --no-collisions it also fails on any collision (sim/collision) while
+it drives, as with people and boxes moving across the way
+(run_sim.py --layout layouts/room_movers.yaml).
 """
 
 import argparse
+import json
 import math
 import sys
 
@@ -24,6 +29,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sim_reset import add_reset_args, reset_sim
+from std_msgs.msg import String
 
 # Per world: spawn pose (as in kachaka_isaac_sim/scenes.py) and goals
 # (x, y, yaw), world frame. In the room the first goal turns the robot around:
@@ -64,6 +70,9 @@ class NavCheck(Node):
         self.map_info = None
         latched = QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(OccupancyGrid, "/map", lambda m: setattr(self, "map_info", m.info), latched)
+        self.collisions = []
+        self.create_subscription(String, "/kachaka/sim/collision", lambda m: self.collisions.append(json.loads(m.data)),
+                                 10)
 
     def map_bounds(self):
         i = self.map_info
@@ -111,6 +120,7 @@ class NavCheck(Node):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--world", default="room", choices=sorted(WORLDS))
+    ap.add_argument("--no-collisions", action="store_true", help="fail on any collision while driving")
     add_reset_args(ap)
     args = ap.parse_args()
     spawn, goals = WORLDS[args.world]
@@ -119,6 +129,7 @@ def main():
     if not args.no_reset:
         reset_sim(node, args.clear_map)
         node.min_vx = 0.0
+    node.collisions.clear()
     if not node.client.wait_for_server(timeout_sec=60.0):
         print("navigate_to_pose action server not found")
         return 1
@@ -138,6 +149,11 @@ def main():
     backward = node.min_vx < -0.01
     ok_all &= not backward
     print(f"backward motion: {'FAIL' if backward else 'OK'} (min cmd_vel x {node.min_vx:+.2f} m/s)", flush=True)
+    if args.no_collisions:
+        hit = sorted({c.get("with", "?") for c in node.collisions})
+        ok_all &= not hit
+        print(f"collisions: {'FAIL' if hit else 'OK'} ({len(node.collisions)}{': ' + ', '.join(hit) if hit else ''})",
+              flush=True)
     print("ALL PASSED" if ok_all else "FAILED", flush=True)
     node.destroy_node()
     rclpy.shutdown()

@@ -26,7 +26,8 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
   本体の衝突は回数を数えて publish します。`--drop` で床に穴を開けられます
 - topic 名・メッセージ型・QoS は実機ブリッジと同じ
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
-  レイアウトファイルで充電器・シェルフ・ロケーション・人・箱・壁・ドアを配置（ランダム配置も可）
+  レイアウトファイルで充電器・シェルフ・ロケーション・人・箱・壁・ドアを配置（ランダム配置も可）。
+  人と箱は経由点を巡回・範囲内を歩き回り・現れたり消えたりもできます
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
   カチャカには後方の距離センサーがないので、Nav2 は後退しない設定です
 - 実機ブリッジの全コマンドに対応した `kachaka_command/execute`（Nav2 ベース）: MOVE_TO_POSE、
@@ -304,7 +305,7 @@ ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closin
 `--layout FILE` で YAML ファイルを読み、ロボットの開始位置と、充電器・シェルフ・
 ロケーション・人・箱・壁・ドア・段差の配置をワールドに重ねます。どのワールドとも
 組み合わせられます。例は [`layouts/`](layouts) にあります: `room.yaml`、
-`room_door.yaml`（上のドアの構成）、Isaac Sim のシーン用の `office.yaml`、
+`room_door.yaml`（上のドアの構成）、`room_movers.yaml`（[動く人と箱](#動く人と箱)）、Isaac Sim のシーン用の `office.yaml`、
 `hospital.yaml`、`warehouse.yaml`、`simple_room.yaml`。
 
 ![layouts/room.yaml を 4 つのシードで起動。固定の物体はそのままで、Shelf 2・人・緑の箱がそれぞれの範囲内で引かれる](docs/layout.gif)
@@ -346,6 +347,38 @@ drops: [[1.0, 0.0, 0.4, 0.8]]                # x, y, x 方向の大きさ, y 方
 ```bash
 scripts/run_sim.sh --layout layouts/room.yaml --layout-seed 3
 scripts/run_sim.sh --layout layouts/office.yaml   # --world office にもなる
+```
+
+### 動く人と箱
+
+レイアウトファイルの人と箱は動かせます。動くものはキネマティックな剛体で、物理ステップごとに
+動かすので、LiDAR・カメラ・ToF カメラ・物体検出にはその時の位置で見えます。レイアウトで
+指定しない限り何も動きません。例は [`layouts/room_movers.yaml`](layouts/room_movers.yaml) です。
+
+![layouts/room_movers.yaml: 2 人と台車が部屋を横切る中、Nav2 が触れずに 4 つのゴールへ着く](docs/movers.gif)
+
+```yaml
+people:
+  - {pose: [0.8, -1.6, 1.5708], route: [[0.8, 1.6]], pause: 2.0}   # 往復
+  - {pose: [0.0, 1.2, 0.0], wander: [[-0.1, 0.2], [0.6, 1.6]], speed: 0.5}  # x の範囲, y の範囲
+boxes:
+  - {name: cart, pose: [-1.6, -0.3, 0.0], size: [0.5, 0.4, 0.8],
+     route: [[-0.5, -0.3]], speed: 0.3, pause: 3.0, appear: [25, 8]}
+```
+
+- `route`: 経由点を順に歩き、開始位置に戻るのを繰り返します。
+  `wander`: 範囲内のランダムな点へ歩きます（レイアウトのシードで引きます）。両方は指定できません。
+- `speed`（m/s。既定は `config/robot.yaml` の `movers.person_speed` 0.7 と
+  `movers.box_speed` 0.4）、`pause`（経由点ごとに止まる秒数）、`appear: [いる, いない]`
+  （秒。しばらくいて、いなくなる。周期のどこから始まるかはシードで引きます）。
+- 次の経由点の方を向いてから歩きます。ロボットが行く手のすぐ先にいる間は待ち、ロボットの
+  真上には現れません。それ以外では止まらないので、ロボットの側でよける必要があります。
+- 人のキャラクターは歩くときに脚と腕を振ります。
+- `sim/reset` で開始位置に戻ります。
+
+```bash
+scripts/run_sim.sh --layout layouts/room_movers.yaml
+python3 /tests/ros_nav_check.py --no-collisions   # SLAM + Nav2 と一緒に: ゴール到達と衝突なし
 ```
 
 ## 動作環境
@@ -711,7 +744,7 @@ LiDAR は壁・箱・人・シェルフの脚を見て、充電器とシェル�
 
 CI には GPU がないため、シミュレータ自体はローカルで確認します。`scripts/smoke_test.sh --nav` は
 シミュレータをヘッドレスで起動して `tests/ros_smoke_check.py` を実行し、続いて SLAM + Nav2 で
-ナビゲーション・充電・シェルフ・コマンド・物体検出のチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。次に壁とドアのあるシミュレータを起動し直して `tests/ros_door_check.py`（ドアの通過、閉まったドアの迂回、開いたドアの再通過）を実行し、最後に段差を開けたシミュレータを起動し直して `tests/ros_hazard_check.py` を実行します。Nav2 のチェック中の衝突は `build/smoke_collisions.log` に記録します。
+ナビゲーション・充電・シェルフ・コマンド・物体検出のチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。次に壁とドアのあるシミュレータを起動し直して `tests/ros_door_check.py`（ドアの通過、閉まったドアの迂回、開いたドアの再通過）を実行します。続いて `layouts/room_movers.yaml` で起動し直して `tests/ros_nav_check.py --no-collisions`（動く人と台車の間を、触れずに Nav2 のゴールへ）を実行し、最後に段差を開けたシミュレータを起動し直して `tests/ros_hazard_check.py` を実行します。Nav2 のチェック中の衝突は `build/smoke_collisions.log` に記録します。
 
 ### シミュレータあり
 
@@ -730,6 +763,7 @@ python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK�
 python3 /tests/ros_detection_check.py   # その場で旋回しながら object_detection/result を確認（同上）
 python3 /tests/ros_hazard_check.py   # 段差と衝突（Nav2 不要。シミュレータは --drop 1.0 0.0 0.4 0.8 で起動）
 python3 /tests/ros_door_check.py     # Nav2 とドア（シミュレータは --layout layouts/room_door.yaml で起動）
+python3 /tests/ros_nav_check.py --no-collisions   # 動く人の間で Nav2 のゴール（シミュレータは --layout layouts/room_movers.yaml で起動）
 ```
 
 kachaka-api のテストはホストで公式クライアントを使って実行します（準備は同上）:
