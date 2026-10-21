@@ -4,7 +4,8 @@ Publishes what slam.launch.py and navigation.launch.py need from the robot, so
 Nav2 and slam_toolbox can be started and driven without Isaac Sim (CI):
 /clock, TF odom -> base_footprint -> base_link -> laser_frame,
 /kachaka/odometry/odometry and /kachaka/lidar/scan. It integrates
-/kachaka/manual_control/cmd_vel perfectly, so the odometry is exact.
+/kachaka/manual_control/cmd_vel and /kachaka/sim/autonomous/cmd_vel (nav_bridge
+with use_sim_time) perfectly, so the odometry is exact.
 
     ros2 run kachaka_sim_bringup fake_robot
 """
@@ -73,7 +74,8 @@ class FakeRobot(Node):
         self.clock_pub = self.create_publisher(Clock, "/clock", 10)
         self.odom_pub = self.create_publisher(Odometry, "/kachaka/odometry/odometry", 10)
         self.scan_pub = self.create_publisher(LaserScan, "/kachaka/lidar/scan", qos_profile_sensor_data)
-        self.create_subscription(Twist, "/kachaka/manual_control/cmd_vel", self._on_cmd, 10)
+        for topic in ("manual_control/cmd_vel", "sim/autonomous/cmd_vel"):
+            self.create_subscription(Twist, f"/kachaka/{topic}", self._on_cmd, 10)
         self.tf = TransformBroadcaster(self)
         self.static_tf = StaticTransformBroadcaster(self)
         self.static_tf.sendTransform([

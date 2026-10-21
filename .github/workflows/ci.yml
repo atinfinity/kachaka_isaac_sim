@@ -72,11 +72,17 @@ jobs:
           mkdir -p build/api_fake
           docker run --rm -v "$PWD:/repo" -e CHECK_LOG_DIR=/repo/build/api_fake "$ROS_IMAGE" \
             python3 /repo/tests/api_fake_check.py
+      - name: Speed limits against the fake simulator
+        run: |
+          mkdir -p build/speed_check
+          docker run --rm -v "$PWD:/repo" -e CHECK_LOG_DIR=/repo/build/speed_check "$ROS_IMAGE" \
+            python3 /repo/tests/speed_limit_check.py
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ros-check-logs
           path: |
             build/nav2_check
+            build/speed_check
             build/api_fake
           if-no-files-found: ignore

@@ -33,11 +33,11 @@ sys.path.insert(0, str(ROOT))
 
 from kachaka_isaac_sim.config import DEFAULT_CONFIG, load_config
 from kachaka_isaac_sim.drive import (
-    DriveLimits,
     NoisyOdometry,
     Pose2D,
     VelocityCommand,
     WheelOdometry,
+    drive_limits,
     relative_pose,
     wheel_speeds,
     wrap_angle,
@@ -149,8 +149,7 @@ class FakeRobot:
         self.body = outline(cfg.front_stop.front_x - BODY_LENGTH, cfg.front_stop.front_x, BODY_HALF_WIDTH)
         rng = random.Random(seed)
         d = cfg.drive
-        self.limiter = VelocityCommand(DriveLimits(
-            d.max_linear_vel, d.max_angular_vel, d.max_linear_accel, d.max_angular_accel, d.cmd_vel_timeout))
+        self.limiter = VelocityCommand(drive_limits(d))
         self.v = self.w = 0.0
         self.wheel_angles = [0.0, 0.0]
         self.wheel_rates = [0.0, 0.0]
@@ -202,9 +201,7 @@ class FakeRobot:
         sh = self.shelves
         ok, msg = sh.dock(self.gt) if dock else sh.undock()
         if ok:
-            d = self.cfg.drive
-            self.limiter.limits.max_linear_vel = (min(d.max_linear_vel, d.max_linear_vel_towing) if self.towing
-                                                  else d.max_linear_vel)
+            self.limiter.towing = self.towing
             self.node.publish_shelf_docked(sh.specs[sh.docked].id if self.towing else "")
         return ok, msg
 
@@ -259,7 +256,7 @@ class FakeRobot:
         node, cfg = self.node, self.cfg
         cmd = node.take_cmd()
         if cmd is not None and self.t >= self.hold_until:
-            self.limiter.set_target(cmd[0], cmd[1], self.t)
+            self.limiter.set_target(*cmd[:2], self.t, autonomous=cmd[2])
         if node.paused:  # a step or a collision (not simulated here): stop at once
             self.limiter.target = self.limiter.current = (0.0, 0.0)
         self.front_blocked = self.front_stop.update(self.limiter.current[0])
@@ -332,7 +329,7 @@ class FakeRobot:
             tv, tw = self.limiter.target
             print(f"[fake_sim] t={t:.1f}: at ({g.x:.2f}, {g.y:.2f}, {g.yaw:.2f}) cmd ({tv:+.2f}, {tw:+.2f}) "
                   f"moving ({v:+.2f}, {w:+.2f}) front clearance {self.front_stop.clearance:.2f}"
-                  f"{' BLOCKED' if self.front_blocked else ''}", flush=True)
+                  f"{' BLOCKED' if self.front_blocked else ''}{' towing' if self.towing else ''}", flush=True)
 
         if self._due("battery", 1.0):
             level = self.battery.update(1.0, self.on_charger)
@@ -348,6 +345,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=None, help="seed for sensor and odometry noise")
     p.add_argument("--api-port", type=int, default=26400, help="port of the kachaka-api gRPC server (0: no server)")
     p.add_argument("--no-charger", action="store_true", help="no charging dock")
+    p.add_argument("--shelf", type=float, nargs=3, action="append", metavar=("X", "Y", "YAW"),
+                   help="place a Kachaka Shelf where a robot docked under it is at X, Y, YAW (world frame; "
+                        "repeatable), as run_sim.py does. Default: the shelves in config 'shelf.room'")
     p.add_argument("--no-shelves", action="store_true", help="no Kachaka Shelves")
     p.add_argument("--no-people", action="store_true", help="no people")
     p.add_argument("--turn-lag", type=float, default=TURN_LAG, help="yaw rate response time constant [s]")
@@ -385,7 +385,9 @@ def main() -> int:
         node.publish_charger_pose(relative_pose(spawn, dock))
     shelves = None
     if not args.no_shelves:
-        specs = [ShelfSpec(e.id, e.name, f"/World/Shelves/{e.id}", Pose2D(*e.pose)) for e in cfg.shelf.room]
+        entries = ([(f"S{i + 1:02d}", f"Shelf {i + 1}", pose) for i, pose in enumerate(args.shelf)] if args.shelf
+                   else [(e.id, e.name, e.pose) for e in cfg.shelf.room])
+        specs = [ShelfSpec(i, name, f"/World/Shelves/{i}", Pose2D(*pose)) for i, name, pose in entries]
         shelves = FlatShelves(specs, cfg.shelf.dock_tolerance_xy, cfg.shelf.dock_tolerance_yaw)
 
         def in_map(p):
@@ -395,6 +397,7 @@ def main() -> int:
         node.publish_layout(
             [{"id": s.id, "name": s.name, "home": in_map(s.home), "width": SHELF_SIZE[1], "depth": SHELF_SIZE[0]}
              for s in specs],
+            [] if args.shelf else
             [{"id": e.id, "name": e.name, "pose": in_map(Pose2D(*e.pose))} for e in cfg.shelf.room_locations])
     people = [] if args.no_people else [tuple(p) for p in cfg.people.room]
     robot = FakeRobot(cfg, node, spawn, people, charger, shelves, args.seed)

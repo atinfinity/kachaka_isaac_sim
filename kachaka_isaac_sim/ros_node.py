@@ -72,6 +72,10 @@ class KachakaSimNode:
 
         # --- inputs ---------------------------------------------------------
         n.create_subscription(Twist, f"{ns}/manual_control/cmd_vel", self._on_cmd_vel, qos_profile_sensor_data)
+        # Simulator only: autonomous motion (Nav2 through nav_bridge, command_server)
+        # has a higher speed cap than manual cmd_vel, as on the real robot.
+        n.create_subscription(Twist, f"{ns}/sim/autonomous/cmd_vel", self._on_autonomous_cmd_vel,
+                              qos_profile_sensor_data)
         if self.generic:
             n.create_subscription(Twist, "/cmd_vel", self._on_cmd_vel, 10)
         n.create_service(SetBool, f"{ns}/manual_control/set_enabled", self._on_manual_control)
@@ -178,7 +182,10 @@ class KachakaSimNode:
 
     # --- callbacks ------------------------------------------------------------
     def _on_cmd_vel(self, msg: Twist) -> None:
-        self.cmd = (msg.linear.x, msg.angular.z)
+        self.cmd = (msg.linear.x, msg.angular.z, False)
+
+    def _on_autonomous_cmd_vel(self, msg: Twist) -> None:
+        self.cmd = (msg.linear.x, msg.angular.z, True)
 
     def _on_manual_control(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
         # The real robot needs manual control enabled before cmd_vel moves it;
@@ -315,10 +322,10 @@ class KachakaSimNode:
             if handler.exception() is not None:
                 raise handler.exception()
 
-    def take_cmd(self) -> tuple[float, float] | None:
+    def take_cmd(self) -> tuple[float, float, bool] | None:
         cmd, self.cmd = self.cmd, None
         if self.emergency_stop or self.paused:
-            return 0.0, 0.0
+            return 0.0, 0.0, False
         return cmd
 
     def run_in_sim(self, fn) -> Future:

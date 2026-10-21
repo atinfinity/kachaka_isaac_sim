@@ -9,6 +9,7 @@
 #   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
 #   scripts/record_demo.sh front_stop  # front obstacle stop on/off at a wall -> build/front_stop.mp4
 #   scripts/record_demo.sh cliff  # step sensors at a drop, power button, a collision -> docs/cliff.gif
+#   scripts/record_demo.sh speed  # manual vs autonomous top speed, towing and alone -> docs/speed.gif
 #
 # Needs the ROS image (docker compose -f docker/compose.yaml build) and
 # ffmpeg on the host. Runs headless: RViz draws into Xvfb inside the container.
@@ -74,7 +75,16 @@ case "$DEMO" in
         COMPOSE_ARGS=(--height 540)
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_cliff_demo.py /build/cliff/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|scene <world>|api|front_stop|cliff]" >&2; exit 2 ;;
+    speed)
+        GIF=docs/speed.gif
+        VIEW=(-0.1 -1.9 4.5 -0.1 0.4 0.0)  # from the south (+x right like RViz), over the whole runway
+        SIM_ARGS=(--x -1.8 --shelf -1.8 0 0 --no-charger --no-people)
+        LABEL="RViz: speed limits with and without a shelf"
+        RVIZ_SED="s/^      X: 0$/      X: 1.2/"  # centre on the runway (map origin = spawn)
+        COMPOSE_ARGS=(--height 540)
+        EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
+        RUN="python3 /tests/ros_speed_demo.py /build/speed/captions.csv" ;;
+    *) echo "usage: $0 [nav|dock|shelf|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 DISPLAY_NUM=99

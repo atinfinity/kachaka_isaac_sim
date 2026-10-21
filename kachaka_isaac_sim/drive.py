@@ -19,26 +19,48 @@ def wrap_angle(a: float) -> float:
 
 @dataclass
 class DriveLimits:
-    max_linear_vel: float
+    max_linear_vel: float  # manual cmd_vel
     max_angular_vel: float
     max_linear_accel: float
     max_angular_accel: float
     cmd_vel_timeout: float
+    max_linear_vel_auto: float | None = None  # autonomous motion; None: as manual
+    max_linear_vel_towing: float | None = None  # cap on both while towing; None: no cap
+
+    def linear_cap(self, autonomous: bool, towing: bool) -> float:
+        cap = self.max_linear_vel
+        if autonomous and self.max_linear_vel_auto is not None:
+            cap = self.max_linear_vel_auto
+        if towing and self.max_linear_vel_towing is not None:
+            cap = min(cap, self.max_linear_vel_towing)
+        return cap
+
+
+def drive_limits(d) -> DriveLimits:
+    """DriveLimits from the `drive` section of config/robot.yaml."""
+    return DriveLimits(d.max_linear_vel, d.max_angular_vel, d.max_linear_accel, d.max_angular_accel,
+                       d.cmd_vel_timeout, getattr(d, "max_linear_vel_auto", None),
+                       getattr(d, "max_linear_vel_towing", None))
 
 
 class VelocityCommand:
-    """Clamps, rate-limits and times out cmd_vel like a motor controller would."""
+    """Clamps, rate-limits and times out cmd_vel like a motor controller would.
+
+    Manual commands and autonomous motion have their own linear speed caps,
+    both lowered while `towing` a shelf."""
 
     def __init__(self, limits: DriveLimits):
         self.limits = limits
+        self.towing = False
         self.target = (0.0, 0.0)
         self.current = (0.0, 0.0)
         self.last_cmd_time: float | None = None
 
-    def set_target(self, linear: float, angular: float, now: float) -> None:
+    def set_target(self, linear: float, angular: float, now: float, autonomous: bool = False) -> None:
         lim = self.limits
+        v_max = lim.linear_cap(autonomous, self.towing)
         self.target = (
-            max(-lim.max_linear_vel, min(lim.max_linear_vel, linear)),
+            max(-v_max, min(v_max, linear)),
             max(-lim.max_angular_vel, min(lim.max_angular_vel, angular)),
         )
         self.last_cmd_time = now

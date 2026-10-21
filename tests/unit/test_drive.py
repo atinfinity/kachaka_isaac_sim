@@ -1,4 +1,5 @@
 import math
+import types
 
 import pytest
 
@@ -8,6 +9,7 @@ from kachaka_isaac_sim.drive import (
     Pose2D,
     VelocityCommand,
     WheelOdometry,
+    drive_limits,
     quat_from_yaw,
     relative_pose,
     wheel_speeds,
@@ -44,6 +46,43 @@ def test_velocity_command_clamps_and_rate_limits():
         cmd.set_target(1.0, -5.0, now=0.02 + i * 0.01)
         v, w = cmd.update(now=0.02 + i * 0.01, dt=0.01)
     assert (v, w) == pytest.approx((0.3, -1.57))
+
+
+@pytest.mark.parametrize(("towing", "autonomous", "cap"), [
+    (False, False, 0.3), (False, True, 0.8), (True, False, 0.3), (True, True, 0.5)])
+def test_velocity_command_speed_caps(towing, autonomous, cap):
+    """Manual commands keep the bridge's 0.3 m/s; autonomous motion goes up
+    to 0.8 m/s alone and 0.5 m/s while towing, both ways."""
+    d = types.SimpleNamespace(max_linear_vel=0.3, max_angular_vel=1.57, max_linear_accel=2.0,
+                              max_angular_accel=3.0, cmd_vel_timeout=0.5, max_linear_vel_auto=0.8,
+                              max_linear_vel_towing=0.5)
+    cmd = VelocityCommand(drive_limits(d))
+    cmd.towing = towing
+    cmd.set_target(1.0, 2.0, now=0.0, autonomous=autonomous)
+    assert cmd.target == pytest.approx((cap, 1.57))
+    cmd.set_target(-1.0, 0.0, now=0.0, autonomous=autonomous)
+    assert cmd.target[0] == pytest.approx(-cap)
+
+
+def test_velocity_command_towing_switches_back():
+    d = types.SimpleNamespace(max_linear_vel=0.3, max_angular_vel=1.57, max_linear_accel=2.0,
+                              max_angular_accel=3.0, cmd_vel_timeout=0.5, max_linear_vel_auto=0.8,
+                              max_linear_vel_towing=0.5)
+    cmd = VelocityCommand(drive_limits(d))
+    cmd.towing = True
+    cmd.set_target(1.0, 0.0, now=0.0, autonomous=True)
+    assert cmd.target[0] == pytest.approx(0.5)
+    cmd.towing = False
+    cmd.set_target(1.0, 0.0, now=0.1, autonomous=True)
+    assert cmd.target[0] == pytest.approx(0.8)
+
+
+def test_drive_limits_without_autonomous_keys():
+    """Older configs without the autonomous and towing caps: one cap for all."""
+    d = types.SimpleNamespace(max_linear_vel=0.3, max_angular_vel=1.57, max_linear_accel=2.0,
+                              max_angular_accel=3.0, cmd_vel_timeout=0.5)
+    lim = drive_limits(d)
+    assert [lim.linear_cap(a, t) for a in (False, True) for t in (False, True)] == [0.3] * 4
 
 
 def test_velocity_command_times_out():
