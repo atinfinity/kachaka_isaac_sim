@@ -99,8 +99,9 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 from rclpy.time import Time
-from sensor_msgs.msg import BatteryState, LaserScan
-from std_msgs.msg import String
+from sensor_msgs.msg import BatteryState, LaserScan, PointCloud2
+from sensor_msgs_py.point_cloud2 import create_cloud_xyz32
+from std_msgs.msg import Header, String
 from std_srvs.srv import SetBool
 from tf2_ros import Buffer, TransformException, TransformListener
 from unique_identifier_msgs.msg import UUID
@@ -141,7 +142,7 @@ DEPART_FROM_CHARGER_COMMAND = 23
 
 FOOTPRINT = [(0.25, 0.13), (0.25, -0.13), (-0.16, -0.13), (-0.16, 0.13)]
 SHELF_FIND_RANGE = 1.5  # m, DOCK_SHELF looks this far for a shelf
-UNDOCK_DISTANCE = 0.40  # m, driven forward to leave a shelf
+UNDOCK_DISTANCE = 0.50  # m, driven forward to leave a shelf: far enough to turn on the spot after
 UNDOCK_SPEED = 0.15  # m/s
 UNDOCK_CLEARANCE = 0.10  # m, free space wanted beyond the undock distance
 STAGING_DISTANCE = 0.9  # m, shelf_docking_server's staging_x_offset (negated)
@@ -162,6 +163,8 @@ ROTATE_LAG = 0.35  # s, the robot still turns this long at its rate after a stop
 FRONT_STOP_WAIT = 1.0  # s, MOVE_FORWARD gives up after the front obstacle stop holds the robot this long
 DEPART_DISTANCE = 0.30  # m, driven forward off the charger
 SHELF_AT_LOCATION = 0.5  # m, a shelf this close to a location stands at it
+SQUARE_TOLERANCE = 0.02  # rad, a shelf put down further off its location's axis is turned onto it
+OUTLINE_STEP = 0.025  # m, spacing of the parked shelves' outline points (half a costmap cell)
 
 
 @dataclass
@@ -215,6 +218,21 @@ def facing_away(rel: P2) -> P2:
 
 def _flipped(p: P2) -> P2:
     return P2(p.x, p.y, _wrap(p.yaw + math.pi))
+
+
+def shelf_outline(p: P2, depth: float, width: float, step: float = OUTLINE_STEP) -> list[tuple[float, float]]:
+    """Points along the edges of a shelf standing at `p`, `depth` along its
+    x axis and `width` along its y axis."""
+    hx, hy = depth / 2, width / 2
+    c, s = math.cos(p.yaw), math.sin(p.yaw)
+    corners = [(hx, hy), (-hx, hy), (-hx, -hy), (hx, -hy)]
+    points = []
+    for (x0, y0), (x1, y1) in zip(corners, corners[1:] + corners[:1]):
+        n = max(1, math.ceil(math.hypot(x1 - x0, y1 - y0) / step))
+        for k in range(n):
+            x, y = x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n
+            points.append((p.x + c * x - s * y, p.y + s * x + c * y))
+    return points
 
 
 def polygon(points) -> Polygon:
@@ -281,6 +299,9 @@ class CommandServer(Node):
         # subscribes volatile, so the limit is sent again every second.
         self.speed_limit_pub = self.create_publisher(SpeedLimit, "speed_limit", 10)
         self.speech_pub = self.create_publisher(String, f"{prefix}/sim/speech", 10)
+        # Shelves standing in the room, as an obstacle source for the costmaps:
+        # the LiDAR sees only their legs, and Nav2 would plan between them.
+        self.parked_pub = self.create_publisher(PointCloud2, "parked_shelves", 1)
         self.create_subscription(PoseStamped, f"{prefix}/sim/charger_pose", self._on_charger, LATCHED,
                                  callback_group=group)
         self.create_subscription(String, f"{prefix}/sim/layout", self._on_layout, LATCHED, callback_group=group)
@@ -339,6 +360,7 @@ class CommandServer(Node):
         self.create_timer(1.0, self._check_auto_homing, callback_group=group)
         self.create_timer(1.0, self._publish_speed_limit, callback_group=group)
         self.create_timer(0.05, self._relay_shelf, callback_group=group)
+        self.create_timer(0.5, self._publish_parked_shelves, callback_group=group)
 
     # --- inputs ---------------------------------------------------------------
     def _on_charger(self, msg: PoseStamped) -> None:
@@ -374,6 +396,17 @@ class CommandServer(Node):
         if changed:
             self.get_logger().info(f"towing {self.docked_id}" if self.docked_id else "not towing")
             self._publish_speed_limit()
+
+    def _publish_parked_shelves(self) -> None:
+        """Outlines of the shelves not on the robot, in the map frame. The
+        docking controller skips its collision checks near the shelf it
+        drives under, so that one stays in too."""
+        points = []
+        for s, p in zip(self.shelves, self.shelf_poses):
+            if s["id"] != self.docked_id:
+                points += [(x, y, 0.1) for x, y in shelf_outline(p, float(s["depth"]), float(s["width"]))]
+        header = Header(frame_id=self.map_frame, stamp=self.get_clock().now().to_msg())
+        self.parked_pub.publish(create_cloud_xyz32(header, points))
 
     def _max_speed(self) -> float:
         return MAX_TOWING_SPEED if self.docked_id else MAX_SPEED
@@ -913,11 +946,27 @@ class CommandServer(Node):
             return ERROR_SERVER_UNAVAILABLE, "no map -> robot transform"
         self.get_logger().info(f"moving shelf {shelf_id} to {location_id}")
         code, msg = self._dock_shelf_at(loc[2], lambda heading: ("pose", heading), robot, stopped)
+        if code == OK:
+            code, msg = self._square_up(stopped, loc[2])
         if code != OK:
             return code, msg
         if undock:
             return self._undock_shelf(stopped, shelf_id)
         return OK, ""
+
+    def _square_up(self, stopped, dock: P2) -> tuple[int, str]:
+        """Turn on the spot onto the dock's axis: the docking controller
+        stops on position alone, up to ~0.1 rad off."""
+        robot = self.robot_in_map()
+        if robot is None:
+            return OK, ""
+        err = _wrap(2.0 * (robot[0].yaw - dock.yaw)) / 2.0  # off the axis, either direction
+        if abs(err) < SQUARE_TOLERANCE:
+            return OK, ""
+        code, msg = self._rotate(stopped, -err)
+        if code == ERROR_BLOCKED:
+            msg = "could not turn the shelf onto the location's axis"
+        return code, msg
 
     def _return_shelf(self, stopped, shelf_id: str) -> tuple[int, str]:
         shelf_id = shelf_id or self.docked_id

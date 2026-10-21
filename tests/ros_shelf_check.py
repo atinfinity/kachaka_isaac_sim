@@ -14,6 +14,7 @@ which also starts command_server and the shelf docking server). Steps:
 
     python3 tests/ros_shelf_check.py
     python3 tests/ros_shelf_check.py --demo   # dock, tow, turn, undock (for the GIF)
+    python3 tests/ros_shelf_check.py --demo --return  # ... then RETURN_SHELF around the parked shelf
 """
 
 import argparse
@@ -120,6 +121,7 @@ class ShelfCheck(Node):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--return", dest="return_shelf", action="store_true", help="with --demo: RETURN_SHELF too")
     add_reset_args(ap)
     args = ap.parse_args()
     demo = args.demo
@@ -207,7 +209,7 @@ def main():
     shelf_at(f"shelf stays at {DESTINATION}", dest.pose)
 
     # 5. Return it home.
-    if not demo:
+    if not demo or args.return_shelf:
         command("RETURN_SHELF", KachakaCommand.RETURN_SHELF_COMMAND, return_shelf_command_target_shelf_id=SHELF)
         check("not towing after RETURN_SHELF", n.docked == "")
         shelf_at("shelf back home", home.pose)

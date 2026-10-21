@@ -4,6 +4,7 @@
 #   scripts/record_demo.sh        # Nav2 goals during SLAM -> docs/demo.gif
 #   scripts/record_demo.sh dock   # RETURN_HOME onto the charger -> docs/dock.gif
 #   scripts/record_demo.sh shelf  # dock, tow, turn and leave a shelf -> docs/shelf.gif
+#   scripts/record_demo.sh shelf_return  # leave a shelf, then RETURN_SHELF around it -> docs/shelf_return.gif
 #   scripts/record_demo.sh scene office  # Nav2 route in an Isaac Sim scene -> build/scene_office.mp4
 #                                        # (both views follow the robot)
 #   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
@@ -36,6 +37,11 @@ case "$DEMO" in
         GIF=docs/shelf.gif
         VIEW=(0.9 -1.6 5.8 0.9 0.3 0.0)  # inside the south wall, looking down (+x right like RViz)
         RUN="python3 /tests/ros_shelf_check.py --demo" ;;
+    shelf_return)
+        GIF=docs/shelf_return.gif
+        VIEW=(0.9 -1.6 5.8 0.9 0.3 0.0)
+        SPEED=${SPEED:-6}
+        RUN="python3 /tests/ros_shelf_check.py --demo --return" ;;
     scene)
         WORLD=${2:?usage: $0 scene <office|hospital|warehouse|simple_room>}
         DEMO=scene_$WORLD
