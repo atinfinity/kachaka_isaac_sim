@@ -164,6 +164,8 @@ FRONT_STOP_WAIT = 1.0  # s, MOVE_FORWARD gives up after the front obstacle stop 
 DEPART_DISTANCE = 0.30  # m, driven forward off the charger
 SHELF_AT_LOCATION = 0.5  # m, a shelf this close to a location stands at it
 SQUARE_TOLERANCE = 0.02  # rad, a shelf put down further off its location's axis is turned onto it
+SQUARE_ATTEMPTS = 3  # turns at most: the towed shelf lags a turn and settles after it
+SQUARE_SETTLE = 0.3  # s, wait after a turn before measuring the shelf again
 OUTLINE_STEP = 0.025  # m, spacing of the parked shelves' outline points (half a costmap cell)
 
 
@@ -947,26 +949,37 @@ class CommandServer(Node):
         self.get_logger().info(f"moving shelf {shelf_id} to {location_id}")
         code, msg = self._dock_shelf_at(loc[2], lambda heading: ("pose", heading), robot, stopped)
         if code == OK:
-            code, msg = self._square_up(stopped, loc[2])
+            code, msg = self._square_up(stopped, loc[2], i)
         if code != OK:
             return code, msg
         if undock:
             return self._undock_shelf(stopped, shelf_id)
         return OK, ""
 
-    def _square_up(self, stopped, dock: P2) -> tuple[int, str]:
-        """Turn on the spot onto the dock's axis: the docking controller
-        stops on position alone, up to ~0.1 rad off."""
-        robot = self.robot_in_map()
-        if robot is None:
-            return OK, ""
-        err = _wrap(2.0 * (robot[0].yaw - dock.yaw)) / 2.0  # off the axis, either direction
-        if abs(err) < SQUARE_TOLERANCE:
-            return OK, ""
-        code, msg = self._rotate(stopped, -err)
-        if code == ERROR_BLOCKED:
-            msg = "could not turn the shelf onto the location's axis"
-        return code, msg
+    def _square_up(self, stopped, dock: P2, shelf: int) -> tuple[int, str]:
+        """Turn on the spot until the towed shelf lies on the dock's axis: the
+        docking controller stops on position alone, up to ~0.1 rad off, and
+        the shelf sits on the robot at the yaw it was picked up with, so line
+        up the shelf (from its detection), not the robot."""
+        for attempt in range(SQUARE_ATTEMPTS):
+            if attempt:
+                time.sleep(SQUARE_SETTLE)
+            robot = self.robot_in_map()
+            if robot is None:
+                return OK, ""
+            yaw = robot[0].yaw
+            det = self.detected(shelf)
+            if det is not None:
+                yaw += det.yaw  # the shelf's heading, give or take pi
+            err = _wrap(2.0 * (yaw - dock.yaw)) / 2.0  # off the axis, either direction
+            if abs(err) < SQUARE_TOLERANCE:
+                return OK, ""
+            code, msg = self._rotate(stopped, -err)
+            if code != OK:
+                if code == ERROR_BLOCKED:
+                    msg = "could not turn the shelf onto the location's axis"
+                return code, msg
+        return OK, ""
 
     def _return_shelf(self, stopped, shelf_id: str) -> tuple[int, str]:
         shelf_id = shelf_id or self.docked_id
