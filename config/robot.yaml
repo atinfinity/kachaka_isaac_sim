@@ -160,6 +160,14 @@ people:
     - [2.0, 1.5, -2.5]      # north-east corner, half behind box_a
     - [-2.1, -1.55, 0.6]    # south-west corner, half behind box_b, off the test routes
 
+# People and boxes that move (layout files: route, wander, appear).
+movers:
+  person_speed: 0.7         # m/s, an unhurried indoor walk (est.)
+  box_speed: 0.4            # m/s, a pushed cart (est.)
+  turn_rate: 2.0            # rad/s
+  lookahead: 0.6            # m, a mover waits while the robot is this close ahead ...
+  gap: 0.15                 # m ... within this gap of its footprint
+
 imu:
   frame_id: imu_link
   rate: 100.0               # Hz (est.)
