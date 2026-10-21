@@ -251,10 +251,11 @@ numbers are guesses (`object_detection` in `config/robot.yaml`). Doors are
 not detected, and `GetObjectDetectionFeatures` stays empty since there is no
 network.
 
-The room has two people (`people.room` in `config/robot.yaml`), simple
-figures 1.7 m tall with a collider so LiDAR and Nav2 see them; `--person X Y YAW`
-places others and `--no-people` removes them. The Isaac Sim scenes have none
-by default.
+The room has two people (`people.room` in `config/robot.yaml`): Isaac Sim's
+bundled characters (`people.characters`, standing still with the arms down) with
+a 1.7 m box collider so LiDAR and Nav2 see them. Without the asset server they
+are capsule mannequins. `--person X Y YAW` places others and `--no-people`
+removes them. The Isaac Sim scenes have none by default.
 
 The results are on `GetObjectDetection` and on the real bridge's ROS 2 topic
 `/kachaka/object_detection/result` (`kachaka_interfaces/ObjectDetectionListStamped`).
