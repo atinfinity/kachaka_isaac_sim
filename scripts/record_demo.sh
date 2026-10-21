@@ -5,6 +5,7 @@
 #   scripts/record_demo.sh dock   # RETURN_HOME onto the charger -> docs/dock.gif
 #   scripts/record_demo.sh shelf  # dock, tow, turn and leave a shelf -> docs/shelf.gif
 #   scripts/record_demo.sh shelf_return  # leave a shelf, then RETURN_SHELF around it -> docs/shelf_return.gif
+#   scripts/record_demo.sh door   # Nav2 replans when a door closes and opens -> docs/door.gif
 #   scripts/record_demo.sh scene office  # Nav2 route in an Isaac Sim scene -> build/scene_office.mp4
 #                                        # (both views follow the robot)
 #   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
@@ -42,6 +43,14 @@ case "$DEMO" in
         VIEW=(0.9 -1.6 5.8 0.9 0.3 0.0)
         SPEED=${SPEED:-6}
         RUN="python3 /tests/ros_shelf_check.py --demo --return" ;;
+    door)
+        GIF=docs/door.gif
+        VIEW=(0.3 -2.0 5.5 0.3 0.0 0.0)  # from the south (+x right like RViz), along the partition
+        # tests/ros_door_check.py DOOR_ARGS
+        SIM_ARGS=(--no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708)
+        LABEL="RViz: Nav2 and a door"
+        SPEED=${SPEED:-4}
+        RUN="python3 /tests/ros_door_check.py" ;;
     scene)
         WORLD=${2:?usage: $0 scene <office|hospital|warehouse|simple_room>}
         DEMO=scene_$WORLD
@@ -90,7 +99,7 @@ case "$DEMO" in
         COMPOSE_ARGS=(--height 540)
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_speed_demo.py /build/speed/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
+    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 DISPLAY_NUM=99

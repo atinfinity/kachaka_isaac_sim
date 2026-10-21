@@ -539,6 +539,31 @@ class KachakaSimNode:
         self.layout_pub.publish(String(data=json.dumps(layout)))
         self.tap("layout", layout)
 
+    def add_doors(self, doors, to_map) -> None:
+        """Doors (doors.Doors): a SetBool service sim/doors/<id>/set_open per
+        door (data: open) and the latched JSON state on sim/doors. `to_map`
+        turns a world Pose2D into the map frame."""
+        self.doors = doors
+        self._door_poses = [to_map(s.pose) for s in doors.specs]
+        self.doors_pub = self.node.create_publisher(String, f"{self.ns}/sim/doors", LATCHED)
+        for spec in doors.specs:
+            def on_set(req, res, door_id=spec.id):
+                # Service callbacks run in the sim loop between steps.
+                res.success, res.message = self.doors.command(door_id, bool(req.data))
+                return res
+            self.node.create_service(SetBool, f"{self.ns}/sim/doors/{spec.id}/set_open", on_set)
+
+    def publish_doors(self) -> None:
+        """Latched JSON {"doors": [{id, kind, pose [x, y, yaw] of the doorway
+        centre in the map frame, width, state (open, closed, opening or
+        closing), opening (0-1), cycling}]}, sent when a state changes."""
+        doors = [{"id": sp.id, "kind": sp.kind, "pose": [round(p.x, 4), round(p.y, 4), round(p.yaw, 4)],
+                  "width": sp.width, "state": st.state, "opening": round(st.opening, 3), "cycling": st.cycling}
+                 for sp, st, p in zip(self.doors.specs, self.doors.states, self._door_poses)]
+        msg = {"doors": doors}
+        self.doors_pub.publish(String(data=json.dumps(msg)))
+        self.tap("doors", msg)
+
     def publish_object_detection(self, t: float, frame_id: str, objects: list[dict]) -> None:
         """Detections in the front camera image (detection.Detection.to_dict:
         kachaka-api label, roi [x, y, width, height], score, distance)."""

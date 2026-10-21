@@ -492,3 +492,37 @@ No bumper is published.
   `drop.depth` below. The boxes are triangle-mesh colliders: cooked convex
   hulls of 40 m × 20 m × 2 cm boxes came out a few millimetres short at the
   edges, and the step sensors saw a drop at the seam between two tiles.
+
+## Doors
+
+Issue #26. A door is only the moving panel; the doorway's walls are plain
+static boxes (`--wall`, `world.add_wall`).
+
+- **Panel** (`world.add_door`, `doors.Doors`): a kinematic rigid body with a
+  box collider. `Doors.step` runs before each physics step and sets the
+  panel's USD translate and orient ops; PhysX follows them as kinematic
+  targets. `RigidPrim.set_world_poses` (tensor API) moved the collider but
+  not the rendered panel, so it is not used. A kinematic panel is not
+  stopped by the robot: a closing door pushes it (no safety edge, assumed).
+- **Geometry** (`doors.panel_pose`): a sliding panel is 2 × 5 cm wider than
+  the doorway, runs just off the wall's −y face and slides +x until it
+  clears the doorway. A hinged panel is 1 cm narrower than the doorway and
+  turns about its −x end by up to 90° into the −y side.
+- **State** (`doors.DoorState`): `opening` goes from 0 (closed) to 1 (open)
+  at `sliding_speed` / `hinged_speed` (`door` in `config/robot.yaml`). A
+  `--door-cycle` follows the simulation time since the start or the last
+  `sim/reset`, starting in the start state; a `set_open` call stops the cycle
+  until the next reset. `sim/doors` is published when a state changes
+  (open, closed, opening, closing), not on every step.
+- **Nav2**: nothing door-specific. The panel is in the LiDAR scan, so the
+  obstacle layer marks a closed door and clears it again once it is open
+  (the scan raytraces through the doorway); the BT replans at 1 Hz. The
+  static layer is another matter while mapping: slam_toolbox learns a door
+  it sees closed, and with `occupancy_threshold` 0.1 a cell needs about
+  nine scans through it for each one that hit it before it is free again
+  (and it adds scans only while the robot moves). So
+  `tests/ros_door_check.py` freezes the SLAM map
+  (`slam_toolbox/pause_new_measurements`) after driving through the open
+  door, as when navigating on a saved map with the door open. A door that
+  was closed when the map was saved stays a wall for the planner.
+- **Not done**: elevators between floors (separate maps).
