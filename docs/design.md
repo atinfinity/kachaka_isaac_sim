@@ -526,3 +526,33 @@ static boxes (`--wall`, `world.add_wall`).
   door, as when navigating on a saved map with the door open. A door that
   was closed when the map was saved stays a wall for the planner.
 - **Not done**: elevators between floors (separate maps).
+
+## Layout files
+
+Issue #25. `--layout FILE` (`kachaka_isaac_sim/layout.py`, examples in
+`layouts/`) places the spawn pose, charger, shelves, locations, people,
+boxes, walls, doors and drops on top of any world.
+
+- **Plain Python**: the file is read and every pose is settled before Isaac
+  Sim starts, so a bad file fails fast (`layout: ...`, exit 1) and the parser
+  is unit-tested without the simulator (`tests/unit/test_layout.py`).
+- **Defaults**: a key that is left out keeps what the world has without a
+  layout; a key that is given replaces it (`shelves: []`, `charger: null`).
+  The command-line options keep their meaning on top: the placement options
+  (`--shelf`, `--charger`, `--person`, `--no-*`, `--x/--y/--yaw`) replace the
+  layout's, the additive ones (`--wall`, `--door`, `--drop`) add to it.
+- **Randomisation**: any pose number can be `[lo, hi]`. Fixed objects are
+  placed first, then the randomised ones in file order, each drawn up to 200
+  times until its footprint circle (half its outline's diagonal) keeps
+  `clearance` from the objects already placed, the layout's walls and drops,
+  and in the room from its walls and boxes. The seed comes from
+  `--layout-seed`, then the file, then a random one, and is printed so a run
+  can be repeated. Circles are coarse (a shelf's is wide) but simple; they
+  cannot see the furniture of an Isaac Sim scene.
+- **Overlap check**: so after `play` each object's box is put to a PhysX
+  `overlap_box` query against the stage (excluding the object itself and the
+  robot, and for the spawn pose the charger and shelves it starts on), and a
+  hit prints `[kachaka] layout warning`. It warns rather than fails, since a
+  person standing against a table is often what was meant.
+- **Not done**: `fake_sim.py` (the tests without Isaac Sim) does not read
+  layouts.

@@ -1,0 +1,11 @@
+# Isaac Sim office: the robot starts on its charger in the lobby, with a
+# shelf and locations along the corridors to the north.
+#   scripts/run_sim.sh --layout layouts/office.yaml
+world: office
+spawn: [0.0, 0.0, 1.5708]
+charger: [0.0, 0.0, 1.5708]       # starts docked
+shelves:
+  - {id: S01, name: Shelf 1, pose: [1.2, 4.0, 0.0]}
+locations:
+  - {id: L01, name: Meeting room, pose: [-3.0, 10.0, 1.5708]}
+  - {id: L02, name: North corridor, pose: [-3.0, 22.0, 1.5708]}

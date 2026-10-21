@@ -1,0 +1,11 @@
+# The room split by a wall at x = 0.6, with a sliding door at y = -0.6 and an
+# open gap at the north end (tests/ros_door_check.py, record_demo.sh door).
+#   scripts/run_sim.sh --layout layouts/room_door.yaml
+world: room
+shelves: []
+people: []
+walls:
+  - [0.6, -2.0, 0.6, -1.0]
+  - [0.6, -0.2, 0.6, 1.2]
+doors:
+  - {pose: [0.6, -0.6, 1.5708]}

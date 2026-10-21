@@ -1,0 +1,11 @@
+# Isaac Sim hospital: the robot starts on its charger in the lobby; a shelf
+# and the wards to the north.
+#   scripts/run_sim.sh --layout layouts/hospital.yaml
+world: hospital
+spawn: [0.0, 0.0, 0.0]
+charger: [0.0, 0.0, 0.0]          # starts docked
+shelves:
+  - {id: S01, name: Linen, pose: [3.0, 1.5, 1.5708]}
+locations:
+  - {id: L01, name: Ward east, pose: [6.0, 10.5, 3.1416]}
+  - {id: L02, name: Ward west, pose: [-8.0, 10.5, 3.1416]}
