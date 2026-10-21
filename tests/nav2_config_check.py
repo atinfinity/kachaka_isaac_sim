@@ -83,9 +83,14 @@ class Checker(Node):
         self.create_subscription(Odometry, "/odom", self._on_odom, 10)
         self.nav = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.initial_pose = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
+        self.amcl_pose = None
+        self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._on_amcl_pose, 10)
 
     def _on_map(self, msg: OccupancyGrid) -> None:
         self.map = msg
+
+    def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
+        self.amcl_pose = msg
 
     def _on_odom(self, msg: Odometry) -> None:
         self.odom = msg
@@ -118,15 +123,22 @@ class Checker(Node):
         finally:
             self.destroy_client(client)
 
-    def set_initial_pose(self) -> None:
+    def set_initial_pose(self, stack: Stack) -> bool:
+        """Publish the initial pose until AMCL answers with a pose: AMCL drops
+        it while it is not active yet, and then never publishes map -> odom."""
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = "map"
         msg.pose.pose.orientation.w = 1.0
         msg.pose.covariance[0] = msg.pose.covariance[7] = 0.01
         msg.pose.covariance[35] = 0.01
-        for _ in range(5):
-            self.initial_pose.publish(msg)
-            self.spin_for(0.5)
+        self.amcl_pose = None
+
+        def taken() -> bool:
+            if self.amcl_pose is None:
+                self.initial_pose.publish(msg)
+            return self.amcl_pose is not None
+
+        return self.wait_for("/amcl_pose", taken, STARTUP_TIMEOUT, stack)
 
     def navigate(self, x: float, y: float, yaw: float) -> tuple[bool, str]:
         if not self.nav.wait_for_server(timeout_sec=10.0):
@@ -163,7 +175,11 @@ def run_phase(node: Checker, stack: Stack, managers: list[str], localize: bool, 
     if not ok:
         return
     if localize:
-        node.set_initial_pose()
+        # AMCL takes the initial pose only once it is active.
+        check(f"{managers[0]} active", node.wait_for(managers[0], lambda: node.is_active(managers[0]),
+                                                     STARTUP_TIMEOUT, stack))
+        check("initial pose taken", node.set_initial_pose(stack))
+        managers = managers[1:]
     for manager in managers:
         check(f"{manager} active", node.wait_for(manager, lambda m=manager: node.is_active(m), STARTUP_TIMEOUT, stack))
     for x, y, yaw in GOALS:
