@@ -7,6 +7,7 @@
 #   scripts/record_demo.sh shelf_return  # leave a shelf, then RETURN_SHELF around it -> docs/shelf_return.gif
 #   scripts/record_demo.sh door   # Nav2 replans when a door closes and opens -> docs/door.gif
 #   scripts/record_demo.sh movers # Nav2 goals among people and a cart on the move -> docs/movers.gif
+#   scripts/record_demo.sh elevator  # Nav2 into the elevator on 1F, ride, out on 2F -> docs/elevator.gif
 #   scripts/record_demo.sh scene office  # Nav2 route in an Isaac Sim scene -> build/scene_office.mp4
 #                                        # (both views follow the robot)
 #   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
@@ -26,6 +27,8 @@ COMPOSE_ARGS=()
 RUN=""       # run in the ROS container
 EXEC_ARGS=()  # docker exec options for RUN
 HOST_RUN=""  # or on the host
+# ROS side: SLAM + Nav2 with RViz, or e.g. "navigation.launch.py map:=/maps/x.yaml" (RViz started separately)
+LAUNCH="slam.launch.py nav:=true"
 case "$DEMO" in
     nav)
         GIF=docs/demo.gif
@@ -58,6 +61,17 @@ case "$DEMO" in
         LABEL="RViz: Nav2 among moving people"
         SPEED=${SPEED:-4}
         RUN="python3 /tests/ros_nav_check.py --no-collisions" ;;
+    elevator)
+        GIF=docs/elevator.gif
+        VIEW=(0.0 -3.0 6.0 0.4 0.0 0.0)  # follows the robot (the floors are 10 m apart), from the south
+        SIM_ARGS=(--layout layouts/elevator.yaml --record-follow)
+        LAUNCH="navigation.launch.py map:=/maps/elevator_1F.yaml"
+        RVIZ_SED="/Name: Current View/a\\      Target Frame: base_footprint"
+        LABEL="RViz: Nav2 on each floor's map"
+        SPEED=${SPEED:-4}
+        docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$PWD/maps:/repo/maps" \
+            kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py /repo/layouts/elevator.yaml --out /repo/maps
+        RUN="python3 /tests/ros_elevator_check.py" ;;
     scene)
         WORLD=${2:?usage: $0 scene <office|hospital|warehouse|simple_room>}
         DEMO=scene_$WORLD
@@ -106,7 +120,7 @@ case "$DEMO" in
         COMPOSE_ARGS=(--height 540)
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_speed_demo.py /build/speed/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|movers|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
+    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|movers|elevator|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 DISPLAY_NUM=99
@@ -129,12 +143,17 @@ echo "[demo] starting SLAM, Nav2 and RViz (Xvfb :$DISPLAY_NUM)"
 docker run -d --rm --name kachaka-demo-ros --network host --ipc host \
     -e FASTDDS_BUILTIN_TRANSPORTS="UDPv4?sockets_size=4194304" \
     -e DISPLAY=":$DISPLAY_NUM" -e LIBGL_ALWAYS_SOFTWARE=1 \
-    -v /tmp/.X11-unix:/tmp/.X11-unix:rw -v "$PWD/tests:/tests:ro" -v "$PWD/build:/build" \
+    -v /tmp/.X11-unix:/tmp/.X11-unix:rw -v "$PWD/tests:/tests:ro" -v "$PWD/build:/build" -v "$PWD/maps:/maps" \
     kachaka-isaac-sim-ros:jazzy bash -c "
         Xvfb :$DISPLAY_NUM -screen 0 1440x900x24 -nolisten tcp -ac &
         sleep 2
         sed '$RVIZ_SED' /ws/install/kachaka_sim_bringup/share/kachaka_sim_bringup/config/demo.rviz > /tmp/demo.rviz
-        ros2 launch kachaka_sim_bringup slam.launch.py nav:=true rviz_config:=/tmp/demo.rviz" > /dev/null
+        if [[ '$LAUNCH' == slam.launch.py* ]]; then
+            ros2 launch kachaka_sim_bringup $LAUNCH rviz_config:=/tmp/demo.rviz
+        else
+            ros2 run rviz2 rviz2 -d /tmp/demo.rviz --ros-args -p use_sim_time:=true &
+            ros2 launch kachaka_sim_bringup $LAUNCH rviz:=false
+        fi" > /dev/null
 until [[ -S /tmp/.X11-unix/X$DISPLAY_NUM ]]; do sleep 1; done
 sleep 25  # let Nav2 come up and RViz draw the first map
 

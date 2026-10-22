@@ -65,6 +65,7 @@ class SimRobot:
         self.sensors_off_on_charger = bool(cfg.charger.sensors_off)
         self.shelves = shelves  # shelves.Shelves or None
         self.map_origin = map_origin or Pose2D(0.0, 0.0, 0.0)  # world pose of the map frame
+        self.spawn = Pose2D(self.map_origin.x, self.map_origin.y, self.map_origin.yaw)
         self.gt = Pose2D(0.0, 0.0, 0.0)
         self.start_z = float(self.art.get_world_poses()[0].numpy()[0][2])
         self.hold_until = -math.inf  # cmd_vel is ignored until then (after a reset)
@@ -173,7 +174,7 @@ class SimRobot:
             self.set_shelf_docked(False)
         if self.shelves is not None:
             self.shelves.reset()
-        o = self.map_origin
+        o = self.map_origin = Pose2D(self.spawn.x, self.spawn.y, self.spawn.yaw)
         self.art.set_world_poses([[o.x, o.y, self.start_z]], [list(quat_from_yaw(o.yaw))])
         self.art.set_velocities([[0.0] * 3], [[0.0] * 3])
         self.art.set_dof_velocities([[0.0] * len(self.dof_names)])
@@ -197,6 +198,21 @@ class SimRobot:
         self.front_stop.muted = False
         self.front_stop.blocked = False
         self.node.publish_front_stop(False)
+
+    def shift(self, dx: float, dy: float) -> None:
+        """Carry the robot (and the shelf it tows) by (dx, dy), as an elevator
+        ride does: speed and odometry go on as if it had not moved, and the
+        map frame moves with it (each floor's map has the spawn pose moved to
+        that floor as its frame). Called between physics steps."""
+        pos, quat = (a.numpy()[0].astype(float) for a in self.art.get_world_poses())
+        lin, ang = (a.numpy()[0].astype(float) for a in self.art.get_velocities())
+        self.art.set_world_poses([[pos[0] + dx, pos[1] + dy, pos[2]]], [list(quat)])
+        self.art.set_velocities([list(lin)], [list(ang)])
+        if self.towing:
+            self.shelves.shift([self.shelves.docked], dx, dy)
+        self.fused_odom.shift(dx, dy)
+        self.gt = Pose2D(self.gt.x + dx, self.gt.y + dy, self.gt.yaw)
+        self.map_origin = Pose2D(self.map_origin.x + dx, self.map_origin.y + dy, self.map_origin.yaw)
 
     def post_step(self, dt: float) -> None:
         self.t += dt

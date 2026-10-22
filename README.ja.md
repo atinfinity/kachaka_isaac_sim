@@ -298,7 +298,42 @@ ros2 service call /kachaka/sim/doors/D01/set_open std_srvs/srv/SetBool "{data: f
 ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closing", ...}]}
 ```
 
-フロア間のエレベーターはシミュレートしません。
+### エレベーター
+
+レイアウトに `floors` と `elevator` があると、部屋をフロアごとに x 方向へ 10 m ずつずらして並べ
+（フロア k の座標は 1 階の座標 + k × 10 m）、どのフロアにも壁の出入口の奥に同じかごを置きます。
+かごにはフロアごとに引き戸があります。`sim/elevator/go`（`std_msgs/String`、フロア名）でかごを呼ぶと、
+ドアが閉まり、1 フロアあたり `ride` 秒待ってから、かごの中のもの（ロボット、シェルフ）を行き先フロアの
+かごへ移し、そこでドアが開きます。オドメトリはこの移動を見ません。ロボットが出入口にいる間は
+ドアセンサーのように開き直します。`sim/elevator`（latched の JSON）に `floors`、`floor`（かごの階）、
+`target`、`state`（open、closing、riding、opening）、`door`、`robot_floor`、`robot_in_car` を出します。
+`sim/reset` でかごは開始階に戻ります。
+
+![layouts/elevator.yaml: 1 階で Nav2 がかごに入り、2 階へ移動、2 階の地図を読み込んで 2 階の壁の先へ出る](docs/elevator.gif)
+
+```bash
+python3 scripts/make_maps.py layouts/elevator.yaml   # maps/elevator_1F.yaml, maps/elevator_2F.yaml
+scripts/run_sim.sh --layout layouts/elevator.yaml
+ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/elevator_1F.yaml
+ros2 topic pub --once /kachaka/sim/elevator/go std_msgs/msg/String "{data: 2F}"
+ros2 topic echo /kachaka/sim/elevator   # {"floor": "2F", "state": "open", "robot_floor": "2F", ...}
+```
+
+フロアごとに別の保存地図で走ります。`scripts/make_maps.py` がレイアウトから地図を描きます（壁、かご、
+動かない箱。ドアは開いた状態）。各フロアの map 座標系は開始位置をそのフロアへずらしたものなので、
+かごの中の位置はどのフロアの地図でも同じ座標です。乗った後は次のフロアの地図を読み込み
+（kachaka-api の `SwitchMap`、または command_server の `sim/map/load`）、同じ map 座標を
+`/initialpose` で AMCL に与えます。`tests/ros_elevator_check.py` は 1 階でかごに入り、2 階へ移動し、
+地図を切り替えて 2 階のゴールまで走ります。
+
+実機がどう乗るかは建物側の仕組みによります。三菱電機ビルソリューションズと Preferred Robotics の実証では、
+カチャカが建物のプラットフォーム（Ville-feuille）に依頼し、Ville-feuille がかごを呼んで行き先階を登録し、
+乗るかごと乗り降りのタイミングをカチャカに伝えます
+（[プレスリリース、2024-09-28](https://www.excite.co.jp/news/article/Prtimes_2024-09-28-115855-30/)）。
+戸田建設の TODA BUILDING では、同社が公開 API で作ったシステムでカチャカプロがエレベーターを使い
+フロア間で郵便物を運んでいます（[LOGISTICS TODAY、2026-07-17](https://www.logi-today.com/978771)）。
+kachaka-api にはエレベーターの呼び出しがないため `sim/elevator/go` はシミュレータ専用で、かごの大きさ
+（1.4 × 1.4 m）、ドア（0.9 m）、時間は推定です（`config/robot.yaml` の `elevator`）。
 
 ### レイアウトファイル
 

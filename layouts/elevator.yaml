@@ -1,0 +1,15 @@
+# Two floors joined by an elevator on the room's east wall
+# (tests/ros_elevator_check.py, record_demo.sh elevator). Saved maps per
+# floor: python3 scripts/make_maps.py layouts/elevator.yaml
+#   scripts/run_sim.sh --layout layouts/elevator.yaml
+world: room
+floors:
+  - name: 1F
+  - name: 2F
+    walls:
+      - [-0.5, -2.0, -0.5, -0.6]
+    boxes:
+      - {name: desk, pose: [-1.6, 1.4, 0.0], size: [1.2, 0.6, 0.7], color: [0.45, 0.35, 0.25]}
+    people:
+      - [-1.8, -1.2, 0.0]
+elevator: {pose: [2.525, 0.0, -1.5708]}

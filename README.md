@@ -328,7 +328,50 @@ ros2 service call /kachaka/sim/doors/D01/set_open std_srvs/srv/SetBool "{data: f
 ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closing", ...}]}
 ```
 
-Elevators between floors are not simulated.
+### Elevator
+
+A layout with `floors` and an `elevator` builds the room once per floor,
+side by side 10 m apart along x (floor k's poses are the first floor's plus
+k × 10 m), each with the same elevator car behind a doorway in a wall. The
+car has a sliding door on each floor. `sim/elevator/go` (`std_msgs/String`,
+a floor name) calls the car: the door closes, the car waits `ride` seconds per
+floor, and whatever is in the car (the robot, a shelf) is moved to the other
+floor's car; then the door opens there. The odometry does not see the move.
+The door reopens while the robot is in the doorway, like a door sensor.
+`sim/elevator` (latched JSON) gives `floors`, `floor` (where the car is),
+`target`, `state` (open, closing, riding, opening), `door`, `robot_floor` and
+`robot_in_car`; `sim/reset` sends the car back to its start floor.
+
+![layouts/elevator.yaml: Nav2 drives into the car on 1F, the car rides to 2F, the 2F map is loaded and Nav2 drives out past 2F's wall](docs/elevator.gif)
+
+```bash
+python3 scripts/make_maps.py layouts/elevator.yaml   # maps/elevator_1F.yaml, maps/elevator_2F.yaml
+scripts/run_sim.sh --layout layouts/elevator.yaml
+ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/elevator_1F.yaml
+ros2 topic pub --once /kachaka/sim/elevator/go std_msgs/msg/String "{data: 2F}"
+ros2 topic echo /kachaka/sim/elevator   # {"floor": "2F", "state": "open", "robot_floor": "2F", ...}
+```
+
+Each floor navigates on its own saved map. `scripts/make_maps.py` draws them
+from the layout (walls, the car, standing boxes; doors open). Each floor's
+map frame is the spawn pose moved to that floor, so a pose in the car reads
+the same on every floor's map. After a ride, load the next floor's map
+(kachaka-api `SwitchMap`, or `sim/map/load` with command_server) and give
+AMCL the same map pose on `/initialpose`. `tests/ros_elevator_check.py`
+drives into the car on 1F, rides to 2F, switches the map and drives to a goal
+on 2F.
+
+How the real Kachaka rides depends on the building's system. In a trial by
+Mitsubishi Electric Building Solutions and Preferred Robotics, Kachaka asks
+the building's platform (Ville-feuille), which calls the car, registers the
+floor and tells Kachaka which car to take and when to board and leave
+([press release, 2024-09-28](https://www.excite.co.jp/news/article/Prtimes_2024-09-28-115855-30/)).
+At Toda Corporation's TODA BUILDING, Kachaka Pro carries mail between floors
+by elevator, through a system Toda built on the public API
+([LOGISTICS TODAY, 2026-07-17](https://www.logi-today.com/978771)).
+kachaka-api has no elevator calls, so `sim/elevator/go` is sim-only, and the
+car's size (1.4 × 1.4 m), door (0.9 m) and timing are assumed (`elevator` in
+`config/robot.yaml`).
 
 ### Layout files
 

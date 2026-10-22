@@ -18,13 +18,13 @@ from kachaka_isaac_sim.scenes import (
     PERSON_COLLIDER,
     ROOM_BOXES,
     ROOM_HEIGHT,
-    ROOM_SIZE,
     ROOM_WALL,
     SHELF_CASTER_RADIUS,
     SHELF_LEG_SIZE,
     SHELF_LEG_XY,
     SHELF_PLATES,
     SHELF_SIZE,
+    room_walls,
 )
 
 ROBOT_PATH = "/World/kachaka"
@@ -133,18 +133,16 @@ def enable_contact_report(stage: Usd.Stage, path: str = BASE_LINK) -> None:
     api.CreateThresholdAttr().Set(0.0)
 
 
-def add_simple_room(stage: Usd.Stage) -> None:
+def add_simple_room(stage: Usd.Stage, root: str = "/World/Room", offset=(0.0, 0.0), openings=()) -> None:
     """A walled room with a couple of obstacles, enough to test teleop and SLAM
-    (scenes.ROOM_*)."""
-    (size_x, size_y), height, t = ROOM_SIZE, ROOM_HEIGHT, ROOM_WALL
-    root = "/World/Room"
+    (scenes.ROOM_*), moved by `offset` (x, y), with doorways cut in its walls
+    at `openings` (scenes.room_walls, before the offset)."""
+    height, (dx, dy) = ROOM_HEIGHT, offset
     UsdGeom.Xform.Define(stage, root)
-    add_box(stage, f"{root}/wall_n", (0, size_y / 2 + t / 2, height / 2), (size_x + 2 * t, t, height))
-    add_box(stage, f"{root}/wall_s", (0, -size_y / 2 - t / 2, height / 2), (size_x + 2 * t, t, height))
-    add_box(stage, f"{root}/wall_e", (size_x / 2 + t / 2, 0, height / 2), (t, size_y, height))
-    add_box(stage, f"{root}/wall_w", (-size_x / 2 - t / 2, 0, height / 2), (t, size_y, height))
-    for name, center, size, color in ROOM_BOXES:
-        add_box(stage, f"{root}/{name}", center, size, color)
+    for name, (cx, cy), (sx, sy) in room_walls(openings):
+        add_box(stage, f"{root}/{name}", (cx + dx, cy + dy, height / 2), (sx, sy, height))
+    for name, (cx, cy, cz), size, color in ROOM_BOXES:
+        add_box(stage, f"{root}/{name}", (cx + dx, cy + dy, cz), size, color)
 
 
 def add_wall(stage: Usd.Stage, path: str, start, end, thickness: float = ROOM_WALL,

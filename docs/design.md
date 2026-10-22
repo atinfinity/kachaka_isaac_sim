@@ -531,7 +531,44 @@ static boxes (`--wall`, `world.add_wall`).
   (`slam_toolbox/pause_new_measurements`) after driving through the open
   door, as when navigating on a saved map with the door open. A door that
   was closed when the map was saved stays a wall for the planner.
-- **Not done**: elevators between floors (separate maps).
+- Elevators: see [Elevator](#elevator).
+
+## Elevator
+
+Issue #48. `kachaka_isaac_sim/elevator.py`, `floor_maps.py`,
+`scripts/make_maps.py`, `layouts/elevator.yaml`.
+
+- **Floors side by side**: floor k is the room moved k × 10 m along x
+  (`FLOOR_SPACING`), not stacked in z. Stacked floors would need a floor
+  slab with holes for nothing and would move the robot in z, which the cliff
+  sensors (they compare with the start height) and the ground plane do not
+  expect. A layout's `floors` entries are sub-layouts (walls, doors, boxes,
+  people) moved to their floor; shelves, the charger and the spawn pose stay
+  on the first floor.
+- **Car**: walls behind a doorway in a room wall, and a sliding door
+  (`doors.Doors`, its own instance, not listed on `sim/doors`) on each
+  floor. `ElevatorState` is plain Python: `go` sets the target, `step` closes
+  the door, waits `ride` s per floor once it is closed, then reports the
+  arrival and opens the door on the new floor. While closing, the door
+  reopens as long as the robot's base_footprint is within `door_sensor` of
+  the doorway (assumed door sensor).
+- **The ride** happens between physics steps (main loop, `take_ride`): the
+  robot articulation and any shelf inside the car (and the towed shelf) are
+  moved by the floor offset with their velocities kept. `NoisyOdometry.shift`
+  moves its origin by the same amount, so `odom` does not jump; wheel
+  odometry integrates the wheels and never sees it. `SimRobot.map_origin`
+  moves too, so sim-only map poses stay in the current floor's map frame.
+- **Maps**: SLAM's map frame is the spawn pose, so each floor's map frame is
+  the spawn pose moved to that floor; a pose in the car is the same on every
+  floor's map, and after a ride the next floor's map is loaded and AMCL is
+  given the pose it had. `floor_map` rasterises the layout's static geometry
+  (doors open, movers and people left out); the origin is snapped so that
+  cell centres never sit on a wall face (otherwise thin walls came out one
+  cell jagged).
+- **ROS**: `sim/elevator/go` (String) and latched `sim/elevator` (JSON).
+  kachaka-api has no elevator calls; on the real robot the building's system
+  drives the ride (sources in the README).
+- **Not done**: RViz markers for the car; people riding; more than one car.
 
 ## Layout files
 
