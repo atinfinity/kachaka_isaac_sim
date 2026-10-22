@@ -51,6 +51,7 @@ from .config import ROOT
 from .drive import Pose2D
 from .hazards import ERROR_COLLISION, ERROR_EMERGENCY_STOP, ERROR_PAUSED, ERROR_STEP_DETECTED
 from .maps import MapError, MapFile, MapStore
+from .wall_clock import CLOCK
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 MAX_LINEAR = 0.3  # SetRobotVelocity full scale, as in kachaka_api.base
@@ -131,8 +132,13 @@ class Store:
 
 
 # --- ROS message -> protobuf --------------------------------------------------
+def _stamp(sec: int, nanosec: int) -> int:
+    """A sim time stamp as kachaka-api's: wall clock [ns since the epoch] (wall_clock.py)."""
+    return CLOCK.to_wall(sec * 1_000_000_000 + nanosec)
+
+
 def _header(h) -> pb2.RosHeader:
-    return pb2.RosHeader(stamp_nsec=h.stamp.sec * 1_000_000_000 + h.stamp.nanosec, frame_id=h.frame_id)
+    return pb2.RosHeader(stamp_nsec=_stamp(h.stamp.sec, h.stamp.nanosec), frame_id=h.frame_id)
 
 
 def _vec(v) -> pb2.Vector3:
@@ -284,6 +290,13 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         api_cfg = getattr(sim_node.cfg, "api", None)
         shortcuts = getattr(api_cfg, "shortcuts", None) if api_cfg else None
         self.shortcuts = [_ns_to_dict(s) for s in shortcuts or []]  # config/robot.yaml api.shortcuts
+        self.features = None  # GetObjectDetectionFeatures; torch is loaded on the first call
+        if getattr(api_cfg, "detection_features", True) if api_cfg else True:
+            from .detection_features import FeatureExtractor
+
+            self.features = FeatureExtractor()
+        self.features_lock = threading.Lock()
+        self.features_cache: tuple = (None, [])  # (image stamp, features)
         self.store = Store()
         self.serial = serial
         self.map_to_odom = Pose2D(0.0, 0.0, 0.0)  # from SLAM's /tf; identity until it runs
@@ -810,7 +823,7 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
                                          frame_id=self.sim.frame("camera_front")), []
         cursor, d = self.store.get("object_detection", request, context)
         sec, nsec = d["stamp"]
-        return cursor, pb2.RosHeader(stamp_nsec=sec * 1_000_000_000 + nsec, frame_id=d["frame_id"]), d["objects"]
+        return cursor, pb2.RosHeader(stamp_nsec=_stamp(sec, nsec), frame_id=d["frame_id"]), d["objects"]
 
     def GetObjectDetection(self, request, context):
         cursor, header, objects = self._object_detection(request, context)
@@ -821,11 +834,37 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
             for o in objects])
 
     def GetObjectDetectionFeatures(self, request, context):
-        # The real robot returns its detector's feature maps; the simulator
-        # has no detector network, so the list stays empty. Paced like
-        # GetObjectDetection.
+        """Feature maps of each front camera image (detection_features.py),
+        paced by the camera. Without the camera, or with the features off
+        (api.detection_features) or failing, the list is empty and the call
+        is paced like GetObjectDetection."""
+        if self.features is not None and "front_camera" in self.sim.image_pubs:
+            cursor, m = self.store.get("front_camera/image", request, context)
+            features = self._features_of(m)
+            if features is not None:
+                return pb2.GetObjectDetectionFeaturesResponse(metadata=self._meta(cursor), header=_header(m.header),
+                                                              features=features)
         cursor, header, _ = self._object_detection(request, context)
         return pb2.GetObjectDetectionFeaturesResponse(metadata=self._meta(cursor), header=header)
+
+    def _features_of(self, m) -> list | None:
+        """The features of image `m`, computed once per image."""
+        import numpy as np
+
+        with self.features_lock:
+            key = (m.header.stamp.sec, m.header.stamp.nanosec)
+            if self.features_cache[0] == key:
+                return self.features_cache[1]
+            try:
+                rgb = np.frombuffer(bytes(m.data), np.uint8).reshape(m.height, m.width, 3)
+                maps = self.features(rgb)
+            except Exception as e:  # noqa: BLE001 - no torch, no weights (offline), ...
+                print(f"[kachaka] object detection features off: {type(e).__name__}: {e}", flush=True)
+                self.features = None
+                return None
+            out = [pb2.ObjectDetectionFeatures(name=k, shape=v.shape, data=v.ravel()) for k, v in maps.items()]
+            self.features_cache = (key, out)
+            return out
 
     def ActivateLaserScan(self, request, context):
         return pb2.ActivateLaserScanResponse(result=pb2.Result(success=True))

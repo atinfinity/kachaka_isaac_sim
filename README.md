@@ -252,8 +252,23 @@ bounding box, as it would for a real detector.
 
 The real detector's range, scores and miss rate are not published; these
 numbers are guesses (`object_detection` in `config/robot.yaml`). Doors are
-not detected, and `GetObjectDetectionFeatures` stays empty since there is no
-network.
+not detected.
+
+`GetObjectDetectionFeatures` returns feature maps of each front camera image
+in the shapes the robot's detector gives, which are the inputs of the
+`predictor.onnx` that
+[kachaka-transfer-learning](https://github.com/pf-robotics/kachaka-transfer-learning)
+trains: `p4_out` (1×96×14×25), `p5_out` (1×96×7×13) and `p6_out` (1×96×4×7).
+The robot's network is not published, so they come from a different one:
+torchvision's ImageNet MobileNetV3-Large on the image resized to 224×398, its
+stride 16 and 32 blocks projected to 96 channels by a fixed random 1×1
+convolution, and a stride-2 max pool for `p6_out`
+(`kachaka_isaac_sim/detection_features.py`). The names are assumed from the
+demo notebooks, which strip `_out` to get the ONNX inputs. A head trained on
+the simulator's features works in the simulator, not on the robot, and the
+other way round. The first call downloads the weights (22 MB) into the torch
+hub cache; `api.detection_features: false` in `config/robot.yaml` turns the
+features off (empty, as before).
 
 The room has two people (`people.room` in `config/robot.yaml`): Isaac Sim's
 bundled characters (`people.characters`, standing still with the arms down).
@@ -836,7 +851,7 @@ The client methods are the RPC names in snake_case
 | Safety | `SetEmergencyStop`, `RestartRobot` | the emergency stop halts the wheels, cancels all commands and refuses new ones (−14) until `RestartRobot`, which clears it and also resumes from a pause after a step or a collision; the simulator itself does not restart |
 | Sound | `GetSoundList`, `PlaySound`, `StopSound`, `AddSound`, `DeleteSound` | no audio: the sound name goes to `sim/sound`; added sounds live until the simulator stops |
 | Torches | `SetFrontTorchIntensity`, `SetBackTorchIntensity` | a spotlight at each camera, see [Torch lights](#torch-lights); levels are clamped to 0-255 and published on `sim/torch` |
-| Object detection | `GetObjectDetection`, `GetObjectDetectionFeatures` | people, shelves and the charger from the scene, see [Object detection](#object-detection); features are always empty |
+| Object detection | `GetObjectDetection`, `GetObjectDetectionFeatures` | people, shelves and the charger from the scene; the features come from an ImageNet MobileNetV3, not the robot's detector; see [Object detection](#object-detection) |
 | No-ops | `ActivateLaserScan` | |
 
 All `StartCommand` commands of kachaka-api 3.17.5.0 are implemented (see
@@ -882,6 +897,15 @@ asyncio.run(main())
 ```
 
 `scripts/aio_demo.py` does this with the command state as well.
+
+The stamps (`stamp_nsec`) are wall clock time, as on the robot, where the
+demo notebooks compare them with `time.time()`. The ROS topics keep simulation
+time (`/clock`). The server converts each stamp with the offset between wall
+clock and simulation time at the `/clock` tick at or before it
+(`kachaka_isaac_sim/wall_clock.py`), so one sim time gives one wall time in
+every stream, and stamps keep their order. When the simulation runs slower
+than real time, stamps fall behind the wall clock and jump forward at each
+tick.
 
 All of the client's streams work against the simulator: `robot_pose`, `ros_odometry`, `ros_wheel_odometry`, `ros_imu`, `ros_laser_scan`, `front_camera_ros_image`, `front_camera_ros_compressed_image`, `object_detection`, `object_detection_features`, `png_map`, `command_state`, `last_command_result`, `shelves`, `moving_shelf_id`, `locations`, `map_list`, `current_map_id`, `history_list`, `auto_homing_enabled`, `manual_control_enabled`, `error`.
 They follow the server's cursor long-poll:
@@ -990,8 +1014,17 @@ while they serve. With kachaka-api 3.17.5.0:
 | robot_pose | OK | `set_robot_pose` moves the pose that `get_robot_pose` returns |
 | switch_map | OK | switches to a second saved map and back |
 | install_libraries | skipped | pip installs only |
-| save_object_detection_features | skipped | never ends: it waits for stamps newer than the wall clock, and the simulator stamps with simulation time (#69) |
-| run_custom_object_detection | skipped | needs a trained `predictor.onnx`, and the simulator returns no detection features (#70) |
+| save_object_detection_features | OK | saves `p4`, `p5`, `p6` and the image; the features are the simulator's, not the robot's detector's |
+| run_custom_object_detection | OK | with a stand-in `predictor.onnx` (one fixed box) that has the official inputs; see below |
+
+To run your own detector in the simulator: save images and features with
+save_object_detection_features, train with kachaka-transfer-learning and put
+its `predictor.onnx` next to run_custom_object_detection. The notebook scales
+the boxes for a 1280×720 image, presumably the robot's camera (`scale_h = 720.0 / 224`,
+`scale_w = 1280.0 / 398`); the simulated camera is 640×480, so use
+`480.0 / 224` and `640.0 / 398`. The check above uses a stand-in model
+(`stand_in_predictor` in `tests/demo_notebooks_check.py`) that only proves
+the features fit the official inputs.
 
 The same notebooks in a live JupyterLab, driven by `scripts/record_demo.sh notebooks sensors|control|map`
 (the recorder clicks the buttons and the plot, and turns or drives the robot during the sensor streams):

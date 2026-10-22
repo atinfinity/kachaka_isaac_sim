@@ -279,8 +279,14 @@ def main():
             break
     stream.cancel()
     check("dynamic transform", any(c.endswith("base_footprint") for _, c in frames), str(sorted(frames)))
-    header, _ = client.get_object_detection_features()
-    check("object detection features", header.stamp_nsec > 0)
+    header, features = client.get_object_detection_features()
+    shapes = {f.name: tuple(f.shape) for f in features}
+    want = {"p4_out": (1, 96, 14, 25), "p5_out": (1, 96, 7, 13), "p6_out": (1, 96, 4, 7)}
+    check("object detection features", header.stamp_nsec > 0 and shapes == ({} if args.no_cameras else want)
+          and all(len(f.data) == math.prod(f.shape) for f in features), str(shapes or "none (no front camera)"))
+    # The stamps are wall clock, as on the robot (the ROS side is on sim time).
+    lag = time.time() - client.get_ros_odometry().header.stamp_nsec / 1e9
+    check("stamps are wall clock", -1.0 < lag < 5.0, f"(odometry stamp {lag:.2f} s behind time.time())")
 
     # 10. Maps.
     created = []

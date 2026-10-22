@@ -7,7 +7,7 @@ address of the robot's own JupyterLab (100.94.1.1:26400).
 
     uv run --no-project --with kachaka-api==3.17.5.0 --with nbclient --with ipykernel \\
         --with opencv-python-headless --with matplotlib --with plotly --with ipywidgets --with anywidget --with ipympl \\
-        --with pillow --with fastapi --with uvicorn --with nest_asyncio --with requests \\
+        --with pillow --with fastapi --with uvicorn --with nest_asyncio --with requests --with onnx --with onnxruntime \\
         python tests/demo_notebooks_check.py
 
 scripts/demo_notebooks.sh starts the simulator and Nav2 on a saved map first
@@ -23,13 +23,15 @@ Kinds of notebook:
           serves, then it is interrupted;
   skip    not runnable here; the reason is printed.
 Each kind may check the outputs further (CHECKS). The executed notebooks are
-written to build/demo_notebooks/.
+written to build/demo_notebooks/; the ones that read or write files (WORKDIR)
+run in build/demo_notebooks/work/<name>/.
 """
 
 import argparse
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -75,10 +77,10 @@ NOTEBOOKS = {
     "robot_pose": ("run", ""),
     "switch_map": ("run", ""),
     "install_libraries": ("skip", "pip installs only, no API calls"),
-    "run_custom_object_detection": ("skip", ("needs a trained predictor.onnx, and the simulator returns no "
-                                             "object detection features (#70)")),
-    "save_object_detection_features": ("skip", ("never ends: it waits for image stamps newer than the wall "
-                                                "clock, and the simulator stamps with simulation time (#69)")),
+    "save_object_detection_features": ("run", "the features are the simulator's, not the robot's detector's"),
+    "run_custom_object_detection": ("stream", ("a stand-in predictor.onnx (one fixed box) with the official "
+                                               "input shapes: a trained one would come from "
+                                               "kachaka-transfer-learning")),
 }
 
 # The HTTP requests sent to a server notebook: (method, path, json body).
@@ -87,6 +89,49 @@ REQUESTS = {
     "url_kachaka_api": [("GET", "/kachaka/get_robot_serial_number", None),
                         ("GET", "/kachaka/get_robot_pose", None),
                         ("GET", "/kachaka/front_camera_image.jpeg", None)],
+}
+
+
+# The robot's object detection feature maps: the inputs of predictor.onnx
+# (kachaka-transfer-learning, create_onnx.py).
+FEATURES = {"p4": (1, 96, 14, 25), "p5": (1, 96, 7, 13), "p6": (1, 96, 4, 7)}
+
+
+def stand_in_predictor(path: Path) -> None:
+    """A predictor.onnx with the inputs and outputs of kachaka-transfer-learning's
+    (bboxes [N, 4] as y1, x1, y2, x2 in the 224 x 398 model image; labels;
+    scores): one fixed box, scored 0.9. onnxruntime checks the feature shapes."""
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+
+    nodes, means = [], []
+    for name in FEATURES:
+        nodes.append(helper.make_node("ReduceMean", [name], [f"{name}_mean"], keepdims=0))
+        means.append(f"{name}_mean")
+    consts = {"zero": np.zeros((), np.float32), "score": np.array([0.9], np.float32),
+              "bboxes_c": np.array([[56.0, 100.0, 168.0, 298.0]], np.float32), "labels_c": np.array([0], np.int64)}
+    nodes += [helper.make_node("Sum", means, ["mean"]), helper.make_node("Mul", ["mean", "zero"], ["nothing"]),
+              helper.make_node("Add", ["score", "nothing"], ["scores"]),  # uses the features, ignores their values
+              helper.make_node("Identity", ["bboxes_c"], ["bboxes"]),
+              helper.make_node("Identity", ["labels_c"], ["labels"])]
+    graph = helper.make_graph(
+        nodes, "stand_in_predictor",
+        [helper.make_tensor_value_info(n, TensorProto.FLOAT, list(s)) for n, s in FEATURES.items()],
+        [helper.make_tensor_value_info("bboxes", TensorProto.FLOAT, [1, 4]),
+         helper.make_tensor_value_info("labels", TensorProto.INT64, [1]),
+         helper.make_tensor_value_info("scores", TensorProto.FLOAT, [1])],
+        [numpy_helper.from_array(v, k) for k, v in consts.items()])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    model.ir_version = 8  # readable by older onnxruntime too
+    onnx.checker.check_model(model)
+    onnx.save(model, str(path))
+
+
+# Notebooks run in a work dir of their own, set up by these.
+WORKDIR = {
+    "save_object_detection_features": lambda work: None,
+    "run_custom_object_detection": lambda work: stand_in_predictor(work / "predictor.onnx"),
 }
 
 
@@ -112,14 +157,30 @@ def errors_of(nb) -> list[str]:
             if o.get("output_type") == "error"]
 
 
-def check_switch_map(nb, _):
+def check_saved_features(nb, _, work):
+    """The notebook pickles the features as the ONNX inputs, with the image."""
+    import pickle
+
+    import numpy as np
+
+    try:
+        with open(work / "data" / "0.pkl", "rb") as f:
+            inputs = pickle.load(f)
+    except OSError as e:
+        return False, f"no data/0.pkl: {e}"
+    shapes = {k: tuple(np.shape(v)) for k, v in inputs.items()}
+    ok = shapes == FEATURES and (work / "data" / "0.png").is_file() and images_of(nb) >= 1
+    return ok, f"data/0.pkl {shapes}, data/0.png"
+
+
+def check_switch_map(nb, *_):
     ids = re.findall(r"current_map_id='([^']*)'", text_of(nb))
     targets = re.findall(r"target_map_id='([^']*)'", text_of(nb))
     ok = len(ids) == 2 and ids == targets and ids[0] != ids[1]
     return ok, f"switched to {ids[0]} and back to {ids[1]}" if ok else f"targets {targets}, current {ids}"
 
 
-def check_robot_pose(nb, _):
+def check_robot_pose(nb, *_):
     text = text_of(nb)
     poses = [(float(x), float(y)) for x, y in re.findall(r"pose\.x=(-?[\d.]+), pose\.y=(-?[\d.]+)", text)]
     # The second set_robot_pose puts the robot at (2, 1); the last pose is read 5 s later.
@@ -128,7 +189,7 @@ def check_robot_pose(nb, _):
     return ok, f"set_robot_pose succeeded twice; poses {poses}, the last one expected near (2.00, 1.00)"
 
 
-def check_error_code(nb, _):
+def check_error_code(nb, *_):
     text = text_of(nb)
     rows = text.count("<tr><td>")
     ok = rows > 0 and "Waiting for next error" in text
@@ -136,13 +197,13 @@ def check_error_code(nb, _):
 
 
 def check_images(n):
-    def check(nb, _):
+    def check(nb, *_):
         k = images_of(nb)
         return k >= n, f"{k} image{'s' if k != 1 else ''} shown"
     return check
 
 
-def check_server(nb, replies):
+def check_server(nb, replies, *_):
     bad = [f"{path}: {status}" for path, status, _ in replies if status != 200]
     if bad:
         return False, ", ".join(bad)
@@ -150,7 +211,7 @@ def check_server(nb, replies):
     return True, got
 
 
-def check_http_server(nb, replies):
+def check_http_server(nb, replies, *_):
     ok, why = check_server(nb, replies)
     finished = "send_command finished." in text_of(nb)
     return ok and finished, why + ("" if finished else "; the speak command did not finish")
@@ -169,6 +230,8 @@ CHECKS = {
     "switch_map": check_switch_map,
     "http_server": check_http_server,
     "url_kachaka_api": check_server,
+    "save_object_detection_features": check_saved_features,
+    "run_custom_object_detection": check_images(1),
 }
 
 
@@ -253,8 +316,8 @@ def localize(target: str, wait: float = 60.0) -> bool:
 KILL_AFTER = 15.0  # s past a cell's timeout before its kernel is killed
 
 
-def run(path: Path, kind: str, target: str, timeout: float, stream_timeout: float, out_dir: Path):
-    """Execute one notebook. Returns (executed notebook, error list, replies)."""
+def run(path: Path, kind: str, target: str, timeout: float, stream_timeout: float, out_dir: Path, work: Path):
+    """Execute one notebook, in `work`. Returns (executed notebook, error list, replies)."""
     import nbformat
     from nbclient import NotebookClient
     from nbclient.exceptions import DeadKernelError
@@ -263,7 +326,7 @@ def run(path: Path, kind: str, target: str, timeout: float, stream_timeout: floa
     nb.cells.insert(0, nbformat.v4.new_code_cell(POINT_AT.format(target=target)))
     cell_timeout = stream_timeout if kind in ("stream", "server") else timeout
     client = NotebookClient(nb, timeout=cell_timeout, kernel_name="python3", allow_errors=True,
-                            interrupt_on_timeout=True, resources={"metadata": {"path": str(path.parent)}})
+                            interrupt_on_timeout=True, resources={"metadata": {"path": str(work)}})
     replies = []
     # A kernel blocked in grpc.aio can miss the timeout's interrupt and never
     # answer (error_code's async for): kill it KILL_AFTER s past the timeout.
@@ -339,11 +402,17 @@ def main():
             print(f"{name}: skipped ({why})", flush=True)
             continue
         t0 = time.monotonic()
+        work = demos
+        if name in WORKDIR:
+            work = args.out / "work" / name
+            shutil.rmtree(work, ignore_errors=True)
+            work.mkdir(parents=True)
+            WORKDIR[name](work)
         nb, errors, replies = run(demos / f"{name}.ipynb", kind, args.target, args.timeout, args.stream_timeout,
-                                  args.out)
+                                  args.out, work)
         ok, detail = not errors, "; ".join(errors)
         if ok and name in CHECKS:
-            ok, detail = CHECKS[name](nb, replies)
+            ok, detail = CHECKS[name](nb, replies, work)
         notes = "; ".join(s for s in (detail, why) if s)
         rows.append((name, "OK" if ok else "FAIL", notes))
         print(f"{name}: {'OK' if ok else 'FAIL'} in {time.monotonic() - t0:.0f} s ({notes})", flush=True)

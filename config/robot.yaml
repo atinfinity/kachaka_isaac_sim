@@ -179,6 +179,12 @@ stubs:
   version: "kachaka-isaac-sim 0.1.0"
 
 api:
+  # GetObjectDetectionFeatures: feature maps of the front camera image in the
+  # shapes of the robot's (p4_out, p5_out, p6_out), from an ImageNet
+  # MobileNetV3-Large, not the robot's detector (kachaka_isaac_sim/
+  # detection_features.py). Needs torch and torchvision; the weights
+  # (22 MB) are downloaded into the torch hub cache on the first call.
+  detection_features: true
   # kachaka-api GetShortcuts / StartShortcutCommand. Each command is a
   # kachaka-api Command in protobuf JSON; they run one after another.
   shortcuts:

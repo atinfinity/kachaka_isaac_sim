@@ -231,8 +231,19 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 - 結果は前方カメラの画像ごと（10 Hz）に出て、画像と同じタイムスタンプが付きます
 
 実機の検出距離・スコア・見逃し率は公開されていないので、これらの値は推定です
-（`config/robot.yaml` の `object_detection`）。ドアは検出しません。ネットワークがないので
-`GetObjectDetectionFeatures` は常に空です。
+（`config/robot.yaml` の `object_detection`）。ドアは検出しません。
+
+`GetObjectDetectionFeatures` は前方カメラの画像ごとに、実機の検出器と同じ形の特徴マップを返します。
+[kachaka-transfer-learning](https://github.com/pf-robotics/kachaka-transfer-learning)
+で学習する `predictor.onnx` の入力で、`p4_out`（1×96×14×25）、`p5_out`（1×96×7×13）、
+`p6_out`（1×96×4×7）です。実機のネットワークは公開されていないので、別のネットワークで作ります。
+画像を 224×398 に縮小して torchvision の ImageNet 学習済み MobileNetV3-Large に通し、
+ストライド 16 と 32 のブロックを固定の乱数 1×1 畳み込みで 96 チャンネルにし、`p6_out` は
+ストライド 2 の max pool です（`kachaka_isaac_sim/detection_features.py`）。名前はデモノートブックが
+`_out` を外して ONNX の入力名にしていることからの推定です。シミュレータの特徴量で学習したヘッドは
+シミュレータでは動きますが実機では動きません（逆も同じ）。初回の呼び出しで重み（22 MB）を
+torch hub のキャッシュにダウンロードします。`config/robot.yaml` の `api.detection_features: false`
+で特徴量を止められます（以前と同じく空）。
 
 部屋には人が 2 人います（`config/robot.yaml` の `people.room`）。Isaac Sim 同梱のキャラクター
 （`people.characters`、腕を下ろして立ったまま）です。アセットサーバーに届かないときはカプセルの人形に
@@ -749,7 +760,7 @@ client.return_home()
 | 安全 | `SetEmergencyStop`、`RestartRobot` | 非常停止で車輪を止め、全コマンドをキャンセルし、`RestartRobot` で解除するまで新しいコマンドを拒否（−14）。`RestartRobot` は段差や衝突による一時停止からも復帰する。シミュレータ自体は再起動しない |
 | サウンド | `GetSoundList`、`PlaySound`、`StopSound`、`AddSound`、`DeleteSound` | 音声なし。サウンド名を `sim/sound` に出す。追加したサウンドはシミュレータを止めると消える |
 | トーチ | `SetFrontTorchIntensity`、`SetBackTorchIntensity` | 各カメラの位置のスポットライト（[トーチライト](#トーチライト)を参照）。値は 0〜255 に丸め、`sim/torch` に出します |
-| 物体検出 | `GetObjectDetection`、`GetObjectDetectionFeatures` | シーンの人・シェルフ・充電器（[物体検出](#物体検出)を参照）。特徴量は常に空 |
+| 物体検出 | `GetObjectDetection`、`GetObjectDetectionFeatures` | シーンの人・シェルフ・充電器。特徴量は実機の検出器ではなく ImageNet の MobileNetV3 から（[物体検出](#物体検出)を参照） |
 | 何もしない | `ActivateLaserScan` | |
 
 kachaka-api 3.17.5.0 の `StartCommand` のコマンドはすべて実装しています（[コマンド](#コマンド)を参照）。
@@ -793,6 +804,12 @@ asyncio.run(main())
 ```
 
 `scripts/aio_demo.py` は、これにコマンドの状態の表示も加えた例です。
+
+タイムスタンプ（`stamp_nsec`）は実機と同じく壁時計の時刻です（デモノートブックは `time.time()` と
+比べます）。ROS トピックはシミュレーション時間（`/clock`）のままです。サーバは各スタンプを、
+それ以前で最新の `/clock` の時点での壁時計とシミュレーション時間の差で変換します
+（`kachaka_isaac_sim/wall_clock.py`）。同じシミュレーション時刻はどのストリームでも同じ壁時計の時刻になり、
+順序も保たれます。シミュレーションが実時間より遅いときは、スタンプは壁時計より遅れ、`/clock` ごとに追いつきます。
 
 クライアントのストリームはすべてシミュレータで動きます: `robot_pose`, `ros_odometry`, `ros_wheel_odometry`, `ros_imu`, `ros_laser_scan`, `front_camera_ros_image`, `front_camera_ros_compressed_image`, `object_detection`, `object_detection_features`, `png_map`, `command_state`, `last_command_result`, `shelves`, `moving_shelf_id`, `locations`, `map_list`, `current_map_id`, `history_list`, `auto_homing_enabled`, `manual_control_enabled`, `error`。
 サーバのカーソル方式のロングポーリングに従います。
@@ -890,8 +907,15 @@ scripts/demo_notebooks.sh speak robot_pose   # 一部だけ
 | robot_pose | OK | `set_robot_pose` で `get_robot_pose` の位置が変わる |
 | switch_map | OK | 2 つ目の保存地図に切り替えて戻す |
 | install_libraries | スキップ | pip install のみ |
-| save_object_detection_features | スキップ | 壁時計より新しいスタンプを待つが、シミュレータはシミュレーション時刻でスタンプするので終わらない（#69） |
-| run_custom_object_detection | スキップ | 学習済みの `predictor.onnx` が必要で、シミュレータは検出特徴量を返さない（#70） |
+| save_object_detection_features | OK | `p4`・`p5`・`p6` と画像を保存。特徴量は実機の検出器ではなくシミュレータのもの |
+| run_custom_object_detection | OK | 公式と同じ入力を持つ代用の `predictor.onnx`（固定の枠 1 つ）で実行。下記参照 |
+
+シミュレータで独自の検出器を動かすには、save_object_detection_features で画像と特徴量を保存し、
+kachaka-transfer-learning で学習した `predictor.onnx` を run_custom_object_detection と同じディレクトリに置きます。
+ノートブックは 1280×720 の画像（実機のカメラと推定）に合わせて枠を拡大します（`scale_h = 720.0 / 224`、
+`scale_w = 1280.0 / 398`）。シミュレータのカメラは 640×480 なので `480.0 / 224` と `640.0 / 398`
+にしてください。上の確認は、特徴量が公式の入力に合うことだけを確かめる代用モデル
+（`tests/demo_notebooks_check.py` の `stand_in_predictor`）を使っています。
 
 同じノートブックをブラウザの JupyterLab で動かした様子です（`scripts/record_demo.sh notebooks sensors|control|map` で録画。録画スクリプトがボタンやプロットをクリックし、センサのストリーム中はロボットを旋回・前後進させます）。
 
