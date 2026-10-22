@@ -144,7 +144,7 @@ case "$DEMO" in
         HOST_RUN="uv run --no-project --with kachaka-api==3.17.5.0 --with jupyterlab --with ipympl
             --with ipywidgets --with plotly --with anywidget --with fastapi --with uvicorn --with nest_asyncio
             --with opencv-python-headless --with matplotlib --with numpy --with pillow --with pyyaml --with websockets
-            python scripts/record_notebook_demo.py $PWD/build/notebooks_$SET $SET" ;;
+            --with onnx --with onnxruntime python scripts/record_notebook_demo.py $PWD/build/notebooks_$SET $SET" ;;
     front_stop)
         GIF=build/front_stop.mp4
         VIEW=(1.9 -1.7 0.9 1.9 0.0 0.05)  # from the south, side-on to the path at the east wall
@@ -170,7 +170,7 @@ case "$DEMO" in
         COMPOSE_ARGS=(--height 540)
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_speed_demo.py /build/speed/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|auto_door|movers|elevator|elevator_vertical|scene <world>|api|notebooks [sensors|control|map]|front_stop|cliff|speed]" >&2; exit 2 ;;
+    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|auto_door|movers|elevator|elevator_vertical|scene <world>|api|notebooks [sensors|control|map|detection]|front_stop|cliff|speed]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 [[ "$DEMO" == notebooks ]] && OUT=build/notebooks_$SET

@@ -1026,7 +1026,7 @@ the boxes for a 1280×720 image, presumably the robot's camera (`scale_h = 720.0
 (`stand_in_predictor` in `tests/demo_notebooks_check.py`) that only proves
 the features fit the official inputs.
 
-The same notebooks in a live JupyterLab, driven by `scripts/record_demo.sh notebooks sensors|control|map`
+The same notebooks in a live JupyterLab, driven by `scripts/record_demo.sh notebooks sensors|control|map|detection`
 (the recorder clicks the buttons and the plot, and turns or drives the robot during the sensor streams):
 
 ![Camera stream, object detection, LiDAR scan, IMU plot, undistort, QR code and feature matching notebooks while the robot turns](docs/notebooks_sensors.gif)
@@ -1034,6 +1034,8 @@ The same notebooks in a live JupyterLab, driven by `scripts/record_demo.sh noteb
 ![teleop buttons, the command GUI's MoveToPose and ReturnHome, speak, follow_path along an ellipse, and clicks on the live map plot that send the robot there](docs/notebooks_control.gif)
 
 ![RViz with Nav2 on a saved map beside get/set_robot_pose, switch_map, the error code table, and the HTTP server notebooks answering requests](docs/notebooks_map.gif)
+
+![save_object_detection_features saving an image and its features three times while the robot turns, then run_custom_object_detection drawing the stand-in predictor.onnx's one fixed box on the camera stream](docs/notebooks_detection.gif)
 
 The map that `get_png_map` returns is grayscale, so `plot_map_robot_lidar` draws it in
 matplotlib's default colormap (yellow); the real robot's PNG format is not checked here.
