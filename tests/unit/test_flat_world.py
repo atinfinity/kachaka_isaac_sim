@@ -46,8 +46,10 @@ def test_room_walls_all_around():
     assert d[36] == pytest.approx(min(d[36], ROOM_SIZE[0] / 2))  # +x: a wall or something nearer
 
 
-def test_people_add_boxes():
-    assert len(room_boxes([(1.0, 1.0, 0.0)])) == len(room_boxes()) + 1
+def test_people_show_two_legs():
+    legs = room_boxes([(1.0, 1.0, math.pi / 2)])[len(room_boxes()):]
+    assert sorted((round(b.x, 6), round(b.y, 6)) for b in legs) == [(0.9, 1.0), (1.1, 1.0)]
+    assert legs[0].size_x == legs[0].size_y == pytest.approx(0.13)
 
 
 def test_shelf_legs_turn_with_the_shelf():

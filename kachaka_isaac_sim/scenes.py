@@ -54,7 +54,9 @@ def room_walls(openings=()) -> list[tuple[str, tuple[float, float], tuple[float,
             out.append((f"{name}_{chr(ord('a') + i)}" if gaps else name, c, size))
     return out
 
-# A standing person's collider (world.add_person), x and y for 1.7 m height.
+
+# A person's upper-body collider (world.add_person, over the leg capsules of
+# legs.py) and footprint, x and y for 1.7 m height.
 PERSON_COLLIDER = (0.28, 0.5)
 
 # Kachaka Shelf colliders, measured from the 3-layer mesh (metres, shelf frame,
