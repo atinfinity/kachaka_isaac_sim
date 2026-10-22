@@ -87,6 +87,22 @@ Visualization Manager:
         Durability Policy: Transient Local
         Reliability Policy: Reliable
         Depth: 1
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Movers
+      Enabled: true
+      Topic:
+        Value: /mover_markers
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+        Depth: 5
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Doors
+      Enabled: true
+      Topic:
+        Value: /door_markers
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        Depth: 1
     - Class: rviz_default_plugins/Image
       Name: Front camera
       Enabled: false

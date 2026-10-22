@@ -296,8 +296,11 @@ LiDAR に映り、閉じている間は Nav2 がコストマップに載せて�
   （最初のコマンドまで一定周期で開閉）。速さ・厚さ・高さは `config/robot.yaml` の `door` にあります。
 - ドアは指定順に D01、D02、... と名付けます。`sim/doors/<id>/set_open`（`std_srvs/SetBool`）で開閉し、
   `sim/doors`（latched の JSON）に各ドアの `id`、`kind`、`pose`（map 座標系）、`width`、
-  `state`（open、closed、opening、closing）、`opening`（0〜1）、`cycling` を出します。
-  `sim/reset` でドアは開始時の状態に戻ります。
+  `state`（open、closed、opening、closing）、`opening`（0〜1）、`cycling`、`panel`（パネル中心の
+  map 座標系の `pose` と `size` [長さ, 厚さ, 高さ]）を出します。状態が変わったときと、パネルが
+  動いている間は 0.1 秒ごとに配信します。`sim/reset` でドアは開始時の状態に戻ります。
+- RViz では `door_markers` ノードが `sim/doors` から配信する `/door_markers`（MarkerArray）で
+  パネルを表示します。閉は紫、開閉中は黄色、開は薄い灰色で、id と状態付きです（[RViz の色](#rviz-の色)）。
 
 ```bash
 # x = 0.6 の壁、y = -0.6 にドア、北端にすき間（layouts/room_door.yaml）
@@ -386,10 +389,19 @@ boxes:
   止まらないので、ロボットの側でよける必要があります。
 - 人は歩くときに脚（脚のコライダーも）を、キャラクターは腕も振ります。
 - `sim/reset` で開始位置に戻ります。
+- 正解位置は `sim/movers`（シミュレータのみ、ground truth と同じ 20 Hz）に出ます。JSON で、
+  動くものごとに `id`、`path`（USD プリム）、`kind`（`person` か `box`）、`present`、
+  `pose` [x, y, yaw]（world 座標系、`sim/ground_truth` と同じ）と `map_pose`（map 座標系。
+  いない間はどちらも `null`）、`velocity` [vx, vy]（world 座標系）、`radius`（占有半径）、
+  `size` [x, y, z]、`blocked`（ロボット待ち）、`gap`（占有円とロボット本体の間の距離 m）、
+  最後にロボットに一番近いもの `closest` が入ります。ドアは含みません（`sim/doors`、[ドア](#ドア)）。
+- RViz では `mover_markers` ノードが `sim/movers` から配信する `/mover_markers`（MarkerArray）で
+  表示します。人は円柱、箱は箱で、名前と速度の矢印付き、ロボット待ちの間は赤です。
 
 ```bash
 scripts/run_sim.sh --layout layouts/room_movers.yaml
-python3 /tests/ros_nav_check.py --no-collisions   # SLAM + Nav2 と一緒に: ゴール到達と衝突なし
+python3 /tests/ros_nav_check.py --no-collisions   # SLAM + Nav2 と一緒に: ゴール到達、衝突なし、最接近距離
+ros2 topic echo /kachaka/sim/movers   # {"stamp": 12.3, "frame_id": "world", "movers": [...], "closest": {"id": "P01", "gap": 0.41}}
 ```
 
 ### シナリオランナー
@@ -486,6 +498,19 @@ docker compose -f docker/compose.yaml up navigation
 
 コンテナはホストネットワークを使うので、同じマシンのシミュレータを DDS のディスカバリで見つけます。
 
+### RViz の色
+
+| 色 | 表示 | トピック |
+|---|---|---|
+| 赤い点 | LiDAR のスキャン | `/kachaka/lidar/scan` |
+| 青い線 | Nav2 のグローバルプラン | `/plan` |
+| 緑の枠 | ロボットのフットプリント | `/local_costmap/published_footprint` |
+| 濃い灰色 / 青 | シェルフ / 牽引中のシェルフ | `/shelf_markers` |
+| オレンジの円柱 / 茶色の箱 | 動く人 / 箱（ロボット待ちの間は赤）、緑の矢印は速度 | `/mover_markers` |
+| 紫 / 黄色 / 薄い灰色のパネル | ドア 閉 / 開閉中 / 開 | `/door_markers` |
+
+コストマップ（既定では非表示）は RViz の `costmap` 配色です。
+
 ## シミュレータのオプション
 
 ```bash
@@ -580,7 +605,8 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `sim/torch` | `std_msgs/String`、トーチの明るさ 0〜255 の JSON `{"front", "back"}`（シミュレータのみ、latched） | |
 | `sim/reset` | `std_srvs/SetBool` サービス、開始時の状態に戻す。`data: true` で SLAM の地図も消す（シミュレータのみ、[シミュレータのリセット](#シミュレータのリセット)を参照） | |
 | `sim/reset/event` | `std_msgs/String`、リセットのたびに JSON `{"id", "clear_map"}`（シミュレータのみ） | |
-| `sim/doors` | `std_msgs/String`、JSON `{"doors": [...]}`: 各ドアの状態（シミュレータのみ、latched、変化時、[ドア](#ドア)を参照） | |
+| `sim/movers` | `std_msgs/String`、JSON `{"stamp", "frame_id", "movers": [...], "closest"}`: 動く人と箱の正解位置（シミュレータのみ、20 Hz、[動く人と箱](#動く人と箱)を参照） | |
+| `sim/doors` | `std_msgs/String`、JSON `{"doors": [...]}`: 各ドアの状態（シミュレータのみ、latched、変化時とパネルが動いている間は 0.1 秒ごと、[ドア](#ドア)を参照） | |
 | `sim/doors/<id>/set_open` | `std_srvs/SetBool` サービス: ドアを開ける（`true`）/閉める（シミュレータのみ） | |
 | `sim/front_stop/set_enabled`、`sim/front_stop/mute` | `std_srvs/SetBool` サービス。前方障害物停止の ON/OFF（アプリの設定に相当）と、コマンド実行中の一時無効化（`command_server` が使う）（シミュレータのみ） | |
 | `sim/command/start`、`sim/command/cancel` | `std_msgs/String`、JSON。kachaka-api サーバーから `command_server` へのコマンド（シミュレータのみ） | |
