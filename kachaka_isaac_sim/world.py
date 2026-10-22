@@ -137,6 +137,18 @@ def add_slab(stage: Usd.Stage, root: str, tiles, thickness: float = 0.1, overlap
                 approximation="none")
 
 
+def add_ceiling_light(stage: Usd.Stage, path: str, rect, z: float, intensity: float) -> None:
+    """A rect light over `rect` (x0, y0, x1, y1) at height `z`, shining down:
+    the ceiling light of a floor under a stacked one, whose slab keeps the
+    dome light out."""
+    x0, y0, x1, y1 = rect
+    light = UsdLux.RectLight.Define(stage, path)
+    light.CreateWidthAttr(x1 - x0)
+    light.CreateHeightAttr(y1 - y0)
+    light.CreateIntensityAttr(intensity)
+    UsdGeom.Xformable(light.GetPrim()).AddTranslateOp().Set(Gf.Vec3d((x0 + x1) / 2, (y0 + y1) / 2, z))
+
+
 def add_platform(stage: Usd.Stage, path: str, rect, thickness: float, z: float) -> None:
     """The elevator car's floor as a kinematic box over `rect` (x0, y0, x1, y1),
     its middle at `z`; elevator.Elevator moves it through its translate op."""

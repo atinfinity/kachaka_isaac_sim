@@ -216,9 +216,13 @@ def main():
         ok = check("into the car", *node.go(IN_CAR, 0))
     if ok:
         node.spin_until(lambda: node.elevator["robot_in_car"], 3.0)
-        check("robot in the car", node.elevator["robot_in_car"])
+        node.spin_until(lambda: False, 1.0)  # let AMCL settle after the last turn
         before = node.gt
         map_pose = node.map_pose()
+        yaw_err = abs(wrap(map_pose[2] - before[2]))
+        check("robot in the car", node.elevator["robot_in_car"],
+              f"AMCL off by {math.hypot(map_pose[0] - before[0], map_pose[1] - before[1]):.2f} m, "
+              f"{math.degrees(yaw_err):.1f} deg")
         node.go_pub.publish(String(data="2F"))
         t0 = time.monotonic()
         arrived = node.spin_until(lambda: node.elevator["floor"] == "2F" and node.elevator["state"] == "open", 40.0)

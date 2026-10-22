@@ -556,6 +556,9 @@ Issue #48. `kachaka_isaac_sim/elevator.py`, `floor_maps.py`,
   upper floor has a slab (`add_slab`, exact triangle meshes, top at the
   floor) over the room and car with the car's inside left open
   (`slab_tiles`). Car walls are `FLOOR_HEIGHT` tall, so they line the shaft.
+  A floor under another gets a ceiling light (`add_ceiling_light`, a rect
+  light at `CEILING_LIGHT` x the dome light), as the slab keeps the dome
+  light out.
   The car's floor is a kinematic box (`/World/Elevator/Platform`) that
   `Elevator` moves every pre-physics step to `ElevatorState.position`
   (smoothstep between floors while riding); it reaches 2 mm under the walls

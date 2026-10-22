@@ -26,6 +26,7 @@ from kachaka_isaac_sim.hazards import hole_rect
 
 ROBOT_USD = ROOT / "assets/generated/kachaka/kachaka.usda"
 ROBOT_URDF = ROOT / "build/kachaka.urdf"
+CEILING_LIGHT = 2.0  # stacked floors: ceiling light intensity per unit of dome light (by eye)
 SHELF_STL = ROOT / "third_party/kachaka_shelf_description/meshes/kachaka_shelf_3layer.stl"
 
 
@@ -408,6 +409,12 @@ def main() -> int:
                 room = (ox - sx / 2 - w, oy - sy / 2 - w, ox + sx / 2 + w, oy + sy / 2 + w)
                 world.add_slab(stage, f"/World/Floors/F{k + 1}/slab",
                                [room, *slab_tiles(e.outer_rect(k, w), e.inside_rect(k, w))])
+            if k < len(e.floors) - 1 and stacked:
+                # The next floor's slab keeps the dome light out: light the room from its ceiling.
+                (ox, oy), (sx, sy) = floor_offset(k), ROOM_SIZE
+                world.add_ceiling_light(stage, f"/World/Floors/F{k + 1}/ceiling_light",
+                                        (ox - sx / 2, oy - sy / 2, ox + sx / 2, oy + sy / 2),
+                                        FLOOR_HEIGHT - 0.12, CEILING_LIGHT * args.dome_light)
             for i, (a, b) in enumerate(car_walls(e, k, world.ROOM_WALL)):
                 # Stacked, the car walls are the shaft, floor to floor.
                 world.add_wall(stage, f"/World/Elevator/F{k + 1}/wall_{i}", a, b,
