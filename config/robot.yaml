@@ -230,6 +230,13 @@ door:
   height: 2.0               # m, panel
   sliding_speed: 0.5        # m/s
   hinged_speed: 1.5         # rad/s
+  # Automatic sliding doors (layout `auto: true`, run_sim.py --door-auto).
+  # Real sensors (microwave, infrared) differ by product; these are assumed.
+  auto:
+    range: 1.0              # m, sensor reach on each side of the doorway (assumed)
+    margin: 0.3             # m, beyond each edge of the doorway along the wall (assumed)
+    hold: 2.0               # s, stays open after the sensor clears (assumed)
+    movers: true            # moving people and boxes open it too
 
 # Kachaka Shelf (3-layer). The shelf rolls on four casters and is towed through
 # a fixed joint while docked. Its pose is the base_footprint pose of a robot

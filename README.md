@@ -336,12 +336,40 @@ safety sensor stops it).
   `sim/doors`): violet closed, yellow opening or closing, faint grey open, with the id and
   state ([RViz colours](#rviz-colours)).
 
+**Automatic doors** (#63) open by themselves, as in many offices, shops and hospitals:
+`auto: true` on a layout door, or `--door-auto` for the `--door` doors. An automatic
+door is a sliding door with a sensor area on both sides of the doorway: a rectangle
+`width + 2 * margin` along the wall and `range` deep on each side. The door opens while
+the robot (ground truth) or a moving person or box ([Moving people and boxes](#moving-people-and-boxes))
+is in the area, stays open for `hold` s after the area clears, and opens again if
+something comes in while it is closing.
+
+![A wall splits the room; its only way through is an automatic door. The robot drives east through it and the door closes behind; the robot is sent up to the closed door, which opens as it comes near, and goes back west through it](docs/auto_door.gif)
+
+- Settings are in `door.auto` in `config/robot.yaml`: `range` 1.0 m, `margin` 0.3 m,
+  `hold` 2.0 s (real door sensors, microwave or infrared, differ by product; these
+  are assumed) and `movers` (true: moving people and boxes open it too). A layout
+  door can override them: `auto: {range: 1.5, hold: 3.0, movers: false}`.
+- An automatic door can't be hinged or have a `cycle`.
+- `sim/doors/<id>/set_open` still forces it open or closed; from then on the sensor is
+  ignored until `sim/reset`. `sim/doors` has `auto` (true while the sensor drives the
+  door) and, for an automatic door, `sensor` (`size` [along the wall, across] of the
+  area, centred on the doorway).
+- RViz shows the sensor area as a faint orange rectangle on the floor and adds
+  "(auto)" to the door's label.
+- Nav2 sees a closed automatic door as an obstacle like any other door, so it can't
+  plan through it while it is closed: a goal on the other side of the only doorway can
+  fail until the robot is near enough for the door to open (not tested). Send the robot up to the door first,
+  as `tests/ros_auto_door_check.py` does.
+
 ```bash
 # A wall at x = 0.6 with a door at y = -0.6 and a gap at the north end (layouts/room_door.yaml)
 scripts/run_sim.sh --no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708
 scripts/run_sim.sh --layout layouts/room_door.yaml   # the same
 ros2 service call /kachaka/sim/doors/D01/set_open std_srvs/srv/SetBool "{data: false}"
 ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closing", ...}]}
+# The same wall without the gap and an automatic door (layouts/room_auto_door.yaml)
+scripts/run_sim.sh --layout layouts/room_auto_door.yaml
 ```
 
 Elevators between floors are not simulated.
@@ -351,7 +379,7 @@ Elevators between floors are not simulated.
 `--layout FILE` reads a YAML file that says where the robot starts and where
 the charger, shelves, locations, people, boxes, walls, doors and drops are, on
 top of any world. Examples are in [`layouts/`](layouts): `room.yaml`,
-`room_door.yaml` (the door setup above), `room_movers.yaml` (see
+`room_door.yaml` and `room_auto_door.yaml` (the door setups above), `room_movers.yaml` (see
 [Moving people and boxes](#moving-people-and-boxes)), and `office.yaml`, `hospital.yaml`,
 `warehouse.yaml`, `simple_room.yaml` for the Isaac Sim scenes.
 
@@ -374,6 +402,7 @@ boxes:
 walls: [[0.6, -2.0, 0.6, -1.0]]              # x0, y0, x1, y1
 doors:
   - {pose: [0.6, -0.6, 1.5708], kind: sliding, width: 0.8, open: true, cycle: [10, 5]}
+  - {pose: [0.6, 1.0, 1.5708], auto: true}    # automatic: opens when the robot comes near
 drops: [[1.0, 0.0, 0.4, 0.8]]                # x, y, size x, size y
 ```
 
@@ -559,6 +588,7 @@ machine through DDS discovery.
 | Dark grey / blue | shelf / towed shelf | `/shelf_markers` |
 | Orange cylinder / brown box | moving person / box (red while waiting for the robot), green arrow for its velocity | `/mover_markers` |
 | Violet / yellow / faint grey panel | door closed / opening or closing / open | `/door_markers` |
+| Faint orange rectangle on the floor | an automatic door's sensor area | `/door_markers` |
 
 The costmaps (off by default) use RViz's `costmap` scheme.
 
@@ -580,7 +610,7 @@ scripts/run_sim.sh --person X Y YAW      # place a person (repeatable; default: 
 scripts/run_sim.sh --no-people
 scripts/run_sim.sh --drop X Y SX SY      # a hole in the floor (repeatable), see Steps and collisions
 scripts/run_sim.sh --wall X0 Y0 X1 Y1    # a wall segment (repeatable), see Doors
-scripts/run_sim.sh --door X Y YAW        # a door (repeatable; --door-kind, --door-width, --door-closed, --door-cycle)
+scripts/run_sim.sh --door X Y YAW        # a door (repeatable; --door-kind, --door-width, --door-closed, --door-cycle, --door-auto)
 scripts/run_sim.sh --api-port 26400      # kachaka-api gRPC port (default 26400; 0 turns it off)
 scripts/run_sim.sh --help
 ```
@@ -924,9 +954,11 @@ CI has no GPU, so the simulator itself is checked locally:
 shelf, command and object detection checks one after another in the same simulator run (each
 starts with `sim/reset`). A second run with a wall and a door runs `tests/ros_door_check.py`
 (Nav2 through the door, round it while it is closed, and through it again once it opens).
-A third run with `layouts/room_movers.yaml` runs `tests/ros_nav_check.py --no-collisions`
+A third run with `layouts/room_auto_door.yaml` runs `tests/ros_auto_door_check.py` (Nav2
+through an automatic door that is never commanded: it closes behind the robot and opens as
+the robot comes back to it). A fourth run with `layouts/room_movers.yaml` runs `tests/ros_nav_check.py --no-collisions`
 (the Nav2 goals among people and a cart on the move, without touching them).
-It ends with `tests/ros_hazard_check.py` in a fourth run with a
+It ends with `tests/ros_hazard_check.py` in a fifth run with a
 drop, and logs the collisions seen during the Nav2 checks to `build/smoke_collisions.log`.
 
 ### With the simulator
@@ -946,6 +978,7 @@ python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, go
 python3 /tests/ros_detection_check.py   # object_detection/result while turning in place (same)
 python3 /tests/ros_hazard_check.py   # steps and collisions (no Nav2; sim started with --drop 1.0 0.0 0.4 0.8)
 python3 /tests/ros_door_check.py     # Nav2 and a door (sim started with --layout layouts/room_door.yaml)
+python3 /tests/ros_auto_door_check.py   # Nav2 and an automatic door (sim started with --layout layouts/room_auto_door.yaml)
 python3 /tests/ros_nav_check.py --no-collisions   # Nav2 goals among moving people (sim started with --layout layouts/room_movers.yaml)
 ```
 

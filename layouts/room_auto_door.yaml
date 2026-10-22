@@ -1,0 +1,13 @@
+# The room split by a wall at x = 0.6 with an automatic sliding door at
+# y = -0.6 and no other way through (tests/ros_auto_door_check.py,
+# record_demo.sh auto_door). The door opens when the robot or a person is
+# near it (door.auto in config/robot.yaml).
+#   scripts/run_sim.sh --layout layouts/room_auto_door.yaml
+world: room
+shelves: []
+people: []
+walls:
+  - [0.6, -2.0, 0.6, -1.0]
+  - [0.6, -0.2, 0.6, 2.0]
+doors:
+  - {pose: [0.6, -0.6, 1.5708], auto: true}
