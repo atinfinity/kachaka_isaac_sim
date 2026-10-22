@@ -50,12 +50,15 @@ class MoverState:
     """Where a mover is. It turns towards its next waypoint at `turn_rate`,
     walks there at its speed once it faces it within `TURN_AND_WALK`, and
     waits there `pause` s. It waits too while the robot is within `gap` of
-    the stretch it would walk in the next `lookahead` m."""
+    the stretch it would walk in the next `lookahead` m, and after
+    `give_way` s of that turns back (or, wandering, picks another point):
+    the robot may be unable to leave with the mover so close."""
 
     spec: MoverSpec
     turn_rate: float = 2.0  # rad/s
     lookahead: float = 0.6  # m
     gap: float = 0.15  # m between the mover's and the robot's footprints
+    give_way: float = 3.0  # s
     TURN_AND_WALK = 0.6  # rad
 
     pose: Pose2D = field(init=False)
@@ -75,6 +78,7 @@ class MoverState:
         self.target = self._next_target() if s.moves else None
         self.wait = 0.0
         self.blocked = False
+        self.blocked_for = 0.0  # s
         self.walked = 0.0  # m, drives the walking animation
         self.phase = self.rng.uniform(0.0, sum(s.appear)) if s.appear else 0.0
         self.present = self._present()
@@ -89,6 +93,16 @@ class MoverState:
         self.leg += 1
         return p
 
+    def _other_target(self) -> tuple[float, float]:
+        """Where to go instead of the target: back to the waypoint it came
+        from (then on as before), or another random point."""
+        s = self.spec
+        if s.wander is not None:
+            return self._next_target()
+        points = list(s.route) + [(s.start.x, s.start.y)]
+        self.leg -= 1  # the target comes next again
+        return points[(self.leg - 1) % len(points)]
+
     def _present(self) -> bool:
         a = self.spec.appear
         if a is None:
@@ -96,7 +110,7 @@ class MoverState:
         return (self.t + self.phase) % (a[0] + a[1]) < a[0]
 
     def in_the_way(self, robot: Pose2D | None) -> bool:
-        """The robot stands within `gap` of the stretch ahead."""
+        """The robot stands ahead, within `gap` of the stretch ahead."""
         if robot is None or self.target is None:
             return False
         p = self.pose
@@ -104,6 +118,8 @@ class MoverState:
         d = math.hypot(tx - p.x, ty - p.y)
         reach = min(self.lookahead, d)
         hx, hy = math.cos(p.yaw), math.sin(p.yaw)
+        if (robot.x - p.x) * hx + (robot.y - p.y) * hy < 0.0:
+            return False  # behind: walking on takes it away
         ex, ey = p.x + hx * reach, p.y + hy * reach
         return _segment_distance(robot.x, robot.y, p.x, p.y, ex, ey) < self.spec.radius + ROBOT_RADIUS + self.gap
 
@@ -138,6 +154,10 @@ class MoverState:
         turn = max(-self.turn_rate * dt, min(self.turn_rate * dt, err))
         p.yaw = wrap_angle(p.yaw + turn)
         self.blocked = self.in_the_way(robot)
+        self.blocked_for = self.blocked_for + dt if self.blocked else 0.0
+        if self.blocked_for > self.give_way:
+            self.target = self._other_target()
+            self.blocked_for = 0.0
         if self.blocked or abs(err - turn) > self.TURN_AND_WALK:
             return
         step = min(d, self.spec.speed * dt)
@@ -187,7 +207,8 @@ class Movers:
         from .world import Gait, Legs
 
         self.specs = specs
-        self.states = [MoverState(s, float(cfg.turn_rate), float(cfg.lookahead), float(cfg.gap)) for s in specs]
+        self.states = [MoverState(s, float(cfg.turn_rate), float(cfg.lookahead), float(cfg.gap),
+                                  float(getattr(cfg, "give_way", 3.0))) for s in specs]
         self.robot_pose = robot_pose  # () -> Pose2D, the robot's ground truth
         self.ops = []
         self.gaits = []  # world.Gait of a character, or None

@@ -266,6 +266,8 @@ two small arcs 0.2 m apart, the shins. A walking person's legs swing with the
 gait: the arcs swap front and back, and a leg lifted in its swing drops out of
 the scan for a moment. Sizes scale with `people.height`.
 
+![Three walking characters and a mannequin with their leg colliders in red, and the LiDAR scan below: two arcs per person that swap front and back](docs/person_legs.gif)
+
 The results are on `GetObjectDetection` and on the real bridge's ROS 2 topic
 `/kachaka/object_detection/result` (`kachaka_interfaces/ObjectDetectionListStamped`).
 The simulator publishes JSON on `sim/object_detection` and
@@ -415,8 +417,10 @@ boxes:
   (s; there for a while, then gone, starting at a point of the cycle drawn with
   the seed).
 - A mover turns towards its next waypoint, then walks. It waits while the robot
-  is right in its way, and does not appear on top of the robot. Nothing else
-  stops it: the robot has to keep out of its way.
+  is right in its way, and does not appear on top of the robot. After waiting
+  `movers.give_way` s (3) it turns back to its last waypoint, or wanders
+  elsewhere: the robot may be unable to leave with someone so close. Nothing
+  else stops it: the robot has to keep out of its way.
 - People swing their legs (the leg colliders too) and characters their arms as they walk.
 - `sim/reset` puts them back at the start.
 

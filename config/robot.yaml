@@ -166,7 +166,8 @@ movers:
   box_speed: 0.4            # m/s, a pushed cart (est.)
   turn_rate: 2.0            # rad/s
   lookahead: 0.6            # m, a mover waits while the robot is this close ahead ...
-  gap: 0.15                 # m ... within this gap of its footprint
+  gap: 0.15                 # m ... within this gap of its footprint,
+  give_way: 3.0             # s, then turns back (or wanders elsewhere)
 
 imu:
   frame_id: imu_link
