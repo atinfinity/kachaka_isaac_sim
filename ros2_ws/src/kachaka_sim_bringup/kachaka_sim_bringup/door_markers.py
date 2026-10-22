@@ -17,9 +17,12 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 
-OPEN = ColorRGBA(r=0.3, g=0.75, b=0.35, a=0.8)
-CLOSED = ColorRGBA(r=0.85, g=0.25, b=0.2, a=0.8)
-MOVING = ColorRGBA(r=0.95, g=0.75, b=0.2, a=0.8)
+# Kept apart from the LaserScan (red), the plan (blue) and the footprint
+# (green) in config/*.rviz: a closed door is violet, a moving one yellow and
+# an open one faint grey, out of the way like the panel itself.
+OPEN = ColorRGBA(r=0.8, g=0.8, b=0.8, a=0.35)
+CLOSED = ColorRGBA(r=0.6, g=0.35, b=0.95, a=0.85)
+MOVING = ColorRGBA(r=1.0, g=0.85, b=0.1, a=0.85)
 LABEL = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
 COLORS = {"open": OPEN, "closed": CLOSED}
 PARTS = 2  # panel, label

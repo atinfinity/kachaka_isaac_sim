@@ -56,3 +56,11 @@ def test_door_markers():
     body, _ = door_markers({"doors": [dict(door, state="closed")]}, "map")
     assert body.color == CLOSED
     assert door_markers({"doors": [dict(door, panel=None)]}, "map") == []
+
+
+def test_door_colours_stand_out_from_the_scan():
+    """The LaserScan is drawn red (255, 64, 64) in config/*.rviz."""
+    from kachaka_sim_bringup.door_markers import CLOSED, MOVING, OPEN
+
+    for c in (OPEN, CLOSED, MOVING):
+        assert abs(c.r - 1.0) + abs(c.g - 0.25) + abs(c.b - 0.25) > 0.7

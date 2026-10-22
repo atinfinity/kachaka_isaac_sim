@@ -291,7 +291,7 @@ LiDAR に映り、閉じている間は Nav2 がコストマップに載せて�
   map 座標系の `pose` と `size` [長さ, 厚さ, 高さ]）を出します。状態が変わったときと、パネルが
   動いている間は 0.1 秒ごとに配信します。`sim/reset` でドアは開始時の状態に戻ります。
 - RViz では `door_markers` ノードが `sim/doors` から配信する `/door_markers`（MarkerArray）で
-  パネルを表示します。開は緑、閉は赤、動作中は黄色で、id と状態付きです。
+  パネルを表示します。閉は紫、開閉中は黄色、開は薄い灰色で、id と状態付きです（[RViz の色](#rviz-の色)）。
 
 ```bash
 # x = 0.6 の壁、y = -0.6 にドア、北端にすき間（layouts/room_door.yaml）
@@ -436,6 +436,19 @@ docker compose -f docker/compose.yaml up navigation
 ```
 
 コンテナはホストネットワークを使うので、同じマシンのシミュレータを DDS のディスカバリで見つけます。
+
+### RViz の色
+
+| 色 | 表示 | トピック |
+|---|---|---|
+| 赤い点 | LiDAR のスキャン | `/kachaka/lidar/scan` |
+| 青い線 | Nav2 のグローバルプラン | `/plan` |
+| 緑の枠 | ロボットのフットプリント | `/local_costmap/published_footprint` |
+| 濃い灰色 / 青 | シェルフ / 牽引中のシェルフ | `/shelf_markers` |
+| オレンジの円柱 / 茶色の箱 | 動く人 / 箱（ロボット待ちの間は赤）、水色の矢印は速度 | `/mover_markers` |
+| 紫 / 黄色 / 薄い灰色のパネル | ドア 閉 / 開閉中 / 開 | `/door_markers` |
+
+コストマップ（既定では非表示）は RViz の `costmap` 配色です。
 
 ## シミュレータのオプション
 

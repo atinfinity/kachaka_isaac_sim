@@ -322,7 +322,8 @@ safety sensor stops it).
   `size` [length, thickness, height]). It is sent when a state changes and every 0.1 s while a
   panel moves. `sim/reset` puts the doors back to their start state.
 - RViz draws the panels from `/door_markers` (MarkerArray, published by `door_markers` from
-  `sim/doors`): green open, red closed, yellow moving, with the id and state.
+  `sim/doors`): violet closed, yellow opening or closing, faint grey open, with the id and
+  state ([RViz colours](#rviz-colours)).
 
 ```bash
 # A wall at x = 0.6 with a door at y = -0.6 and a gap at the north end (layouts/room_door.yaml)
@@ -478,6 +479,19 @@ docker compose -f docker/compose.yaml up navigation
 
 The containers use host networking, so they find the simulator on the same
 machine through DDS discovery.
+
+### RViz colours
+
+| Colour | What | Topic |
+|---|---|---|
+| Red dots | LiDAR scan | `/kachaka/lidar/scan` |
+| Blue line | Nav2's global plan | `/plan` |
+| Green outline | robot footprint | `/local_costmap/published_footprint` |
+| Dark grey / blue | shelf / towed shelf | `/shelf_markers` |
+| Orange cylinder / brown box | moving person / box (red while waiting for the robot), cyan arrow for its velocity | `/mover_markers` |
+| Violet / yellow / faint grey panel | door closed / opening or closing / open | `/door_markers` |
+
+The costmaps (off by default) use RViz's `costmap` scheme.
 
 ## Simulator options
 
