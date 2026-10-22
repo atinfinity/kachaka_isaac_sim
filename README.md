@@ -949,6 +949,50 @@ uv run --no-project --with kachaka-api==3.17.5.0 python scripts/dashboard.py
 There is no login: anyone who can open the page can drive the robot, so keep
 the default `--host 127.0.0.1` unless the network is trusted.
 
+### Demo notebooks
+
+The demo notebooks of kachaka-api (`python/demos/*.ipynb` in
+[pf-robotics/kachaka-api](https://github.com/pf-robotics/kachaka-api)) run
+against the simulator. `scripts/demo_notebooks.sh` runs them headless: it
+starts the simulator, saves a SLAM map, restarts Nav2 on it, and runs each
+notebook in a fresh kernel with its client pointed at `127.0.0.1:26400`
+(the notebooks default to the robot's own address). It takes about 10 min
+and needs the ROS 2 image and uv:
+
+```bash
+scripts/demo_notebooks.sh                    # all of them
+scripts/demo_notebooks.sh speak robot_pose   # some
+```
+
+The executed notebooks are written to `build/demo_notebooks/`. Notebooks that
+loop forever (camera, scan and error streams) are stopped after a while and
+pass if they showed something; the HTTP server notebooks are sent requests
+while they serve. With kachaka-api 3.17.5.0:
+
+| Notebook | Result | Notes |
+|---|---|---|
+| get_front_camera | OK | |
+| get_front_camera_continuous | OK | |
+| undistort | OK | the simulated camera has no distortion, so both images are the same |
+| feature_matching | OK | nothing is held up to the camera, so there are few matches |
+| qrcode | OK | there is no QR code in the simulated rooms |
+| get_object_detection | OK | |
+| get_imu | OK | the plot is a widget: drawn only in a live JupyterLab |
+| get_laser_scan | OK | |
+| error_code | OK | lists the simulator's error codes, not the robot's |
+| speak | OK | no sound: the text goes to the log and `sim/speech` |
+| template | OK | |
+| teleop, command_gui | OK | the buttons and forms are built; nobody clicks them headless |
+| plot_map_robot_lidar | OK | the animation is a widget: drawn only in a live JupyterLab |
+| http_server | OK | `/run` returns `{"success":true}` |
+| url_kachaka_api | OK | serial number, pose and camera image over HTTP |
+| follow_path | OK | |
+| robot_pose | OK | `set_robot_pose` moves the pose that `get_robot_pose` returns |
+| switch_map | OK | switches to a second saved map and back |
+| install_libraries | skipped | pip installs only |
+| save_object_detection_features | skipped | never ends: it waits for stamps newer than the wall clock, and the simulator stamps with simulation time (#69) |
+| run_custom_object_detection | skipped | needs a trained `predictor.onnx`, and the simulator returns no detection features (#70) |
+
 ## Performance
 
 Physics runs at 120 Hz. Rendering, which the cameras need, runs at
