@@ -917,13 +917,15 @@ kachaka-transfer-learning で学習した `predictor.onnx` を run_custom_object
 にしてください。上の確認は、特徴量が公式の入力に合うことだけを確かめる代用モデル
 （`tests/demo_notebooks_check.py` の `stand_in_predictor`）を使っています。
 
-同じノートブックをブラウザの JupyterLab で動かした様子です（`scripts/record_demo.sh notebooks sensors|control|map` で録画。録画スクリプトがボタンやプロットをクリックし、センサのストリーム中はロボットを旋回・前後進させます）。
+同じノートブックをブラウザの JupyterLab で動かした様子です（`scripts/record_demo.sh notebooks sensors|control|map|detection` で録画。録画スクリプトがボタンやプロットをクリックし、センサのストリーム中はロボットを旋回・前後進させます）。
 
 ![ロボットを旋回させながら、カメラ連続取得・物体検出・LiDAR・IMU・歪み補正・QR コード・特徴点マッチングのノートブックを実行](docs/notebooks_sensors.gif)
 
 ![teleop のボタン、コマンド GUI の MoveToPose と ReturnHome、speak、楕円に沿う follow_path、ライブ地図プロットのクリックでロボットを移動](docs/notebooks_control.gif)
 
 ![保存地図上の Nav2 を表示する RViz と、姿勢の取得・設定、地図切り替え、エラーコード表、リクエストに応答する HTTP サーバのノートブック](docs/notebooks_map.gif)
+
+![ロボットを旋回させながら save_object_detection_features で画像と特徴量を 3 回保存し、run_custom_object_detection で代用 predictor.onnx の固定枠をカメラ映像に描画](docs/notebooks_detection.gif)
 
 `get_png_map` が返す地図はグレースケールのため、`plot_map_robot_lidar` では matplotlib の既定のカラーマップ（黄色）で描かれます。実機の PNG 形式とは照合していません。
 

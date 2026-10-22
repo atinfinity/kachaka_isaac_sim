@@ -39,7 +39,7 @@ from pathlib import Path
 import websockets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
-from demo_notebooks_check import POINT_AT, fetch, localize
+from demo_notebooks_check import POINT_AT, fetch, localize, stand_in_predictor
 from record_dashboard_demo import PORT, Page, page_target
 
 LAB_PORT = 26510
@@ -52,7 +52,10 @@ SETS = {
                 "qrcode", "feature_matching"],
     "control": ["teleop", "command_gui", "speak", "follow_path", "plot_map_robot_lidar"],
     "map": ["robot_pose", "switch_map", "error_code", "http_server", "url_kachaka_api"],
+    "detection": ["save_object_detection_features", "run_custom_object_detection"],
 }
+# The notebook's image scale is for the robot's 1280 x 720 camera; the simulated one is 640 x 480.
+SCALE = {"720.0 / 224": "480.0 / 224", "1280.0 / 398": "640.0 / 398"}
 
 # The pixel on the ipympl canvas of a map point, as fractions of the figure
 # (from the top left); run in the plot notebook's kernel.
@@ -382,6 +385,27 @@ async def map_and_pose(lab, say, target):
         await asyncio.sleep(5.0)
 
 
+async def detection(lab, say, target):
+    drive = Driver(target)
+
+    await lab.open("save_object_detection_features.ipynb")
+    say("save_object_detection_features: a camera image and its detection features to data/")
+    await lab.run_cells(pause=2.0)
+    drive.drive(turn)
+    for n in (1, 2):
+        await asyncio.sleep(1.5)
+        say(f"save_object_detection_features: again, after a turn (data/{n}.pkl)")
+        await lab.run_cells(skip=("import io", "os.makedirs"), pause=2.0)
+    drive.drive(None)
+    await lab.close()
+
+    await lab.open("run_custom_object_detection.ipynb")
+    say("run_custom_object_detection: a stand-in predictor.onnx (one fixed box) on the features")
+    drive.drive(turn_slowly)
+    await lab.run_cells(last_for=16.0)
+    drive.drive(None)
+
+
 async def record(ws_url, url, out: Path, scenario, target):
     frames, captions = [], []
     lock = asyncio.Lock()
@@ -454,7 +478,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     repo = Path(__file__).resolve().parents[1]
     fetch(repo / "build" / "kachaka-api", args.ref)
-    scenario = {"sensors": sensors, "control": control, "map": map_and_pose}[args.set]
+    scenario = {"sensors": sensors, "control": control, "map": map_and_pose, "detection": detection}[args.set]
     if args.set == "map" and not localize(args.target):  # AMCL on the saved map
         sys.exit(1)
 
@@ -465,6 +489,13 @@ def main() -> None:
     nb_dir.mkdir()
     for name in SETS[args.set]:
         shutil.copy(repo / "build/kachaka-api/python/demos" / f"{name}.ipynb", nb_dir)
+    if args.set == "detection":
+        stand_in_predictor(nb_dir / "predictor.onnx")
+        custom = nb_dir / "run_custom_object_detection.ipynb"
+        text = custom.read_text()
+        for old, new in SCALE.items():
+            text = text.replace(old, new)
+        custom.write_text(text)
     startup = work / "ipython/profile_default/startup"
     startup.mkdir(parents=True)
     (startup / "00-simulator.py").write_text(POINT_AT.format(target=args.target))
