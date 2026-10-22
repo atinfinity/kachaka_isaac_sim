@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade, UsdSkel, Vt
 
+from kachaka_isaac_sim.legs import LEG_RADIUS, TORSO_Z, capsule_length, leg_capsules
 from kachaka_isaac_sim.meshes import read_stl
 from kachaka_isaac_sim.scenes import (
     ISAAC_WORLDS,
@@ -31,6 +32,7 @@ ROBOT_PATH = "/World/kachaka"
 BASE_LINK = f"{ROBOT_PATH}/Geometry/base_footprint/base_link"
 WHEEL_LINKS = ("base_l_drive_wheel_link", "base_r_drive_wheel_link")
 CASTER_SHAPES = ("caster_front_left", "caster_front_right", "caster_rear")  # spheres on base_link
+MANNEQUIN_PANTS = (0.13, 0.14, 0.2)
 
 
 def setup_stage(stage: Usd.Stage, physics_hz: int, dome_intensity: float = 800.0) -> None:
@@ -301,8 +303,10 @@ def add_person(stage: Usd.Stage, path: str, pose, height: float = 1.7, character
     """A standing person, for object detection and for the LiDAR to see.
     `pose` (x, y, yaw): feet centre and facing direction. `character`: an
     Isaac Sim people USD (URL), standing with the arms down; without one, a
-    mannequin of capsules. One invisible box collider covers the body.
-    `kinematic`: a kinematic body that movers.Movers moves."""
+    mannequin of capsules. Colliders (legs.py): a capsule for each thigh and
+    shin, which the LiDAR sees as two legs, and an invisible box over the
+    upper body. `kinematic`: a kinematic body that movers.Movers moves, legs
+    and all."""
     x, y, yaw = pose
     root = UsdGeom.Xform.Define(stage, path)
     xf = UsdGeom.Xformable(root.GetPrim())
@@ -314,9 +318,58 @@ def add_person(stage: Usd.Stage, path: str, pose, height: float = 1.7, character
         add_actor(stage, f"{path}/actor", character)
     else:
         add_mannequin(stage, path, height)
-    add_box(stage, f"{path}/collider", (0.0, 0.0, height / 2),
-            (PERSON_COLLIDER[0] * height / 1.7, PERSON_COLLIDER[1] * height / 1.7, height))
+    add_legs(stage, path, height, visible=not character)
+    k = height / 1.7
+    z0 = TORSO_Z * k
+    add_box(stage, f"{path}/collider", (0.0, 0.0, (z0 + height) / 2),
+            (PERSON_COLLIDER[0] * k, PERSON_COLLIDER[1] * k, height - z0))
     UsdGeom.Imageable(stage.GetPrimAtPath(f"{path}/collider")).MakeInvisible()
+
+
+def add_legs(stage: Usd.Stage, path: str, height: float = 1.7, visible: bool = False) -> None:
+    """Thigh and shin capsule colliders under `path`, standing (legs.py).
+    Movers poses them through their translate and rotateY ops (set_legs).
+    `visible`: the mannequin's legs; else hidden under a character."""
+    for name, center, pitch in leg_capsules({}, height):
+        c = UsdGeom.Capsule.Define(stage, f"{path}/{name}")
+        c.CreateRadiusAttr(LEG_RADIUS * height / 1.7)
+        c.CreateHeightAttr(capsule_length(name, height))
+        c.CreateAxisAttr("Z")
+        c.CreateDisplayColorAttr([Gf.Vec3f(*MANNEQUIN_PANTS)])
+        xf = UsdGeom.Xformable(c.GetPrim())
+        xf.AddTranslateOp().Set(Gf.Vec3d(*center))
+        xf.AddRotateYOp().Set(math.degrees(pitch))
+        UsdPhysics.CollisionAPI.Apply(c.GetPrim())
+        if not visible:
+            UsdGeom.Imageable(c.GetPrim()).MakeInvisible()
+
+
+class Legs:
+    """The leg capsules of a person made by add_person, to pose them."""
+
+    def __init__(self, stage: Usd.Stage, path: str, height: float):
+        self.height = height
+        self.ops = {}
+        for name, _, _ in leg_capsules({}, height):
+            ops = {op.GetOpName(): op for op in UsdGeom.Xformable(stage.GetPrimAtPath(f"{path}/{name}"))
+                   .GetOrderedXformOps()}
+            self.ops[name] = (ops["xformOp:translate"], ops["xformOp:rotateY"])
+
+    @classmethod
+    def of(cls, stage: Usd.Stage, path: str) -> Legs | None:
+        """The legs of the person at `path`, or None (not a person). The
+        height comes from the capsules' radius."""
+        prim = stage.GetPrimAtPath(f"{path}/thigh_l")
+        if not prim or not prim.IsA(UsdGeom.Capsule):
+            return None
+        return cls(stage, path, UsdGeom.Capsule(prim).GetRadiusAttr().Get() / LEG_RADIUS * 1.7)
+
+    def set(self, angles: dict[str, float]) -> None:
+        """`angles`: joint name -> rad forward, as Gait.set."""
+        for name, center, pitch in leg_capsules(angles, self.height):
+            translate, rotate = self.ops[name]
+            translate.Set(Gf.Vec3d(*center))
+            rotate.Set(math.degrees(pitch))
 
 
 # Upper arm joints of the Isaac Sim people rig (Reallusion) and where the
@@ -404,9 +457,10 @@ class Gait:
 
 
 def add_mannequin(stage: Usd.Stage, path: str, height: float = 1.7) -> None:
-    """A static mannequin of capsules under `path`."""
+    """A mannequin of capsules under `path`, without the legs: add_legs
+    makes them, visible, and they walk."""
     k = height / 1.7
-    skin, shirt, pants, shoes = (0.8, 0.6, 0.48), (0.2, 0.42, 0.65), (0.13, 0.14, 0.2), (0.06, 0.05, 0.05)
+    skin, shirt = (0.8, 0.6, 0.48), (0.2, 0.42, 0.65)
 
     def capsule(name, center, radius, length, color, axis="Z", scale=None):
         c = UsdGeom.Capsule.Define(stage, f"{path}/{name}")
@@ -420,8 +474,6 @@ def add_mannequin(stage: Usd.Stage, path: str, height: float = 1.7) -> None:
             cxf.AddScaleOp().Set(Gf.Vec3f(*scale))
 
     for side, sy in (("l", 0.1), ("r", -0.1)):
-        capsule(f"leg_{side}", (0.0, sy, 0.47), 0.065, 0.74, pants)
-        capsule(f"shoe_{side}", (0.04, sy, 0.04), 0.04, 0.14, shoes, axis="X")
         capsule(f"arm_{side}", (0.0, sy * 2.3, 1.12), 0.045, 0.5, shirt)
         capsule(f"hand_{side}", (0.0, sy * 2.3, 0.8), 0.04, 0.04, skin)
     capsule("torso", (0.0, 0.0, 1.17), 0.16, 0.38, shirt, scale=(0.7, 1.0, 1.0))

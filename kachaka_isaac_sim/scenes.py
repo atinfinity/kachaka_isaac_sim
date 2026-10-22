@@ -28,7 +28,8 @@ ROOM_BOXES = (
     ("box_b", (-1.2, -0.9, 0.35), (0.6, 0.3, 0.7), (0.3, 0.45, 0.6)),
     ("pillar", (-0.6, 1.1, 0.4), (0.2, 0.2, 0.8), (0.6, 0.6, 0.6)),
 )
-# A standing person's collider (world.add_person), x and y for 1.7 m height.
+# A person's upper-body collider (world.add_person, over the leg capsules of
+# legs.py) and footprint, x and y for 1.7 m height.
 PERSON_COLLIDER = (0.28, 0.5)
 
 # Kachaka Shelf colliders, measured from the 3-layer mesh (metres, shelf frame,

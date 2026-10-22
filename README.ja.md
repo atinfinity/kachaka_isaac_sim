@@ -233,9 +233,14 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 `GetObjectDetectionFeatures` は常に空です。
 
 部屋には人が 2 人います（`config/robot.yaml` の `people.room`）。Isaac Sim 同梱のキャラクター
-（`people.characters`、腕を下ろして立ったまま）で、高さ 1.7 m の箱のコライダーがあるので LiDAR と
-Nav2 にも見えます。アセットサーバーに届かないときはカプセルの人形になります。`--person X Y YAW` で人を置き、`--no-people` で
-なくせます。Isaac Sim のシーンには既定では人はいません。
+（`people.characters`、腕を下ろして立ったまま）です。アセットサーバーに届かないときはカプセルの人形に
+なります。`--person X Y YAW` で人を置き、`--no-people` でなくせます。Isaac Sim のシーンには既定では人はいません。
+
+LiDAR と Nav2 には人のコライダーが見えます（[`legs.py`](kachaka_isaac_sim/legs.py)）。太もも・すねごとの
+カプセル（太さ 0.13 m、推定）と、0.75 m より上の上半身を覆う見えない箱（0.28 × 0.5 m）です。LiDAR は床から
+0.105 m の高さを走査するので、人は 0.2 m 離れた 2 つの小さな弧（すね）として映ります。歩いている人の脚は
+歩容に合わせて振れ、弧が前後に入れ替わり、振り出し中に浮いた脚は一瞬スキャンから消えます。大きさは
+`people.height` に比例します。
 
 結果は `GetObjectDetection` と、実機ブリッジと同じ ROS 2 の topic
 `/kachaka/object_detection/result`（`kachaka_interfaces/ObjectDetectionListStamped`）に出ます。
@@ -373,7 +378,7 @@ boxes:
   （秒。しばらくいて、いなくなる。周期のどこから始まるかはシードで引きます）。
 - 次の経由点の方を向いてから歩きます。ロボットが行く手のすぐ先にいる間は待ち、ロボットの
   真上には現れません。それ以外では止まらないので、ロボットの側でよける必要があります。
-- 人のキャラクターは歩くときに脚と腕を振ります。
+- 人は歩くときに脚（脚のコライダーも）を、キャラクターは腕も振ります。
 - `sim/reset` で開始位置に戻ります。
 
 ```bash

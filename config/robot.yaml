@@ -152,7 +152,7 @@ object_detection:
 
 # People: standing still, seen by the cameras, the detector and the LiDAR.
 people:
-  height: 1.7               # m, of the collider (and the mannequin)
+  height: 1.7               # m, of the colliders (and the mannequin)
   # Isaac Sim characters (Isaac/People/Characters/<name>/<name>.usd), taken in
   # turn, standing with the arms down; [] or no asset server: mannequins of capsules.
   characters: [F_Business_02, M_Medical_01, male_adult_construction_05_new, F_Medical_01]

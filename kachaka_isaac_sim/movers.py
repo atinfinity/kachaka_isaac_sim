@@ -184,17 +184,19 @@ class Movers:
     def __init__(self, stage: Usd.Stage, specs: list[MoverSpec], cfg: SimpleNamespace, robot_pose):
         from pxr import UsdGeom
 
-        from .world import Gait
+        from .world import Gait, Legs
 
         self.specs = specs
         self.states = [MoverState(s, float(cfg.turn_rate), float(cfg.lookahead), float(cfg.gap)) for s in specs]
         self.robot_pose = robot_pose  # () -> Pose2D, the robot's ground truth
         self.ops = []
         self.gaits = []  # world.Gait of a character, or None
+        self.legs = []  # world.Legs of a person, or None
         for s in specs:
             ops = {op.GetOpName(): op for op in UsdGeom.Xformable(stage.GetPrimAtPath(s.path)).GetOrderedXformOps()}
             self.ops.append((ops["xformOp:translate"], ops["xformOp:rotateZ"]))
             self.gaits.append(Gait.of(stage, f"{s.path}/actor/pose"))
+            self.legs.append(Legs.of(stage, s.path))
         self.amount = [0.0] * len(specs)
         self._move(range(len(specs)))
 
@@ -212,7 +214,7 @@ class Movers:
             walked = st.walked
             if st.step(dt, robot):
                 moved.append(i)
-            if self.gaits[i] is None:
+            if self.legs[i] is None:
                 continue
             # Ease into and out of the stride rather than freezing mid-step.
             goal = 1.0 if st.walked > walked else 0.0
@@ -227,8 +229,12 @@ class Movers:
 
     def _pose_gaits(self, idx) -> None:
         for i in idx:
+            if self.legs[i] is None:
+                continue
+            angles = gait_angles(self.states[i].walked, self.amount[i])
+            self.legs[i].set(angles)
             if self.gaits[i] is not None:
-                self.gaits[i].set(gait_angles(self.states[i].walked, self.amount[i]))
+                self.gaits[i].set(angles)
 
     def poses(self) -> list[Pose2D | None]:
         """Where each mover is, or None while it is away."""
