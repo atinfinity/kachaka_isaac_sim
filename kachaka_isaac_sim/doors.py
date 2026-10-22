@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 KINDS = ("sliding", "hinged")
 SLIDING_OVERLAP = 0.05  # m, a closed sliding panel overlaps the doorway's edges by this
 HINGED_GAP = 0.01  # m, a hinged panel is this much narrower than the doorway
+MOTION_PERIOD = 0.1  # s between state messages while a panel moves (for RViz)
 
 
 @dataclass
@@ -134,6 +135,7 @@ class Doors:
         self.ops = [UsdGeom.Xformable(stage.GetPrimAtPath(s.path)).GetOrderedXformOps() for s in specs]
         self.t = 0.0
         self.changed = True  # publish the state
+        self.next_motion = 0.0  # when a moving panel is published next
 
     def index(self, door_id: str) -> int | None:
         return next((i for i, s in enumerate(self.specs) if s.id == door_id), None)
@@ -159,8 +161,18 @@ class Doors:
         moved = [i for i, st in enumerate(self.states) if st.step(self.t, dt)]
         if moved:
             self._move(moved)
+            if self.t + 1e-9 >= self.next_motion:
+                self.changed = True
         if [st.state for st in self.states] != before:
             self.changed = True
+        if self.changed:
+            self.next_motion = self.t + MOTION_PERIOD
+
+    def panels(self) -> list[tuple[Pose2D, tuple[float, float, float]]]:
+        """Each panel's world pose and size (length, thickness, height)."""
+        th = float(self.cfg.thickness)
+        return [(panel_pose(sp, st.opening, th, self.wall), (*panel_size(sp, th), float(self.cfg.height)))
+                for sp, st in zip(self.specs, self.states)]
 
     def _move(self, idx: list[int]) -> None:
         from pxr import Gf

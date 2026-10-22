@@ -165,16 +165,19 @@ def mover_specs(cfg, layout, people, motions, boxes_root) -> list:
     from kachaka_isaac_sim.drive import Pose2D
     from kachaka_isaac_sim.layout import BOX_RADIUS_MIN, PERSON_RADIUS
     from kachaka_isaac_sim.movers import MoverSpec
+    from kachaka_isaac_sim.scenes import PERSON_COLLIDER
 
     seed = layout.seed if layout and layout.seed is not None else 0
-    items = [(f"/World/People/P{i + 1:02d}", Pose2D(*p), PERSON_RADIUS, float(cfg.movers.person_speed), m)
-             for i, (p, m) in enumerate(zip(people, motions))]
+    person = (*PERSON_COLLIDER, float(cfg.people.height))
+    items = [(f"/World/People/P{i + 1:02d}", Pose2D(*p), PERSON_RADIUS, float(cfg.movers.person_speed), m,
+              "person", person) for i, (p, m) in enumerate(zip(people, motions))]
     for b in layout.boxes if layout else []:
         radius = max(BOX_RADIUS_MIN, math.hypot(*b.size[:2]) / 2)
-        items.append((f"{boxes_root}/{b.name}", b.pose, radius, float(cfg.movers.box_speed), b.motion))
+        items.append((f"{boxes_root}/{b.name}", b.pose, radius, float(cfg.movers.box_speed), b.motion, "box",
+                      tuple(b.size)))
     return [MoverSpec(path, pose, radius, m.speed or speed, route=m.route, wander=m.wander, pause=m.pause,
-                      appear=m.appear, seed=seed * 1000 + k)
-            for k, (path, pose, radius, speed, m) in enumerate(items) if m is not None]
+                      appear=m.appear, seed=seed * 1000 + k, kind=kind, size=size)
+            for k, (path, pose, radius, speed, m, kind, size) in enumerate(items) if m is not None]
 
 
 def people_assets(cfg) -> list[str]:
@@ -516,6 +519,7 @@ def main() -> int:
         from kachaka_isaac_sim.movers import Movers
 
         movers = Movers(stage, moving, cfg.movers, lambda: robot.gt)
+        node.add_movers()
         print(f"[kachaka] {len(moving)} moving: {', '.join(m.path.rpartition('/')[2] for m in moving)}", flush=True)
 
     elevator = None
@@ -558,6 +562,17 @@ def main() -> int:
     if movers:
         callbacks.append(SimulationManager.register_callback(lambda dt, ctx: movers.step(dt),
                                                              SimulationEvent.PHYSICS_PRE_STEP))
+        # Ground truth for checks and RViz, at the ground truth's rate.
+        movers_period = 1.0 / float(cfg.odometry.rate)
+        movers_next = [0.0]
+
+        def publish_movers(dt) -> None:
+            if robot.t + 1e-9 >= movers_next[0]:
+                movers_next[0] = robot.t + movers_period
+                node.publish_movers(movers.report(robot.t, to_map))
+
+        callbacks.append(SimulationManager.register_callback(lambda dt, ctx: publish_movers(dt),
+                                                             SimulationEvent.PHYSICS_POST_STEP))
     if elevator:
         callbacks.append(SimulationManager.register_callback(lambda dt, ctx: elevator.step(dt),
                                                              SimulationEvent.PHYSICS_PRE_STEP))

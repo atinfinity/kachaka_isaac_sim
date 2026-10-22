@@ -1,9 +1,10 @@
 import math
+from types import SimpleNamespace
 
 import pytest
 
 from kachaka_isaac_sim.config import load_config
-from kachaka_isaac_sim.doors import SLIDING_OVERLAP, DoorSpec, DoorState, door_rate, panel_pose, panel_size
+from kachaka_isaac_sim.doors import SLIDING_OVERLAP, Doors, DoorSpec, DoorState, door_rate, panel_pose, panel_size
 from kachaka_isaac_sim.drive import Pose2D
 
 
@@ -71,3 +72,36 @@ def test_rate_from_config():
     s = spec(width=0.8)
     assert door_rate(s, door) == pytest.approx(door.sliding_speed / (0.8 + SLIDING_OVERLAP))
     assert door_rate(spec(kind="hinged"), door) == pytest.approx(door.hinged_speed / (math.pi / 2))
+
+
+def bare_doors(specs):
+    """doors.Doors without a USD stage: panels are not moved."""
+    cfg = SimpleNamespace(thickness=0.04, height=2.0, sliding_speed=0.5, hinged_speed=1.5)
+    d = Doors.__new__(Doors)
+    d.specs, d.cfg, d.wall = specs, cfg, 0.1
+    d.states = [DoorState(s, door_rate(s, cfg)) for s in specs]
+    d.t, d.changed, d.next_motion = 0.0, True, 0.0
+    d._move = lambda idx: None
+    return d
+
+
+def test_doors_publish_while_a_panel_moves():
+    d = bare_doors([DoorSpec("D01", "/World/Doors/D01", Pose2D(0.0, 0.0, 0.0), 0.8)])
+    assert d.take_changed()
+    d.step(0.01)
+    assert not d.take_changed()  # open and still
+    d.command("D01", False)
+    assert d.take_changed()
+    sent = 0
+    for _ in range(50):  # 0.5 s of closing at 100 Hz
+        d.step(0.01)
+        sent += d.take_changed()
+    assert d.states[0].state == "closing"
+    assert 4 <= sent <= 6  # every MOTION_PERIOD (0.1 s)
+
+
+def test_doors_panels():
+    d = bare_doors([DoorSpec("D01", "/World/Doors/D01", Pose2D(1.0, 2.0, 0.0), 0.8, kind="hinged", open=False)])
+    (pose, size), = d.panels()
+    assert size == pytest.approx((0.79, 0.04, 2.0))
+    assert (pose.x, pose.y, pose.yaw) == pytest.approx((1.0, 2.0, 0.0))  # closed: across the doorway

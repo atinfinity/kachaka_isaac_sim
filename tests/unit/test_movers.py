@@ -3,9 +3,19 @@ import math
 
 import pytest
 
-from kachaka_isaac_sim.drive import Pose2D
+from kachaka_isaac_sim.drive import Pose2D, relative_pose
 from kachaka_isaac_sim.layout import LayoutError, parse_layout
-from kachaka_isaac_sim.movers import ROBOT_RADIUS, STRIDE, MoverSpec, MoverState, gait_angles
+from kachaka_isaac_sim.movers import (
+    BODY_X,
+    BODY_Y,
+    ROBOT_RADIUS,
+    STRIDE,
+    MoverSpec,
+    MoverState,
+    body_gap,
+    gait_angles,
+    report,
+)
 
 
 def spec(**kw):
@@ -174,3 +184,55 @@ def test_layout_motion_keys():
 def test_layout_motion_errors(entry, message):
     with pytest.raises(LayoutError, match=message):
         parse_layout({"world": "flat", "people": [entry]}, seed=1)
+
+
+def test_velocity_while_walking_and_standing():
+    st = MoverState(spec())
+    run(st, 1.0)
+    vx, vy = st.velocity
+    assert vx == pytest.approx(0.5, abs=1e-6) and vy == pytest.approx(0.0, abs=1e-9)
+    st = MoverState(spec(route=[]))  # stands still
+    run(st, 1.0)
+    assert st.velocity == (0.0, 0.0)
+
+
+def test_velocity_is_zero_while_away():
+    st = MoverState(spec(appear=(1.0, 1.0)))
+    for _ in range(100):
+        st.step(0.05)
+        if not st.present:
+            assert st.velocity == (0.0, 0.0)
+
+
+def test_body_gap():
+    robot = Pose2D(1.0, 2.0, math.pi / 2)  # facing +y: the body's front is at y 2 + BODY_X[1]
+    assert body_gap(robot, 1.0, 2.0 + BODY_X[1] + 0.5, 0.2) == pytest.approx(0.3)
+    assert body_gap(robot, 1.0 - BODY_Y[1] - 1.0, 2.0, 0.25) == pytest.approx(0.75)
+    assert body_gap(robot, 1.0, 2.0, 0.3) == 0.0  # overlapping
+    # Off a corner: the distance to the corner.
+    gap = body_gap(Pose2D(0.0, 0.0, 0.0), BODY_X[1] + 0.3, BODY_Y[1] + 0.4, 0.1)
+    assert gap == pytest.approx(0.4)
+
+
+def test_report():
+    spawn = Pose2D(1.0, 0.0, math.pi / 2)
+    specs = [spec(), spec(path="/World/Boxes/cart", kind="box", size=(0.5, 0.4, 0.8), radius=0.32, route=[],
+                          start=Pose2D(3.0, 0.0, 0.0)),
+             spec(path="/World/People/P02", appear=(0.0, 1.0))]  # never there
+    states = [MoverState(s) for s in specs]
+    for st in states:
+        st.step(0.1)
+    msg = report(12.5, specs, states, Pose2D(1.0, 0.0, 0.0), lambda p: relative_pose(spawn, p))
+    assert msg["stamp"] == 12.5 and msg["frame_id"] == "world"
+    p01, cart, p02 = msg["movers"]
+    assert p01["id"] == "P01" and p01["kind"] == "person" and p01["present"]
+    assert p01["pose"][0] == pytest.approx(0.0, abs=0.06)  # turning or starting off
+    mx, my, myaw = p01["map_pose"]
+    assert mx == pytest.approx(0.0, abs=0.06) and my == pytest.approx(1.0, abs=0.06)
+    assert myaw == pytest.approx(-math.pi / 2, abs=0.25)
+    assert cart["kind"] == "box" and cart["size"] == [0.5, 0.4, 0.8] and cart["velocity"] == [0.0, 0.0]
+    assert cart["gap"] == pytest.approx(3.0 - 1.0 - BODY_X[1] - 0.32, abs=1e-3)
+    assert p02["present"] is False and p02["pose"] is None and p02["map_pose"] is None and p02["gap"] is None
+    assert msg["closest"]["id"] == "P01"
+    assert msg["closest"]["gap"] == min(p01["gap"], cart["gap"])
+    assert report(0.0, specs, states, None, lambda p: p)["closest"] is None

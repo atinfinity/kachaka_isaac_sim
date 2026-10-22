@@ -63,6 +63,18 @@ def generate_launch_description():
             parameters=[{"use_sim_time": use_sim_time}],
             condition=commands,
         ),
+        Node(
+            package="kachaka_sim_bringup",
+            executable="mover_markers",  # draws sim/movers; idle with a real robot
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+        ),
+        Node(
+            package="kachaka_sim_bringup",
+            executable="door_markers",  # draws sim/doors; idle with a real robot
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+        ),
         IncludeLaunchDescription(
             PathJoinSubstitution([pkg, "launch", "shelf_docking.launch.py"]),
             launch_arguments={"use_sim_time": use_sim_time, "params_file": LaunchConfiguration("params_file")}.items(),
