@@ -1,0 +1,11 @@
+# For --backend fake (scripts/fake_sim.py, no GPU; CI runs it): the default
+# room without people, a Nav2 goal and a kachaka-api move.
+#   python3 scripts/run_scenarios.py scenarios/fake_room.yaml --backend fake
+seed: 0
+people: []
+repeat: 2
+timeout: 120
+steps:
+  - goal: [1.0, -0.5, 3.1416]
+  - api: move_to_pose
+    args: {x: 0.0, y: 0.0, yaw: 0.0}
