@@ -6,6 +6,7 @@
 #   scripts/record_demo.sh shelf  # dock, tow, turn and leave a shelf -> docs/shelf.gif
 #   scripts/record_demo.sh shelf_return  # leave a shelf, then RETURN_SHELF around it -> docs/shelf_return.gif
 #   scripts/record_demo.sh door   # Nav2 replans when a door closes and opens -> docs/door.gif
+#   scripts/record_demo.sh auto_door  # Nav2 through an automatic door -> docs/auto_door.gif
 #   scripts/record_demo.sh movers # Nav2 goals among people and a cart on the move -> docs/movers.gif
 #   scripts/record_demo.sh elevator  # Nav2 into the elevator on 1F, ride, out on 2F -> docs/elevator.gif
 #   scripts/record_demo.sh elevator_vertical  # the same with the floors stacked -> docs/elevator_vertical.gif
@@ -55,6 +56,13 @@ case "$DEMO" in
         LABEL="RViz: Nav2 and a door"
         SPEED=${SPEED:-4}
         RUN="python3 /tests/ros_door_check.py" ;;
+    auto_door)
+        GIF=docs/auto_door.gif
+        VIEW=(0.3 -2.0 5.5 0.3 0.0 0.0)  # from the south (+x right like RViz), along the partition
+        SIM_ARGS=(--layout layouts/room_auto_door.yaml)
+        LABEL="RViz: Nav2 and an automatic door"
+        SPEED=${SPEED:-4}
+        RUN="python3 /tests/ros_auto_door_check.py" ;;
     movers)
         GIF=docs/movers.gif
         VIEW=(0.0 -3.2 6.0 0.0 -0.2 0.0)  # from the south, a little slanted to show the people walking
@@ -134,7 +142,7 @@ case "$DEMO" in
         COMPOSE_ARGS=(--height 540)
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_speed_demo.py /build/speed/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|movers|elevator|elevator_vertical|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
+    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|auto_door|movers|elevator|elevator_vertical|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 DISPLAY_NUM=99

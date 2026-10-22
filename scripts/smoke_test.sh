@@ -10,10 +10,11 @@
 # Both end with tests/ros_hazard_check.py (step sensors, collisions) in a
 # second simulator run with a drop in the floor. With --nav, collisions seen
 # during the Nav2 checks are logged to build/smoke_collisions.log, and
-# tests/ros_door_check.py runs in a third simulator run with a door, and
-# tests/ros_nav_check.py --no-collisions in a fourth with people and a cart
+# tests/ros_door_check.py runs in a third simulator run with a door,
+# tests/ros_auto_door_check.py in a fourth with an automatic door,
+# tests/ros_nav_check.py --no-collisions in a fifth with people and a cart
 # moving across the way (layouts/room_movers.yaml), and
-# tests/ros_elevator_check.py in a fifth with two floors and an elevator
+# tests/ros_elevator_check.py in a sixth with two floors and an elevator
 # (layouts/elevator.yaml), on saved maps per floor, and again with the floors
 # stacked (layouts/elevator_vertical.yaml).
 #
@@ -105,6 +106,15 @@ if $NAV; then
     start_nav
     echo "[smoke] running ros_door_check"
     ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_door_check.py || FAILED+=(ros_door_check)
+    docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
+
+    # An automatic door, never commanded (tests/ros_auto_door_check.py).
+    stop_sim
+    LOG=build/smoke_sim_auto_door.log
+    start_sim --layout layouts/room_auto_door.yaml
+    start_nav
+    echo "[smoke] running ros_auto_door_check"
+    ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_auto_door_check.py || FAILED+=(ros_auto_door_check)
     docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
 
     # People and a cart moving across the robot's way: reach the goals

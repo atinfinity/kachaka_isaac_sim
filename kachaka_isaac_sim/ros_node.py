@@ -557,17 +557,23 @@ class KachakaSimNode:
     def publish_doors(self) -> None:
         """Latched JSON {"doors": [{id, kind, pose [x, y, yaw] of the doorway
         centre in the map frame, width, state (open, closed, opening or
-        closing), opening (0-1), cycling, panel {pose [x, y, yaw] of the
-        panel's centre in the map frame, size [length, thickness, height]}}]},
+        closing), opening (0-1), cycling, auto (the sensor drives it), panel
+        {pose [x, y, yaw] of the panel's centre in the map frame, size
+        [length, thickness, height]}, and for an automatic door sensor
+        {size [along the wall, across] of the area it sees, centred on the
+        doorway}}]},
         sent when a state changes and every 0.1 s while a panel moves."""
         def rounded(p):
             return [round(p.x, 4), round(p.y, 4), round(p.yaw, 4)]
 
-        doors = [{"id": sp.id, "kind": sp.kind, "pose": rounded(p), "width": sp.width, "state": st.state,
-                  "opening": round(st.opening, 3), "cycling": st.cycling,
-                  "panel": {"pose": rounded(self._to_map(pp)), "size": [round(v, 4) for v in size]}}
-                 for sp, st, p, (pp, size) in zip(self.doors.specs, self.doors.states, self._door_poses,
-                                                  self.doors.panels())]
+        doors = []
+        for sp, st, p, (pp, size) in zip(self.doors.specs, self.doors.states, self._door_poses, self.doors.panels()):
+            d = {"id": sp.id, "kind": sp.kind, "pose": rounded(p), "width": sp.width, "state": st.state,
+                 "opening": round(st.opening, 3), "cycling": st.cycling, "auto": st.automatic,
+                 "panel": {"pose": rounded(self._to_map(pp)), "size": [round(v, 4) for v in size]}}
+            if sp.auto is not None:
+                d["sensor"] = {"size": [round(sp.width + 2 * sp.auto.margin, 4), round(2 * sp.auto.range, 4)]}
+            doors.append(d)
         msg = {"doors": doors}
         self.doors_pub.publish(String(data=json.dumps(msg)))
         self.tap("doors", msg)

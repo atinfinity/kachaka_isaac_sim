@@ -2,7 +2,8 @@
 
 Reads the simulator's door state on sim/doors (simulator only; latched, and
 every 0.1 s while a panel moves) and draws each door's panel where it is in
-the map frame, with its id and state. The doorway's walls are already in the
+the map frame, with its id and state, and an automatic door's sensor area as
+a faint orange patch on the floor. The doorway's walls are already in the
 map, as the LiDAR sees them.
 """
 
@@ -24,8 +25,9 @@ OPEN = ColorRGBA(r=0.8, g=0.8, b=0.8, a=0.35)
 CLOSED = ColorRGBA(r=0.6, g=0.35, b=0.95, a=0.85)
 MOVING = ColorRGBA(r=1.0, g=0.85, b=0.1, a=0.85)
 LABEL = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+SENSOR = ColorRGBA(r=1.0, g=0.55, b=0.15, a=0.18)  # an automatic door's sensor area
 COLORS = {"open": OPEN, "closed": CLOSED}
-PARTS = 2  # panel, label
+PARTS = 3  # panel, label, sensor area
 
 
 def _marker(frame: str, mid: int, kind: int, pose, color: ColorRGBA) -> Marker:
@@ -43,7 +45,8 @@ def _marker(frame: str, mid: int, kind: int, pose, color: ColorRGBA) -> Marker:
 
 
 def door_markers(msg: dict, frame: str) -> list[Marker]:
-    """Markers for a sim/doors message: each door's panel and a label."""
+    """Markers for a sim/doors message: each door's panel, a label and, for
+    an automatic door, its sensor area."""
     markers = []
     for i, d in enumerate(msg.get("doors", [])):
         panel = d.get("panel")
@@ -56,8 +59,14 @@ def door_markers(msg: dict, frame: str) -> list[Marker]:
         label = _marker(frame, i * PARTS + 1, Marker.TEXT_VIEW_FACING, d["pose"], LABEL)
         label.pose.position.z = height + 0.15
         label.scale.z = 0.12
-        label.text = f"{d['id']} {d['state']}"
+        label.text = f"{d['id']} {d['state']}" + (" (auto)" if d.get("auto") else "")
         markers += [body, label]
+        if "sensor" in d:
+            along, across = d["sensor"]["size"]
+            area = _marker(frame, i * PARTS + 2, Marker.CUBE, d["pose"], SENSOR)
+            area.pose.position.z = 0.005
+            area.scale.x, area.scale.y, area.scale.z = float(along), float(across), 0.01
+            markers.append(area)
     return markers
 
 

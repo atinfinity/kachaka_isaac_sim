@@ -119,6 +119,7 @@ class Door:
     width: float | None = None
     open: bool = True
     cycle: tuple[float, float] | None = None
+    auto: dict | None = None  # automatic: the config's door.auto with these keys replaced
 
 
 @dataclass
@@ -254,7 +255,7 @@ def parse_layout(data: dict, seed: int | None = None, world: str | None = None, 
     for i, e in enumerate(_list(data, "doors", path)):
         if not isinstance(e, dict) or "pose" not in e:
             raise LayoutError(f"{path}: doors[{i}] needs a pose")
-        unknown = set(e) - {"pose", "kind", "width", "open", "cycle"}
+        unknown = set(e) - {"pose", "kind", "width", "open", "cycle", "auto"}
         if unknown:
             raise LayoutError(f"{path}: doors[{i}]: unknown key(s) {', '.join(sorted(unknown))}")
         kind = e.get("kind")
@@ -263,7 +264,10 @@ def parse_layout(data: dict, seed: int | None = None, world: str | None = None, 
         pose = Pose2D(*_numbers(e["pose"], 3, f"doors[{i}].pose", path))
         cycle = tuple(_numbers(e["cycle"], 2, f"doors[{i}].cycle", path)) if e.get("cycle") else None
         width = float(e["width"]) if e.get("width") is not None else None
-        out.doors.append(Door(pose, kind, width, bool(e.get("open", True)), cycle))
+        auto = _door_auto(e.get("auto"), f"doors[{i}]", path)
+        if auto is not None and (kind == "hinged" or cycle):
+            raise LayoutError(f"{path}: doors[{i}]: an automatic door is sliding and has no cycle")
+        out.doors.append(Door(pose, kind, width, bool(e.get("open", True)), cycle, auto))
     _floors(data, out, world, path)
     return out
 
@@ -485,3 +489,24 @@ def _segment_distance(px, py, x0, y0, x1, y1) -> float:
     n = dx * dx + dy * dy
     t = 0.0 if n == 0 else max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / n))
     return math.hypot(px - (x0 + t * dx), py - (y0 + t * dy))
+
+
+AUTO_KEYS = {"range": float, "margin": float, "hold": float, "movers": bool}
+
+
+def _door_auto(value, where: str, path) -> dict | None:
+    """A door's `auto`: false/absent (None), true ({}) or a mapping of
+    AUTO_KEYS overriding the config's door.auto."""
+    if value is None or value is False:
+        return None
+    if value is True:
+        return {}
+    if not isinstance(value, dict):
+        raise LayoutError(f"{path}: {where}.auto must be true, false or a mapping")
+    unknown = set(value) - set(AUTO_KEYS)
+    if unknown:
+        raise LayoutError(f"{path}: {where}.auto: unknown key(s) {', '.join(sorted(unknown))}")
+    try:
+        return {k: AUTO_KEYS[k](v) for k, v in value.items()}
+    except (TypeError, ValueError):
+        raise LayoutError(f"{path}: {where}.auto: bad value") from None

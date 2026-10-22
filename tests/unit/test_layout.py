@@ -91,6 +91,10 @@ def test_no_room_raises():
     ({"shelves": [{"id": "A", "pose": [0, 0, 0]}, {"id": "A", "pose": [1, 0, 0]}]}, "duplicate"),
     ({"boxes": [{"pose": [0, 0, 0]}]}, "size"),
     ({"doors": [{"pose": [0, 0, 0], "kind": "revolving"}]}, "kind"),
+    ({"doors": [{"pose": [0, 0, 0], "kind": "hinged", "auto": True}]}, "automatic"),
+    ({"doors": [{"pose": [0, 0, 0], "auto": True, "cycle": [1, 1]}]}, "automatic"),
+    ({"doors": [{"pose": [0, 0, 0], "auto": {"reach": 1}}]}, "unknown key"),
+    ({"doors": [{"pose": [0, 0, 0], "auto": "yes"}]}, "auto must be"),
     ({"walls": [[0, 0, 1]]}, "4 numbers"),
     ({"people": {"a": 1}}, "must be a list"),
 ])
@@ -103,3 +107,9 @@ def test_errors(data, match):
 def test_shipped_layouts_load(path):
     data = read_layout(path)
     parse_layout(data, world=data.get("world"), path=str(path))
+
+
+def test_automatic_doors():
+    lay = parse_layout({"doors": [{"pose": [0, 0, 0], "auto": True}, {"pose": [1, 0, 0], "auto": {"hold": 4}},
+                                  {"pose": [2, 0, 0], "auto": False}, {"pose": [3, 0, 0]}]})
+    assert [d.auto for d in lay.doors] == [{}, {"hold": 4.0}, None, None]
