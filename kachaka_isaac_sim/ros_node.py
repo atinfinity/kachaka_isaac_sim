@@ -2,7 +2,8 @@
 
 Topic names, types and QoS follow the official kachaka-api ROS 2 bridge so a
 ROS 2 app written for the real robot works unchanged. Everything is stamped
-with simulation time, and /clock is published from here.
+with simulation time, and /clock is published from here (kachaka-api turns
+the stamps into wall clock time: wall_clock.py).
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from tf2_msgs.msg import TFMessage
 from .drive import Pose2D, quat_from_yaw
 from .hazards import ERROR_COLLISION, ERROR_EMERGENCY_STOP, ERROR_PAUSED, ERROR_STEP_DETECTED
 from .urdf_tools import read_joints
+from .wall_clock import CLOCK
 
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 
@@ -368,7 +370,9 @@ class KachakaSimNode:
             self.front_stop_pub.publish(String(data=json.dumps(state)))
 
     def publish_clock(self, t: float) -> None:
-        self.clock_pub.publish(Clock(clock=to_time(t)))
+        stamp = to_time(t)
+        self.clock_pub.publish(Clock(clock=stamp))
+        CLOCK.record(stamp.sec * 1_000_000_000 + stamp.nanosec)  # for kachaka-api's wall clock stamps
 
     def _odom_msg(self, t: float, frame_id: str, pose: Pose2D, v: float, w: float, cov_xy: float) -> Odometry:
         msg = Odometry()

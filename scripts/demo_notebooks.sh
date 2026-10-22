@@ -23,6 +23,7 @@ MAP=0_demo_notebooks
 PY=(uv run --no-project --with kachaka-api==3.17.5.0 --with nbclient --with ipykernel
     --with numpy --with pyyaml --with pillow --with opencv-python-headless --with matplotlib --with plotly
     --with ipywidgets --with anywidget --with ipympl --with fastapi --with uvicorn --with nest_asyncio --with requests
+    --with onnx --with onnxruntime
     python tests/demo_notebooks_check.py)
 
 cleanup() {
