@@ -12,7 +12,8 @@ range sensor.
 
 With --no-collisions it also fails on any collision (sim/collision) while
 it drives, as with people and boxes moving across the way
-(run_sim.py --layout layouts/room_movers.yaml).
+(run_sim.py --layout layouts/room_movers.yaml), and logs how close the
+robot's body came to a mover (sim/movers; information only).
 """
 
 import argparse
@@ -73,6 +74,17 @@ class NavCheck(Node):
         self.collisions = []
         self.create_subscription(String, "/kachaka/sim/collision", lambda m: self.collisions.append(json.loads(m.data)),
                                  10)
+        self.closest = None  # (gap m, mover id) since the last take_closest
+        self.create_subscription(String, "/kachaka/sim/movers", self.on_movers, 10)
+
+    def on_movers(self, msg):
+        c = json.loads(msg.data).get("closest")
+        if c and (self.closest is None or c["gap"] < self.closest[0]):
+            self.closest = (c["gap"], c["id"])
+
+    def take_closest(self):
+        c, self.closest = self.closest, None
+        return c
 
     def map_bounds(self):
         i = self.map_info
@@ -130,6 +142,8 @@ def main():
         reset_sim(node, args.clear_map)
         node.min_vx = 0.0
     node.collisions.clear()
+    node.take_closest()
+    closest = None
     if not node.client.wait_for_server(timeout_sec=60.0):
         print("navigate_to_pose action server not found")
         return 1
@@ -145,7 +159,12 @@ def main():
         err = math.hypot(node.gt[0] - x, node.gt[1] - y) if node.gt else float("nan")
         ok = ok and err < TOLERANCE
         ok_all &= ok
-        print(f"goal ({x:+.1f}, {y:+.1f}): {'OK' if ok else 'FAIL'} ({why}, error {err:.2f} m, {dt:.0f} s)", flush=True)
+        near = node.take_closest()
+        if near and (closest is None or near[0] < closest[0]):
+            closest = near
+        near = f", closest mover {near[1]} {near[0]:.2f} m" if args.no_collisions and near else ""
+        print(f"goal ({x:+.1f}, {y:+.1f}): {'OK' if ok else 'FAIL'} ({why}, error {err:.2f} m, {dt:.0f} s{near})",
+              flush=True)
     backward = node.min_vx < -0.01
     ok_all &= not backward
     print(f"backward motion: {'FAIL' if backward else 'OK'} (min cmd_vel x {node.min_vx:+.2f} m/s)", flush=True)
@@ -154,6 +173,8 @@ def main():
         ok_all &= not hit
         print(f"collisions: {'FAIL' if hit else 'OK'} ({len(node.collisions)}{': ' + ', '.join(hit) if hit else ''})",
               flush=True)
+        if closest:
+            print(f"closest mover: {closest[1]}, {closest[0]:.2f} m from the body", flush=True)
     print("ALL PASSED" if ok_all else "FAILED", flush=True)
     node.destroy_node()
     rclpy.shutdown()

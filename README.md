@@ -318,7 +318,11 @@ safety sensor stops it).
 - Doors are named D01, D02, ... in the order given. `sim/doors/<id>/set_open`
   (`std_srvs/SetBool`) opens or closes one; `sim/doors` (latched JSON) lists each door's
   `id`, `kind`, `pose` (map frame), `width`, `state` (open, closed, opening, closing),
-  `opening` (0-1) and `cycling`. `sim/reset` puts the doors back to their start state.
+  `opening` (0-1), `cycling` and `panel` (`pose` of the panel's centre in the map frame and
+  `size` [length, thickness, height]). It is sent when a state changes and every 0.1 s while a
+  panel moves. `sim/reset` puts the doors back to their start state.
+- RViz draws the panels from `/door_markers` (MarkerArray, published by `door_markers` from
+  `sim/doors`): green open, red closed, yellow moving, with the id and state.
 
 ```bash
 # A wall at x = 0.6 with a door at y = -0.6 and a gap at the north end (layouts/room_door.yaml)
@@ -412,10 +416,22 @@ boxes:
   stops it: the robot has to keep out of its way.
 - Characters swing their legs and arms as they walk.
 - `sim/reset` puts them back at the start.
+- Their ground truth is on `sim/movers` (simulator only, at the ground truth's
+  20 Hz): JSON with, for each mover, `id`, `path` (USD prim), `kind` (`person`
+  or `box`), `present`, `pose` [x, y, yaw] in the world frame (as
+  `sim/ground_truth`) and `map_pose` in the map frame (both `null` while it is
+  away), `velocity` [vx, vy] (world frame), `radius` (footprint), `size`
+  [x, y, z], `blocked` (waiting for the robot) and `gap` (m between its
+  footprint circle and the robot's body); then `closest`, the mover nearest the
+  robot. Doors are not movers: they have `sim/doors` ([Doors](#doors)).
+- RViz draws them from `/mover_markers` (MarkerArray, published by
+  `mover_markers` from `sim/movers`): a person as an upright cylinder, a box
+  as a box, with its name and an arrow for its velocity; red while it waits.
 
 ```bash
 scripts/run_sim.sh --layout layouts/room_movers.yaml
-python3 /tests/ros_nav_check.py --no-collisions   # with SLAM + Nav2: goals, and no collisions
+python3 /tests/ros_nav_check.py --no-collisions   # with SLAM + Nav2: goals, no collisions, closest mover
+ros2 topic echo /kachaka/sim/movers   # {"stamp": 12.3, "frame_id": "world", "movers": [...], "closest": {"id": "P01", "gap": 0.41}}
 ```
 
 ## Requirements
@@ -570,7 +586,8 @@ Namespace `/kachaka`, as on the real robot.
 | `sim/torch` | `std_msgs/String`, JSON `{"front", "back"}`: torch levels 0-255 (simulator only, latched) | |
 | `sim/reset` | `std_srvs/SetBool` service: back to the start state, `data: true` also clears the SLAM map (simulator only, see [Resetting the simulator](#resetting-the-simulator)) | |
 | `sim/reset/event` | `std_msgs/String`, JSON `{"id", "clear_map"}` after each reset (simulator only) | |
-| `sim/doors` | `std_msgs/String`, JSON `{"doors": [...]}`: each door's state (simulator only, latched, on change, see [Doors](#doors)) | |
+| `sim/movers` | `std_msgs/String`, JSON `{"stamp", "frame_id", "movers": [...], "closest"}`: the moving people and boxes' ground truth (simulator only, 20 Hz, see [Moving people and boxes](#moving-people-and-boxes)) | |
+| `sim/doors` | `std_msgs/String`, JSON `{"doors": [...]}`: each door's state (simulator only, latched, on change and every 0.1 s while a panel moves, see [Doors](#doors)) | |
 | `sim/doors/<id>/set_open` | `std_srvs/SetBool` service: open (`true`) or close a door (simulator only) | |
 | `sim/command/start`, `sim/command/cancel` | `std_msgs/String`, JSON: commands from the kachaka-api server to `command_server` (simulator only) | |
 | `sim/command/state` | `std_msgs/String`, JSON: running command and last result (simulator only, latched) | |

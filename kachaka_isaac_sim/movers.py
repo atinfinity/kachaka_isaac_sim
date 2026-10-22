@@ -6,8 +6,11 @@ A mover is a kinematic body: the LiDAR, the cameras and the ToF see it, and
 it would push the robot, so it waits while the robot stands in its way, as a
 person would, instead of walking into it.
 
-`MoverSpec`, `MoverState` are plain Python; `Movers` needs Isaac Sim (create
-it after SimulationApp has started).
+The simulator publishes where each one is (`report`, on sim/movers): ground
+truth for checks and for RViz, not something the real robot has.
+
+`MoverSpec`, `MoverState` and `report` are plain Python; `Movers` needs Isaac
+Sim (create it after SimulationApp has started).
 """
 
 from __future__ import annotations
@@ -24,6 +27,10 @@ if TYPE_CHECKING:
     from pxr import Usd
 
 ROBOT_RADIUS = 0.23  # m, half the diagonal of the 387 x 240 mm body
+# The body's outline in base_footprint [m]: the base_link collision box of
+# kachaka_description (_kachaka.urdf.xacro), 0.387 x 0.240 m at x 0.0435.
+BODY_X = (0.0435 - 0.387 / 2, 0.0435 + 0.387 / 2)
+BODY_Y = (-0.120, 0.120)
 AWAY = (1000.0, 1000.0)  # where a mover that is not there waits (off every map)
 
 
@@ -39,6 +46,8 @@ class MoverSpec:
     appear: tuple[float, float] | None = None  # (there s, away s), repeated, from a random phase
     seed: int = 0
     z: float = 0.0  # height of the prim's origin
+    kind: str = "person"  # or "box"
+    size: tuple[float, float, float] = (0.0, 0.0, 0.0)  # x (depth), y (width), z (height) [m]
 
     @property
     def moves(self) -> bool:
@@ -62,6 +71,7 @@ class MoverState:
     t: float = field(init=False)
     present: bool = field(init=False)
     blocked: bool = field(init=False)
+    velocity: tuple[float, float] = field(init=False)  # world frame [m/s], over the last step
 
     def __post_init__(self):
         self.reset()
@@ -76,6 +86,7 @@ class MoverState:
         self.wait = 0.0
         self.blocked = False
         self.walked = 0.0  # m, drives the walking animation
+        self.velocity = (0.0, 0.0)
         self.phase = self.rng.uniform(0.0, sum(s.appear)) if s.appear else 0.0
         self.present = self._present()
 
@@ -111,6 +122,13 @@ class MoverState:
         """Advance by `dt`. True if the pose or presence changed."""
         self.t += dt
         was = (self.pose.x, self.pose.y, self.pose.yaw, self.present)
+        try:
+            return self._step(dt, robot, was)
+        finally:
+            moved = self.present and was[3] and dt > 0
+            self.velocity = ((self.pose.x - was[0]) / dt, (self.pose.y - was[1]) / dt) if moved else (0.0, 0.0)
+
+    def _step(self, dt: float, robot: Pose2D | None, was) -> bool:
         present = self._present()
         # Do not appear on top of the robot: wait until it has gone.
         if present and not self.present and robot is not None and \
@@ -171,6 +189,45 @@ def gait_angles(walked: float, amount: float) -> dict[str, float]:
     }
 
 
+def body_gap(robot: Pose2D, x: float, y: float, radius: float) -> float:
+    """Distance [m] between the robot's body outline and a circle of
+    `radius` at (x, y) (world frame); 0 where they overlap."""
+    dx, dy = x - robot.x, y - robot.y
+    c, s = math.cos(robot.yaw), math.sin(robot.yaw)
+    bx, by = c * dx + s * dy, -s * dx + c * dy
+    ox = max(BODY_X[0] - bx, 0.0, bx - BODY_X[1])
+    oy = max(BODY_Y[0] - by, 0.0, by - BODY_Y[1])
+    return max(0.0, math.hypot(ox, oy) - radius)
+
+
+def _rounded(p: Pose2D) -> list[float]:
+    return [round(p.x, 4), round(p.y, 4), round(p.yaw, 4)]
+
+
+def report(t: float, specs: list[MoverSpec], states: list[MoverState], robot: Pose2D | None, to_map) -> dict:
+    """The JSON published on sim/movers: per mover its id (the prim's name),
+    prim path, kind, whether it is there, pose [x, y, yaw] in the world frame
+    (as sim/ground_truth) and in the map frame (`to_map`: world Pose2D to the
+    map frame), velocity [vx, vy] in the world frame, footprint radius, size,
+    whether it waits for the robot, and the gap between its footprint circle
+    and the robot's body; then the closest mover. A mover that is away has
+    pose, map_pose and gap null."""
+    movers, closest = [], None
+    for sp, st in zip(specs, states):
+        m = {"id": sp.path.rpartition("/")[2], "path": sp.path, "kind": sp.kind, "present": st.present,
+             "pose": None, "map_pose": None, "velocity": [round(v, 4) for v in st.velocity],
+             "radius": round(sp.radius, 4), "size": [round(v, 4) for v in sp.size], "blocked": st.blocked,
+             "gap": None}
+        if st.present:
+            m["pose"], m["map_pose"] = _rounded(st.pose), _rounded(to_map(st.pose))
+            if robot is not None:
+                m["gap"] = round(body_gap(robot, st.pose.x, st.pose.y, sp.radius), 4)
+                if closest is None or m["gap"] < closest["gap"]:
+                    closest = {"id": m["id"], "gap": m["gap"]}
+        movers.append(m)
+    return {"stamp": round(t, 4), "frame_id": "world", "movers": movers, "closest": closest}
+
+
 def _segment_distance(px, py, x0, y0, x1, y1) -> float:
     dx, dy = x1 - x0, y1 - y0
     n = dx * dx + dy * dy
@@ -229,6 +286,10 @@ class Movers:
         for i in idx:
             if self.gaits[i] is not None:
                 self.gaits[i].set(gait_angles(self.states[i].walked, self.amount[i]))
+
+    def report(self, t: float, to_map) -> dict:
+        """See `report`."""
+        return report(t, self.specs, self.states, self.robot_pose(), to_map)
 
     def poses(self) -> list[Pose2D | None]:
         """Where each mover is, or None while it is away."""
