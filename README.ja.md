@@ -851,6 +851,58 @@ uv run --no-project --with kachaka-api==3.17.5.0 python scripts/dashboard.py
 ログインはありません。ページを開ければ誰でもロボットを動かせるので、信頼できるネットワーク以外では
 既定の `--host 127.0.0.1` のままにしてください。
 
+### デモノートブック
+
+kachaka-api のデモノートブック（[pf-robotics/kachaka-api](https://github.com/pf-robotics/kachaka-api)
+の `python/demos/*.ipynb`）はシミュレータで動きます。`scripts/demo_notebooks.sh` はこれらを
+ヘッドレスで実行します。シミュレータを起動し、SLAM の地図を保存して Nav2 をその地図で起動し直し、
+各ノートブックを新しいカーネルで、クライアントの接続先を `127.0.0.1:26400` にして実行します
+（ノートブックの既定の接続先はロボット本体のアドレスです）。所要時間は約 10 分で、ROS 2 イメージと
+uv が必要です。
+
+```bash
+scripts/demo_notebooks.sh                    # すべて
+scripts/demo_notebooks.sh speak robot_pose   # 一部だけ
+```
+
+実行後のノートブックは `build/demo_notebooks/` に保存されます。終わらないループ（カメラ、スキャン、
+エラーのストリーム）は一定時間で止め、何か表示されていれば合格です。HTTP サーバーのノートブックには、
+動いている間にリクエストを送ります。kachaka-api 3.17.5.0 での結果:
+
+| ノートブック | 結果 | 備考 |
+|---|---|---|
+| get_front_camera | OK | |
+| get_front_camera_continuous | OK | |
+| undistort | OK | シミュレータのカメラには歪みがないので、2 枚の画像は同じ |
+| feature_matching | OK | カメラの前に何もかざさないので、一致点は少ない |
+| qrcode | OK | シミュレータの部屋には QR コードがない |
+| get_object_detection | OK | |
+| get_imu | OK | グラフはウィジェットなので、JupyterLab 上でのみ描画される |
+| get_laser_scan | OK | |
+| error_code | OK | ロボットではなくシミュレータのエラーコードを表示 |
+| speak | OK | 音は出ない。テキストはログと `sim/speech` に出る |
+| template | OK | |
+| teleop, command_gui | OK | ボタンやフォームは作られるが、ヘッドレスでは誰も押さない |
+| plot_map_robot_lidar | OK | アニメーションはウィジェットなので、JupyterLab 上でのみ描画される |
+| http_server | OK | `/run` が `{"success":true}` を返す |
+| url_kachaka_api | OK | シリアル番号、位置、カメラ画像を HTTP で取得 |
+| follow_path | OK | |
+| robot_pose | OK | `set_robot_pose` で `get_robot_pose` の位置が変わる |
+| switch_map | OK | 2 つ目の保存地図に切り替えて戻す |
+| install_libraries | スキップ | pip install のみ |
+| save_object_detection_features | スキップ | 壁時計より新しいスタンプを待つが、シミュレータはシミュレーション時刻でスタンプするので終わらない（#69） |
+| run_custom_object_detection | スキップ | 学習済みの `predictor.onnx` が必要で、シミュレータは検出特徴量を返さない（#70） |
+
+同じノートブックをブラウザの JupyterLab で動かした様子です（`scripts/record_demo.sh notebooks sensors|control|map` で録画。録画スクリプトがボタンやプロットをクリックし、センサのストリーム中はロボットを旋回・前後進させます）。
+
+![ロボットを旋回させながら、カメラ連続取得・物体検出・LiDAR・IMU・歪み補正・QR コード・特徴点マッチングのノートブックを実行](docs/notebooks_sensors.gif)
+
+![teleop のボタン、コマンド GUI の MoveToPose と ReturnHome、speak、楕円に沿う follow_path、ライブ地図プロットのクリックでロボットを移動](docs/notebooks_control.gif)
+
+![保存地図上の Nav2 を表示する RViz と、姿勢の取得・設定、地図切り替え、エラーコード表、リクエストに応答する HTTP サーバのノートブック](docs/notebooks_map.gif)
+
+`get_png_map` が返す地図はグレースケールのため、`plot_map_robot_lidar` では matplotlib の既定のカラーマップ（黄色）で描かれます。実機の PNG 形式とは照合していません。
+
 ## 性能
 
 物理は 120 Hz で動きます。カメラに必要な描画は `--render-hz`（既定 10 Hz）で動きます。
@@ -945,7 +997,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_aio_check.py  
 `tests/api_map_check.py` は保存済み地図での `switch_map` と `set_robot_pose` を確かめます。手順
 （SLAM の地図を保存し、ROS 2 側を `navigation.launch.py` で起動し直す）は docstring にあります。
 
-上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif`、Web ダッシュボードは `scripts/record_dashboard_demo.py docs/dashboard.gif`（シミュレータ・Nav2・ダッシュボードを起動し、ホストに Chromium が必要）で、`--scenario reset` を付けると `docs/sim_reset.gif` を録画します。物体検出は `scripts/detection_demo.py --out docs/object_detection.gif`（kachaka-api のみ使用）で録画します。
+上の GIF は `scripts/record_demo.sh` で録画しています（充電器は `scripts/record_demo.sh dock`、シェルフは `shelf`、前方障害物での停止は `front_stop`、JupyterLab でのデモノートブックは `notebooks sensors|control|map`。ホストに Chromium が必要）。トーチライトは `scripts/record_torch_demo.sh docs/torch.gif`、Web ダッシュボードは `scripts/record_dashboard_demo.py docs/dashboard.gif`（シミュレータ・Nav2・ダッシュボードを起動し、ホストに Chromium が必要）で、`--scenario reset` を付けると `docs/sim_reset.gif` を録画します。物体検出は `scripts/detection_demo.py --out docs/object_detection.gif`（kachaka-api のみ使用）で録画します。
 
 ## ライセンス
 

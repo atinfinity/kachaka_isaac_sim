@@ -2,6 +2,8 @@
 
 Left: simulator bird's-eye frames (frames.csv gives wall times).
 Right: the RViz screen capture (starts at rviz_start.txt, 10 fps).
+With --left-video, the left is a second capture instead (e.g. RViz, with a
+browser on the right), starting at <name>_start.txt.
 If the demo folder has captions.csv (wall_time,text), the latest caption is
 shown along the bottom.
 
@@ -58,12 +60,17 @@ def main() -> None:
     p.add_argument("--height", type=int, default=HEIGHT, help="output height [px]")
     p.add_argument("--mark-robot", type=int, default=0, metavar="R",
                    help="ring of radius R px around the image centre (where a following camera keeps the robot)")
+    p.add_argument("--left-video", metavar="NAME",
+                   help="left: NAME.mp4 in the demo folder (from NAME_start.txt), not the simulator")
+    p.add_argument("--left-crop", type=int, nargs=4, metavar=("X", "Y", "W", "H"))
+    p.add_argument("--left-label", default="Isaac Sim")
     args = p.parse_args()
     d = args.demo_dir
 
-    with open(d / "sim/frames.csv") as f:
-        rows = list(csv.DictReader(f))
-    sim_t = [float(r["wall_time"]) for r in rows]
+    if not args.left_video:
+        with open(d / "sim/frames.csv") as f:
+            rows = list(csv.DictReader(f))
+        sim_t = [float(r["wall_time"]) for r in rows]
     t0 = float((d / "rviz_start.txt").read_text())
     t1 = float((d / "end.txt").read_text())
     captions = []
@@ -77,11 +84,23 @@ def main() -> None:
         subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(d / "rviz.mp4"),
                         "-vf", f"fps={FPS}", str(tmp / "rviz_%06d.png")], check=True)
         rviz = sorted(tmp.glob("rviz_*.png"))
+        t1 = min(t1, t0 + len(rviz) / FPS)  # not past the capture's last frame
+        if args.left_video:
+            subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(d / f"{args.left_video}.mp4"),
+                            "-vf", f"fps={FPS}", str(tmp / "left_%06d.png")], check=True)
+            left = sorted(tmp.glob("left_*.png"))
+            left_t0 = float((d / f"{args.left_video}_start.txt").read_text())
         n_out = int((t1 - t0) * FPS / args.speed)
         for i in range(n_out):
             t = t0 + i * args.speed / FPS
-            k = min(max(bisect.bisect_left(sim_t, t), 0), len(rows) - 1)
-            sim = Image.open(d / "sim" / rows[k]["file"]).convert("RGB")
+            if args.left_video:
+                sim = Image.open(left[min(max(int((t - left_t0) * FPS), 0), len(left) - 1)]).convert("RGB")
+                if args.left_crop:
+                    x, y, w, h = args.left_crop
+                    sim = sim.crop((x, y, x + w, y + h))
+            else:
+                k = min(max(bisect.bisect_left(sim_t, t), 0), len(rows) - 1)
+                sim = Image.open(d / "sim" / rows[k]["file"]).convert("RGB")
             if args.mark_robot:
                 cx, cy, r = sim.width / 2, sim.height / 2, args.mark_robot
                 ImageDraw.Draw(sim).ellipse((cx - r, cy - r, cx + r, cy + r), outline=(255, 60, 60), width=3)
@@ -91,7 +110,7 @@ def main() -> None:
                 x, y, w, h = args.rviz_crop
                 rv = rv.crop((x, y, x + w, y + h))
             rv = rv.resize((rv.width * args.height // rv.height, args.height), Image.LANCZOS)
-            label(sim, "Isaac Sim")
+            label(sim, args.left_label)
             label(rv, args.rviz_label)
             frame = Image.new("RGB", (sim.width + rv.width, args.height))
             frame.paste(sim, (0, 0))

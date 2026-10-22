@@ -312,7 +312,18 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
         n.create_subscription(String, f"{ns}/sim/map/loaded", self._on_map_loaded, 10)
         n.create_subscription(String, f"{ns}/sim/command/state", self._on_command_state, LATCHED)
         n.create_subscription(OccupancyGrid, "/map", lambda m: self.store.set("map", m), LATCHED)
-        n.create_subscription(TFMessage, "/tf", self._on_tf, 100)
+        # /tf on a node of its own, spun in a thread: the simulator's node takes
+        # one message per subscription per loop, and its own /tf (odometry and
+        # joints, many per loop) pushed AMCL's map -> odom out of the queue,
+        # so GetRobotPose missed SetRobotPose.
+        import rclpy
+        from rclpy.executors import SingleThreadedExecutor
+
+        self.tf_node = rclpy.create_node("kachaka_api_tf", context=n.context)
+        self.tf_node.create_subscription(TFMessage, "/tf", self._on_tf, 100)
+        self.tf_executor = SingleThreadedExecutor(context=n.context)
+        self.tf_executor.add_node(self.tf_node)
+        threading.Thread(target=self._spin_tf, daemon=True).start()
         s = self.store
         s.set("command_state", None)
         s.set("last_result", None)
@@ -339,6 +350,16 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
 
     def stop(self) -> None:
         self.server.stop(grace=0.5)
+        self.tf_executor.shutdown()
+        self.tf_node.destroy_node()
+
+    def _spin_tf(self) -> None:
+        from rclpy.executors import ExternalShutdownException
+
+        try:
+            self.tf_executor.spin()
+        except ExternalShutdownException:
+            pass
 
     # --- inputs from the simulator and ROS ----------------------------------
     def tap(self, name: str, *msg) -> None:
