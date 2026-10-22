@@ -66,6 +66,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--door-kind", choices=("sliding", "hinged"), help="door type (default: door.kind in the config)")
     p.add_argument("--door-width", type=float, help="doorway width [m] (default: door.width in the config)")
     p.add_argument("--door-closed", action="store_true", help="doors start closed")
+    p.add_argument("--door-auto", action="store_true",
+                   help="--door doors are automatic sliding doors: they open when the robot or a mover comes near "
+                        "(door.auto in the config)")
     p.add_argument("--door-cycle", type=float, nargs=2, metavar=("OPEN_S", "CLOSED_S"),
                    help="open and close the doors on their own, OPEN_S open then CLOSED_S closed, "
                         "until a sim/doors command")
@@ -246,16 +249,26 @@ def place_charger(args, cfg, layout):
 def place_doors(args, cfg, layout):
     """The layout's doors, then --door ones. --door-kind and --door-width are
     the defaults for the layout's doors too."""
-    from kachaka_isaac_sim.doors import DoorSpec
+    from kachaka_isaac_sim.doors import AutoSpec, DoorSpec
     from kachaka_isaac_sim.drive import Pose2D
 
     kind = args.door_kind or cfg.door.kind
     width = args.door_width or float(cfg.door.width)
     cycle = tuple(args.door_cycle) if args.door_cycle else None
-    doors = [(d.pose, d.kind or kind, d.width or width, d.open, d.cycle) for d in (layout.doors if layout else [])]
-    doors += [(Pose2D(*pose), kind, width, not args.door_closed, cycle) for pose in args.door or []]
-    return [DoorSpec(f"D{i + 1:02d}", f"/World/Doors/D{i + 1:02d}", pose, w, k, open=o, cycle=c)
-            for i, (pose, k, w, o, c) in enumerate(doors)]
+
+    def auto(overrides):  # an automatic door is sliding, whatever the default kind
+        if overrides is None:
+            return None
+        a = cfg.door.auto
+        return AutoSpec(**{"range": float(a.range), "margin": float(a.margin), "hold": float(a.hold),
+                           "movers": bool(a.movers), **overrides})
+
+    doors = [(d.pose, d.kind or ("sliding" if d.auto is not None else kind), d.width or width, d.open, d.cycle,
+              auto(d.auto)) for d in (layout.doors if layout else [])]
+    doors += [(Pose2D(*pose), "sliding" if args.door_auto else kind, width, not args.door_closed,
+               None if args.door_auto else cycle, auto({} if args.door_auto else None)) for pose in args.door or []]
+    return [DoorSpec(f"D{i + 1:02d}", f"/World/Doors/D{i + 1:02d}", pose, w, k, open=o, cycle=c, auto=a)
+            for i, (pose, k, w, o, c, a) in enumerate(doors)]
 
 
 def layout_objects(layout, charger_pose, shelf_specs, people, boxes_root):
@@ -479,7 +492,9 @@ def main() -> int:
     if door_specs:
         from kachaka_isaac_sim.doors import Doors
 
-        doors = Doors(stage, door_specs, cfg.door, world.ROOM_WALL)
+        # Automatic doors sense the robot and the movers, made further down.
+        doors = Doors(stage, door_specs, cfg.door, world.ROOM_WALL, lambda: robot.gt,
+                      lambda: movers.poses() if movers else [])
         node.add_doors(doors, lambda p: relative_pose(spawn, p))
     sim_start = SimulationManager.get_simulation_time()
     from kachaka_isaac_sim.physics_sensors import ContactSensor

@@ -531,6 +531,19 @@ static boxes (`--wall`, `world.add_wall`).
   (`slam_toolbox/pause_new_measurements`) after driving through the open
   door, as when navigating on a saved map with the door open. A door that
   was closed when the map was saved stays a wall for the planner.
+- **Automatic doors** (#63, `doors.AutoSpec`, `DoorSpec.senses`): the
+  sensor area is a rectangle in the doorway's frame, `|along| <= width / 2 +
+  margin` and `|across| <= range`, on both sides at once. `Doors` gets the
+  robot's ground-truth pose and the movers' poses as callables and checks
+  them before each step; `DoorState.step` keeps the door's target open while
+  the last sensing is less than `hold` s ago, so a door that is closing turns
+  round as soon as something comes in. Only sliding doors (the usual kind),
+  and not with a cycle. A `set_open` command overrides the sensor until
+  `sim/reset`, as it stops a cycle. The sensor sees the true pose, not a
+  scan: no blind spots, no reaction delay (assumed). Nav2 still sees a
+  closed automatic door as an obstacle, so a goal behind the only doorway
+  may not be planned until the door has opened (not tested); `tests/ros_auto_door_check.py`
+  sends the robot up to the door first.
 - **Not done**: elevators between floors (separate maps).
 
 ## Layout files

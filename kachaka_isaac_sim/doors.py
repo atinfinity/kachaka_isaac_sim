@@ -1,5 +1,6 @@
 """Doors that open and close: a sliding or hinged panel in a doorway, moved
-on command (sim/doors/<id>/set_open) or on a fixed cycle.
+on command (sim/doors/<id>/set_open), on a fixed cycle or, for an automatic
+sliding door, when the robot or a mover comes near (`AutoSpec`).
 
 The panel is a kinematic rigid body: the LiDAR sees it, and it pushes
 whatever stands in its way (no safety sensor stops it). The doorway's walls
@@ -12,6 +13,7 @@ Isaac Sim (create it after SimulationApp has started).
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -28,6 +30,20 @@ MOTION_PERIOD = 0.1  # s between state messages while a panel moves (for RViz)
 
 
 @dataclass
+class AutoSpec:
+    """An automatic door's sensor: it sees a point (the robot's base_footprint,
+    a mover's centre) within `range` of the doorway on either side, across a
+    strip `margin` wider than the doorway at each end. The door opens while it
+    sees something and closes once it has seen nothing for `hold` seconds; it
+    reopens if something comes while it closes."""
+
+    range: float = 1.0  # m, each side of the doorway
+    margin: float = 0.3  # m, beyond each edge of the doorway, along the wall
+    hold: float = 2.0  # s
+    movers: bool = True  # moving people and boxes trigger it too
+
+
+@dataclass
 class DoorSpec:
     id: str
     path: str
@@ -36,6 +52,23 @@ class DoorSpec:
     kind: str = "sliding"
     open: bool = True  # state at the start (and after sim/reset)
     cycle: tuple[float, float] | None = None  # (open s, closed s), repeated; None: on command only
+    auto: AutoSpec | None = None  # an automatic door (sliding only)
+
+    def __post_init__(self):
+        if self.auto is not None and self.kind != "sliding":
+            raise ValueError(f"door {self.id}: only sliding doors can be automatic")
+        if self.auto is not None and self.cycle is not None:
+            raise ValueError(f"door {self.id}: a door is automatic or cycles, not both")
+
+    def senses(self, x: float, y: float) -> bool:
+        """Whether an automatic door's sensor sees the point (world x, y)."""
+        if self.auto is None:
+            return False
+        p = self.pose
+        c, s = math.cos(p.yaw), math.sin(p.yaw)
+        dx, dy = x - p.x, y - p.y
+        along, across = c * dx + s * dy, -s * dx + c * dy
+        return abs(along) <= self.width / 2 + self.auto.margin and abs(across) <= self.auto.range
 
 
 def panel_size(spec: DoorSpec, thickness: float) -> tuple[float, float]:
@@ -67,13 +100,16 @@ def panel_pose(spec: DoorSpec, opening: float, thickness: float, wall: float) ->
 @dataclass
 class DoorState:
     """Opening (0 closed .. 1 open) moving towards the target at `rate` per
-    second. A command overrides the cycle until the next sim/reset."""
+    second. A command overrides the cycle or the sensor until the next
+    sim/reset."""
 
     spec: DoorSpec
     rate: float  # opening per second
     opening: float = field(init=False)
     target: bool = field(init=False)
     cycling: bool = field(init=False)
+    automatic: bool = field(init=False)  # the sensor drives it (no command since the reset)
+    last_seen: float = field(init=False)  # when the sensor last saw something
 
     def __post_init__(self):
         self.reset()
@@ -82,15 +118,22 @@ class DoorState:
         self.opening = 1.0 if self.spec.open else 0.0
         self.target = self.spec.open
         self.cycling = self.spec.cycle is not None
+        self.automatic = self.spec.auto is not None
+        self.last_seen = -math.inf
 
     def command(self, open_: bool) -> None:
         self.target = open_
-        self.cycling = False
+        self.cycling = self.automatic = False
 
-    def step(self, t: float, dt: float) -> bool:
+    def step(self, t: float, dt: float, sensed: bool = False) -> bool:
         """Advance by `dt` at time `t` (from the start or the last reset).
-        True if the panel moved."""
-        if self.cycling:
+        `sensed`: an automatic door's sensor sees something. True if the
+        panel moved."""
+        if self.automatic:
+            if sensed:
+                self.last_seen = t
+            self.target = t - self.last_seen < self.spec.auto.hold
+        elif self.cycling:
             open_s, closed_s = self.spec.cycle
             phase = t % (open_s + closed_s)
             # The cycle starts in the start state.
@@ -121,10 +164,14 @@ def door_rate(spec: DoorSpec, cfg: SimpleNamespace) -> float:
 class Doors:
     """The doors in the running simulation."""
 
-    def __init__(self, stage: Usd.Stage, specs: list[DoorSpec], cfg: SimpleNamespace, wall: float):
+    def __init__(self, stage: Usd.Stage, specs: list[DoorSpec], cfg: SimpleNamespace, wall: float,
+                 robot_pose: Callable[[], Pose2D | None] = lambda: None,
+                 mover_poses: Callable[[], list[Pose2D | None]] = list):
         from pxr import UsdGeom
 
         self.specs = specs
+        self.robot_pose = robot_pose  # what automatic doors sense
+        self.mover_poses = mover_poses
         self.cfg = cfg
         self.wall = wall
         self.states = [DoorState(s, door_rate(s, cfg)) for s in specs]
@@ -158,7 +205,8 @@ class Doors:
     def step(self, dt: float) -> None:
         self.t += dt
         before = [st.state for st in self.states]
-        moved = [i for i, st in enumerate(self.states) if st.step(self.t, dt)]
+        sensed = self._sensed()
+        moved = [i for i, st in enumerate(self.states) if st.step(self.t, dt, sensed[i])]
         if moved:
             self._move(moved)
             if self.t + 1e-9 >= self.next_motion:
@@ -167,6 +215,18 @@ class Doors:
             self.changed = True
         if self.changed:
             self.next_motion = self.t + MOTION_PERIOD
+
+    def _sensed(self) -> list[bool]:
+        """Whether each automatic door's sensor sees the robot or a mover."""
+        if not any(st.automatic for st in self.states):
+            return [False] * len(self.states)
+        robot = self.robot_pose()
+        movers = [p for p in self.mover_poses() if p is not None]
+        out = []
+        for sp, st in zip(self.specs, self.states):
+            points = ([robot] if robot is not None else []) + (movers if st.automatic and sp.auto.movers else [])
+            out.append(st.automatic and any(sp.senses(p.x, p.y) for p in points))
+        return out
 
     def panels(self) -> list[tuple[Pose2D, tuple[float, float, float]]]:
         """Each panel's world pose and size (length, thickness, height)."""

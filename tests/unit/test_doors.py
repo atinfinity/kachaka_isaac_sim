@@ -4,7 +4,16 @@ from types import SimpleNamespace
 import pytest
 
 from kachaka_isaac_sim.config import load_config
-from kachaka_isaac_sim.doors import SLIDING_OVERLAP, Doors, DoorSpec, DoorState, door_rate, panel_pose, panel_size
+from kachaka_isaac_sim.doors import (
+    SLIDING_OVERLAP,
+    AutoSpec,
+    Doors,
+    DoorSpec,
+    DoorState,
+    door_rate,
+    panel_pose,
+    panel_size,
+)
 from kachaka_isaac_sim.drive import Pose2D
 
 
@@ -81,6 +90,7 @@ def bare_doors(specs):
     d.specs, d.cfg, d.wall = specs, cfg, 0.1
     d.states = [DoorState(s, door_rate(s, cfg)) for s in specs]
     d.t, d.changed, d.next_motion = 0.0, True, 0.0
+    d.robot_pose, d.mover_poses = (lambda: None), list
     d._move = lambda idx: None
     return d
 
@@ -105,3 +115,71 @@ def test_doors_panels():
     (pose, size), = d.panels()
     assert size == pytest.approx((0.79, 0.04, 2.0))
     assert (pose.x, pose.y, pose.yaw) == pytest.approx((1.0, 2.0, 0.0))  # closed: across the doorway
+
+
+def auto_spec(**kw):
+    return spec(open=False, auto=AutoSpec(**kw))
+
+
+def test_auto_sensor_area_is_on_both_sides_of_the_doorway():
+    s = auto_spec(range=1.0, margin=0.3)  # doorway at (1, 2) along x, 0.8 wide
+    assert s.senses(1.0, 2.9) and s.senses(1.0, 1.1)  # either side, within range
+    assert not s.senses(1.0, 3.1)  # too far out
+    assert s.senses(1.0 + 0.4 + 0.29, 2.5) and not s.senses(1.0 + 0.4 + 0.31, 2.5)  # margin past the edge
+    turned = spec(pose=Pose2D(0.0, 0.0, math.pi / 2), auto=AutoSpec(range=1.0, margin=0.3))
+    assert turned.senses(0.9, 0.0) and not turned.senses(0.0, 0.8)
+    assert not spec().senses(1.0, 2.0)  # not automatic
+
+
+def test_auto_door_opens_holds_and_closes():
+    st = DoorState(auto_spec(hold=2.0), rate=100.0)
+    assert st.automatic and st.state == "closed"
+    st.step(0.0, 0.01, sensed=True)
+    assert st.state == "open"
+    st.step(1.0, 0.01, sensed=False)
+    assert st.state == "open"  # held
+    st.step(2.05, 0.01, sensed=False)
+    assert st.state == "closed"
+
+
+def test_auto_door_reopens_while_closing():
+    st = DoorState(auto_spec(hold=1.0), rate=1.0)
+    st.opening = 1.0
+    st.step(0.0, 0.01, sensed=True)
+    st.step(1.5, 0.5, sensed=False)
+    assert st.state == "closing"
+    st.step(1.6, 0.1, sensed=True)
+    assert st.state == "opening"
+
+
+def test_command_overrides_the_sensor_until_reset():
+    st = DoorState(auto_spec(), rate=100.0)
+    st.command(False)
+    st.step(0.0, 0.01, sensed=True)
+    assert st.state == "closed" and not st.automatic
+    st.reset()
+    assert st.automatic
+
+
+def test_auto_door_must_be_sliding_without_a_cycle():
+    with pytest.raises(ValueError):
+        spec(kind="hinged", auto=AutoSpec())
+    with pytest.raises(ValueError):
+        spec(cycle=(1.0, 1.0), auto=AutoSpec())
+
+
+def test_doors_sense_the_robot_and_movers():
+    d = bare_doors([auto_spec(movers=True), DoorSpec("D02", "/World/Doors/D02", Pose2D(5.0, 2.0, 0.0), 0.8,
+                                                     open=False, auto=AutoSpec(movers=False))])
+    d.robot_pose = lambda: Pose2D(9.0, 9.0, 0.0)
+    d.mover_poses = lambda: [None, Pose2D(1.0, 2.5, 0.0), Pose2D(5.0, 2.5, 0.0)]
+    assert d._sensed() == [True, False]  # D02 ignores movers
+    d.robot_pose = lambda: Pose2D(5.0, 1.5, 0.0)
+    assert d._sensed() == [True, True]
+    d.step(0.01)
+    assert [st.target for st in d.states] == [True, True]
+
+
+def test_auto_from_config():
+    a = load_config().door.auto
+    assert a.range > 0 and a.margin >= 0 and a.hold > 0 and isinstance(a.movers, bool)

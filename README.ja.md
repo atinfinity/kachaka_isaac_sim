@@ -302,12 +302,35 @@ LiDAR に映り、閉じている間は Nav2 がコストマップに載せて�
 - RViz では `door_markers` ノードが `sim/doors` から配信する `/door_markers`（MarkerArray）で
   パネルを表示します。閉は紫、開閉中は黄色、開は薄い灰色で、id と状態付きです（[RViz の色](#rviz-の色)）。
 
+**自動ドア**（#63）は、オフィス・店舗・病院によくあるように自分で開きます。レイアウトのドアに
+`auto: true` を付けるか、`--door` のドアに `--door-auto` を付けます。自動ドアは引き戸で、出入口の両側に
+センサ範囲があります。範囲は壁に沿って `width + 2 * margin`、両側にそれぞれ奥行き `range` の長方形です。
+範囲内にロボット（真値）または動く人・箱（[動く人と箱](#動く人と箱)）がいる間は開き、範囲が空いてから
+`hold` 秒後に閉まります。閉まる途中で何かが入ると開き直します。
+
+![壁で部屋を仕切り、通り道は自動ドアだけ。ロボットが東へ通り抜けると後ろでドアが閉まる。閉じたドアの前まで行くと近づくにつれてドアが開き、西へ通って戻る](docs/auto_door.gif)
+
+- 設定は `config/robot.yaml` の `door.auto` です。`range` 1.0 m、`margin` 0.3 m、`hold` 2.0 秒
+  （実際のドアセンサ（マイクロ波・赤外線）は製品ごとに違うため、いずれも仮定値）と `movers`
+  （true なら動く人や箱でも開く）。レイアウトのドアごとに上書きできます:
+  `auto: {range: 1.5, hold: 3.0, movers: false}`。
+- 自動ドアは開き戸にできず、`cycle` も付けられません。
+- `sim/doors/<id>/set_open` で強制的に開閉できます。その後は `sim/reset` までセンサを無視します。
+  `sim/doors` には `auto`（センサがドアを動かしている間 true）と、自動ドアなら `sensor`
+  （出入口を中心とする範囲の `size` [壁に沿って, 壁を横切って]）が入ります。
+- RViz ではセンサ範囲を床の薄いオレンジの長方形で表示し、ドアのラベルに「(auto)」を付けます。
+- Nav2 には閉じた自動ドアも他のドアと同じ障害物に見えるので、離れた所からはそこを通る経路を作れません。
+  通り道がその出入口だけなら、ドアが開くほど近づくまで向こう側のゴールは失敗することがあります（未検証）。
+  `tests/ros_auto_door_check.py` のように、まずドアの前まで行かせてください。
+
 ```bash
 # x = 0.6 の壁、y = -0.6 にドア、北端にすき間（layouts/room_door.yaml）
 scripts/run_sim.sh --no-shelves --no-people --wall 0.6 -2.0 0.6 -1.0 --wall 0.6 -0.2 0.6 1.2 --door 0.6 -0.6 1.5708
 scripts/run_sim.sh --layout layouts/room_door.yaml   # 同じ
 ros2 service call /kachaka/sim/doors/D01/set_open std_srvs/srv/SetBool "{data: false}"
 ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closing", ...}]}
+# 同じ壁ですき間なし、自動ドア（layouts/room_auto_door.yaml）
+scripts/run_sim.sh --layout layouts/room_auto_door.yaml
 ```
 
 フロア間のエレベーターはシミュレートしません。
@@ -317,7 +340,7 @@ ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closin
 `--layout FILE` で YAML ファイルを読み、ロボットの開始位置と、充電器・シェルフ・
 ロケーション・人・箱・壁・ドア・段差の配置をワールドに重ねます。どのワールドとも
 組み合わせられます。例は [`layouts/`](layouts) にあります: `room.yaml`、
-`room_door.yaml`（上のドアの構成）、`room_movers.yaml`（[動く人と箱](#動く人と箱)）、Isaac Sim のシーン用の `office.yaml`、
+`room_door.yaml` と `room_auto_door.yaml`（上のドアの構成）、`room_movers.yaml`（[動く人と箱](#動く人と箱)）、Isaac Sim のシーン用の `office.yaml`、
 `hospital.yaml`、`warehouse.yaml`、`simple_room.yaml`。
 
 ![layouts/room.yaml を 4 つのシードで起動。固定の物体はそのままで、Shelf 2・人・緑の箱がそれぞれの範囲内で引かれる](docs/layout.gif)
@@ -339,6 +362,7 @@ boxes:
 walls: [[0.6, -2.0, 0.6, -1.0]]              # x0, y0, x1, y1
 doors:
   - {pose: [0.6, -0.6, 1.5708], kind: sliding, width: 0.8, open: true, cycle: [10, 5]}
+  - {pose: [0.6, 1.0, 1.5708], auto: true}    # 自動ドア: ロボットが近づくと開く
 drops: [[1.0, 0.0, 0.4, 0.8]]                # x, y, x 方向の大きさ, y 方向の大きさ
 ```
 
@@ -508,6 +532,7 @@ docker compose -f docker/compose.yaml up navigation
 | 濃い灰色 / 青 | シェルフ / 牽引中のシェルフ | `/shelf_markers` |
 | オレンジの円柱 / 茶色の箱 | 動く人 / 箱（ロボット待ちの間は赤）、緑の矢印は速度 | `/mover_markers` |
 | 紫 / 黄色 / 薄い灰色のパネル | ドア 閉 / 開閉中 / 開 | `/door_markers` |
+| 床の薄いオレンジの長方形 | 自動ドアのセンサ範囲 | `/door_markers` |
 
 コストマップ（既定では非表示）は RViz の `costmap` 配色です。
 
@@ -529,7 +554,7 @@ scripts/run_sim.sh --person X Y YAW      # 人を置く（複数可。デフォ�
 scripts/run_sim.sh --no-people
 scripts/run_sim.sh --drop X Y SX SY      # 床に穴を開ける（複数可。「段差と衝突」を参照）
 scripts/run_sim.sh --wall X0 Y0 X1 Y1    # 壁（複数可。「ドア」を参照）
-scripts/run_sim.sh --door X Y YAW        # ドア（複数可。--door-kind、--door-width、--door-closed、--door-cycle）
+scripts/run_sim.sh --door X Y YAW        # ドア（複数可。--door-kind、--door-width、--door-closed、--door-cycle、--door-auto）
 scripts/run_sim.sh --api-port 26400      # kachaka-api の gRPC ポート（既定 26400。0 で無効）
 scripts/run_sim.sh --help
 ```
@@ -832,7 +857,7 @@ LiDAR は壁・箱・人・シェルフの脚を見て、充電器とシェル�
 
 CI には GPU がないため、シミュレータ自体はローカルで確認します。`scripts/smoke_test.sh --nav` は
 シミュレータをヘッドレスで起動して `tests/ros_smoke_check.py` を実行し、続いて SLAM + Nav2 で
-ナビゲーション・充電・シェルフ・コマンド・物体検出のチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。次に壁とドアのあるシミュレータを起動し直して `tests/ros_door_check.py`（ドアの通過、閉まったドアの迂回、開いたドアの再通過）を実行します。続いて `layouts/room_movers.yaml` で起動し直して `tests/ros_nav_check.py --no-collisions`（動く人と台車の間を、触れずに Nav2 のゴールへ）を実行し、最後に段差を開けたシミュレータを起動し直して `tests/ros_hazard_check.py` を実行します。Nav2 のチェック中の衝突は `build/smoke_collisions.log` に記録します。
+ナビゲーション・充電・シェルフ・コマンド・物体検出のチェックを同じシミュレータで順に実行します（各チェックは `sim/reset` から始まります）。次に壁とドアのあるシミュレータを起動し直して `tests/ros_door_check.py`（ドアの通過、閉まったドアの迂回、開いたドアの再通過）を実行します。次に `layouts/room_auto_door.yaml` で起動し直して `tests/ros_auto_door_check.py`（コマンドを送らない自動ドアを Nav2 で通過。ロボットの後ろで閉まり、戻ってくると開く）を実行します。続いて `layouts/room_movers.yaml` で起動し直して `tests/ros_nav_check.py --no-collisions`（動く人と台車の間を、触れずに Nav2 のゴールへ）を実行し、最後に段差を開けたシミュレータを起動し直して `tests/ros_hazard_check.py` を実行します。Nav2 のチェック中の衝突は `build/smoke_collisions.log` に記録します。
 
 ### シミュレータあり
 
@@ -851,6 +876,7 @@ python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK�
 python3 /tests/ros_detection_check.py   # その場で旋回しながら object_detection/result を確認（同上）
 python3 /tests/ros_hazard_check.py   # 段差と衝突（Nav2 不要。シミュレータは --drop 1.0 0.0 0.4 0.8 で起動）
 python3 /tests/ros_door_check.py     # Nav2 とドア（シミュレータは --layout layouts/room_door.yaml で起動）
+python3 /tests/ros_auto_door_check.py   # Nav2 と自動ドア（シミュレータは --layout layouts/room_auto_door.yaml で起動）
 python3 /tests/ros_nav_check.py --no-collisions   # 動く人の間で Nav2 のゴール（シミュレータは --layout layouts/room_movers.yaml で起動）
 ```
 

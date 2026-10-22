@@ -58,6 +58,18 @@ def test_door_markers():
     assert door_markers({"doors": [dict(door, panel=None)]}, "map") == []
 
 
+def test_auto_door_markers_show_the_sensor_area():
+    from kachaka_sim_bringup.door_markers import SENSOR, door_markers
+
+    door = {"id": "D01", "kind": "sliding", "pose": [1.0, 2.0, 0.5], "width": 0.8, "state": "closed",
+            "opening": 0.0, "cycling": False, "auto": True, "sensor": {"size": [1.4, 2.0]},
+            "panel": {"pose": [1.0, 1.9, 0.5], "size": [0.9, 0.04, 2.0]}}
+    _, label, area = door_markers({"doors": [door]}, "map")
+    assert label.text == "D01 closed (auto)"
+    assert area.color == SENSOR and (area.scale.x, area.scale.y) == pytest.approx((1.4, 2.0))
+    assert (area.pose.position.x, area.pose.position.y) == pytest.approx((1.0, 2.0))
+
+
 def test_door_colours_stand_out_from_the_scan():
     """The LaserScan is drawn red (255, 64, 64) in config/*.rviz."""
     from kachaka_sim_bringup.door_markers import CLOSED, MOVING, OPEN
