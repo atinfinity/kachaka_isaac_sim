@@ -1,0 +1,13 @@
+# A kachaka-api errand in the default room: fetch shelf S01 to location L01,
+# put it back, and go home to the charger.
+world: room
+seed: 1
+repeat: 2
+steps:
+  - api: move_to_pose
+    args: {x: 1.6, y: -0.3, yaw: 3.1416}   # world frame, like goals
+  - api: move_shelf
+    args: {shelf_name_or_id: S01, location_name_or_id: L01}
+  - api: return_shelf
+    args: {shelf_name_or_id: S01}
+  - api: return_home

@@ -1,0 +1,12 @@
+# Nav2 round trip in the default room (the goals of tests/ros_nav_check.py).
+#   python3 scripts/run_scenarios.py scenarios/room_nav.yaml
+world: room
+seed: 1
+repeat: 3
+steps:
+  # The first goal turns the robot around: the area behind it at the start
+  # is outside the LiDAR field of view, so it is not on the SLAM map yet.
+  - goal: [1.6, -0.3, 3.1416]
+  - goal: [-1.8, 1.3, 1.5708]
+  - goal: [0.2, -1.5, 0.0]
+  - goal: [0.0, 0.0, 0.0]

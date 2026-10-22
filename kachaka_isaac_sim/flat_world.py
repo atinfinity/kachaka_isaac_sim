@@ -3,7 +3,8 @@ LiDAR plane cuts out of the default room, and Kachaka Shelves that a
 kinematic robot tows. Plain Python and numpy, no Isaac Sim imports.
 
 Everything the LiDAR sees is a box (centre, yaw, size): the walls and boxes
-of the room (scenes.ROOM_*), the people's colliders and the shelves' legs.
+of the room (scenes.ROOM_*), the people's legs (squares as wide as the leg
+capsules, legs.py) and the shelves' legs.
 The charger's back panel (0.09 m) is lower than the LiDAR (0.105 m) and the
 shelves' bottom plates higher, so neither appears, as in the simulator.
 """
@@ -16,7 +17,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from .drive import Pose2D, wrap_angle
-from .scenes import PERSON_COLLIDER, ROOM_BOXES, ROOM_SIZE, ROOM_WALL, SHELF_LEG_SIZE, SHELF_LEG_XY
+from .legs import LEG_RADIUS, leg_points
+from .scenes import ROOM_BOXES, ROOM_SIZE, ROOM_WALL, SHELF_LEG_SIZE, SHELF_LEG_XY
 from .shelves import dock_offset
 
 
@@ -39,8 +41,10 @@ def room_boxes(people: list[tuple[float, float, float]] = (), person_height: flo
         Box(-sx / 2 - t / 2, 0.0, 0.0, t, sy),
     ]
     boxes += [Box(c[0], c[1], 0.0, s[0], s[1]) for _, c, s, _ in ROOM_BOXES]
-    k = person_height / 1.7
-    boxes += [Box(x, y, yaw, PERSON_COLLIDER[0] * k, PERSON_COLLIDER[1] * k) for x, y, yaw in people]
+    d = 2 * LEG_RADIUS * person_height / 1.7
+    for x, y, yaw in people:
+        c, s = math.cos(yaw), math.sin(yaw)
+        boxes += [Box(x + c * px - s * py, y + s * px + c * py, yaw, d, d) for px, py in leg_points({}, person_height)]
     return boxes
 
 

@@ -28,6 +28,8 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - ワールド: カチャカシェルフを置いた壁付きの部屋、または Isaac Sim のシーン（office、hospital、warehouse）
   レイアウトファイルで充電器・シェルフ・ロケーション・人・箱・壁・ドアを配置（ランダム配置も可）。
   人と箱は経由点を巡回・範囲内を歩き回り・現れたり消えたりもできます
+- シナリオランナー: Nav2 と kachaka-api のシナリオをヘッドレスでまとめて実行し、成功・時間・走行距離・衝突・
+  障害物との最小距離・リカバリー回数を CSV/JSON で出力（[シナリオランナー](#シナリオランナー)）
 - カチャカ向けに設定済みの slam_toolbox・Nav2・RViz・teleop を入れた Docker イメージ。
   カチャカには後方の距離センサーがないので、Nav2 は後退しない設定です
 - 実機ブリッジの全コマンドに対応した `kachaka_command/execute`（Nav2 ベース）: MOVE_TO_POSE、
@@ -233,9 +235,16 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 `GetObjectDetectionFeatures` は常に空です。
 
 部屋には人が 2 人います（`config/robot.yaml` の `people.room`）。Isaac Sim 同梱のキャラクター
-（`people.characters`、腕を下ろして立ったまま）で、高さ 1.7 m の箱のコライダーがあるので LiDAR と
-Nav2 にも見えます。アセットサーバーに届かないときはカプセルの人形になります。`--person X Y YAW` で人を置き、`--no-people` で
-なくせます。Isaac Sim のシーンには既定では人はいません。
+（`people.characters`、腕を下ろして立ったまま）です。アセットサーバーに届かないときはカプセルの人形に
+なります。`--person X Y YAW` で人を置き、`--no-people` でなくせます。Isaac Sim のシーンには既定では人はいません。
+
+LiDAR と Nav2 には人のコライダーが見えます（[`legs.py`](kachaka_isaac_sim/legs.py)）。太もも・すねごとの
+カプセル（太さ 0.13 m、推定）と、0.75 m より上の上半身を覆う見えない箱（0.28 × 0.5 m）です。LiDAR は床から
+0.105 m の高さを走査するので、人は 0.2 m 離れた 2 つの小さな弧（すね）として映ります。歩いている人の脚は
+歩容に合わせて振れ、弧が前後に入れ替わり、振り出し中に浮いた脚は一瞬スキャンから消えます。大きさは
+`people.height` に比例します。
+
+![歩く 3 人のキャラクターと人形。赤は脚のコライダー、下は LiDAR スキャン：1 人につき 2 つの弧が前後に入れ替わる](docs/person_legs.gif)
 
 結果は `GetObjectDetection` と、実機ブリッジと同じ ROS 2 の topic
 `/kachaka/object_detection/result`（`kachaka_interfaces/ObjectDetectionListStamped`）に出ます。
@@ -375,8 +384,10 @@ boxes:
   `movers.box_speed` 0.4）、`pause`（経由点ごとに止まる秒数）、`appear: [いる, いない]`
   （秒。しばらくいて、いなくなる。周期のどこから始まるかはシードで引きます）。
 - 次の経由点の方を向いてから歩きます。ロボットが行く手のすぐ先にいる間は待ち、ロボットの
-  真上には現れません。それ以外では止まらないので、ロボットの側でよける必要があります。
-- 人のキャラクターは歩くときに脚と腕を振ります。
+  真上には現れません。`movers.give_way` 秒（3）待つと直前の経由点へ引き返すか、別の場所へ
+  ぶらつきに行きます（人がすぐそばにいるとロボットが離れられないことがあるため）。それ以外では
+  止まらないので、ロボットの側でよける必要があります。
+- 人は歩くときに脚（脚のコライダーも）を、キャラクターは腕も振ります。
 - `sim/reset` で開始位置に戻ります。
 - 正解位置は `sim/movers`（シミュレータのみ、ground truth と同じ 20 Hz）に出ます。JSON で、
   動くものごとに `id`、`path`（USD プリム）、`kind`（`person` か `box`）、`present`、
@@ -392,6 +403,56 @@ scripts/run_sim.sh --layout layouts/room_movers.yaml
 python3 /tests/ros_nav_check.py --no-collisions   # SLAM + Nav2 と一緒に: ゴール到達、衝突なし、最接近距離
 ros2 topic echo /kachaka/sim/movers   # {"stamp": 12.3, "frame_id": "world", "movers": [...], "closest": {"id": "P01", "gap": 0.41}}
 ```
+
+### シナリオランナー
+
+`scripts/run_scenarios.py` はシナリオをヘッドレスでまとめて実行し、数値で報告します。
+パラメータ変更の比較に使います。シナリオファイル（[`scenarios/`](scenarios)）には、ワールドかレイアウトファイル
+（その上に spawn・shelves・people などレイアウトのキーも書けます）、ステップ（Nav2 のゴール・kachaka-api の呼び出し・待機）、
+実行回数とシードを書きます:
+
+```yaml
+layout: ../layouts/room_movers.yaml
+repeat: 3
+steps:
+  - goal: [1.6, -0.3, 3.1416]          # Nav2 NavigateToPose、ワールド座標
+  - api: move_shelf                    # KachakaApiClient の任意のメソッド
+    args: {shelf_name_or_id: S01, location_name_or_id: L01}
+  - api: move_to_pose                  # x, y, yaw はワールド座標
+    args: {x: 0.0, y: 0.0, yaw: 0.0}
+  - wait: 2.0
+```
+
+```bash
+python3 scripts/run_scenarios.py scenarios/room_nav.yaml scenarios/room_movers.yaml scenarios/room_api.yaml
+python3 scripts/run_scenarios.py scenarios/room_movers.yaml --nav2-params my_nav2.yaml --label tuned
+python3 scripts/run_scenarios.py --report build/scenarios/*/     # 過去の結果を並べて表示
+```
+
+シナリオごとにシミュレータ（シナリオのレイアウトで `run_sim.sh --headless`）と ROS イメージの SLAM + Nav2 を起動し、
+実行回数だけステップを実行して（間に `sim/reset` と SLAM 地図のクリア）、両方を終了します。
+`restart: true` なら実行ごとに起動し直し、シードは seed + 実行番号になります。
+`--nav2-params` で別の Nav2 パラメータファイルを使います。`--backend fake` は Isaac Sim の代わりに
+`scripts/fake_sim.py` を使います（GPU 不要。既定の部屋のみで人と箱はなし）。CI は `scenarios/fake_room.yaml` をこれで実行します。
+
+実行ごとの指標: 成功（全ステップ。goal と move_to_pose はグラウンドトゥルースで 0.35 m 以内に止まることも条件）、
+シミュレーション時間、走行距離（グラウンドトゥルース）、衝突（`sim/collision`、相手も記録）、
+LiDAR の点と車体の外形との最小距離、Nav2 のリカバリー回数（NavigateToPose のフィードバック。kachaka-api の移動も含む）。
+結果は `build/scenarios/<日時>[-label]/` に `runs.csv`、`runs.json`（ステップごとの結果つき）、`summary.csv`、
+`summary.txt` とログを書きます。時間と距離は成功した実行の平均です:
+
+```
+scenario     success  time [s]     path [m]      collisions  min clear [m]  recoveries
+-----------  -------  -----------  ------------  ----------  -------------  ----------
+room_nav     3/3      48.8 ± 0.5   10.97 ± 0.13  0 (0 runs)  0.113          0.0
+room_movers  2/3      52.8 ± 1.1   11.09 ± 0.04  0 (0 runs)  0.011          6.7
+room_api     2/2      111.8 ± 2.0  15.71 ± 0.36  0 (0 runs)  0.000          1.0
+```
+
+RTX 2080 Ti のホストでの 1 回分です。room_movers の失敗した 1 回はスタート地点から動けていません。
+人が前を横切る間、最初のゴールまでの経路が見つからず、リカバリー 20 回で諦めました。
+シェルフの下に入るステップ（move_shelf、return_shelf）では、ドッキングするまでシェルフの脚が車体のすぐ横にあるため
+最小距離はほぼ 0 になります。`runs.json` にはステップごとの最小距離とリカバリー回数も入っています。
 
 ## 動作環境
 
@@ -748,6 +809,7 @@ docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/na
 python3 scripts/build_usd.py --urdf-only                # 次のテスト用の build/kachaka.urdf
 docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/api_fake_check.py
 docker run --rm -v $PWD:/repo kachaka-isaac-sim-ros:jazzy python3 /repo/tests/speed_limit_check.py
+uv run --no-project --with pyyaml python scripts/run_scenarios.py scenarios/fake_room.yaml --backend fake
 ```
 
 URDF の単体テストには先に `scripts/fetch_assets.py` が必要です。
