@@ -87,6 +87,16 @@ class Shelves:
         self.update()
         return True, ""
 
+    def shift(self, idx: list[int], dx: float, dy: float) -> None:
+        """Carry shelves by (dx, dy) without turning or stopping them (an
+        elevator ride)."""
+        if not idx:
+            return
+        pos, quat = (a.numpy() for a in self.view.get_world_poses())
+        positions = [[float(pos[i][0]) + dx, float(pos[i][1]) + dy, float(pos[i][2])] for i in idx]
+        self.view.set_world_poses(positions, [[float(v) for v in quat[i]] for i in idx], indices=idx)
+        self.update()
+
     def undock(self) -> tuple[bool, str]:
         if self.docked is None:
             return True, "no shelf docked"

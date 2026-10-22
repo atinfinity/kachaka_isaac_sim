@@ -238,6 +238,16 @@ door:
     hold: 2.0               # s, stays open after the sensor clears (assumed)
     movers: true            # moving people and boxes open it too
 
+# Elevator between floors (layout `floors` and `elevator`; see
+# kachaka_isaac_sim/elevator.py). Assumed, not modelled on a particular
+# elevator. Its door moves at door.sliding_speed.
+elevator:
+  size: [1.4, 1.4]          # m, inside the car: across, deep
+  door_width: 0.9           # m
+  ride: 5.0                 # s per floor, door closed
+  door_sensor: 0.23         # m, the car door stays open while base_footprint is this close to the doorway
+                            # (front of the body; assumed)
+
 # Kachaka Shelf (3-layer). The shelf rolls on four casters and is towed through
 # a fixed joint while docked. Its pose is the base_footprint pose of a robot
 # docked under it (the robot's docking pin under the shelf centre), and the

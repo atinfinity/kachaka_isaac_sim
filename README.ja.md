@@ -333,7 +333,62 @@ ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closin
 scripts/run_sim.sh --layout layouts/room_auto_door.yaml
 ```
 
-フロア間のエレベーターはシミュレートしません。
+### エレベーター
+
+レイアウトに `floors` と `elevator` があると、部屋をフロアごとに x 方向へ 10 m ずつずらして並べ
+（フロア k の座標は 1 階の座標 + k × 10 m）、どのフロアにも壁の出入口の奥に同じかごを置きます。
+かごにはフロアごとに引き戸があります。`sim/elevator/go`（`std_msgs/String`、フロア名）でかごを呼ぶと、
+ドアが閉まり、1 フロアあたり `ride` 秒待ってから、かごの中のもの（ロボット、シェルフ）を行き先フロアの
+かごへ移し、そこでドアが開きます。オドメトリはこの移動を見ません。ロボットが出入口にいる間は
+ドアセンサーのように開き直します。`sim/elevator`（latched の JSON）に `floors`、`floor`（かごの階）、
+`target`、`state`（open、closing、riding、opening）、`door`、`robot_floor`、`robot_in_car` を出します。
+`sim/reset` でかごは開始階に戻ります。フロアごとに床の色を変え、床にフロア名を描いています
+（見た目だけで、センサーには映りません）。乗ったことがビューポートで分かります。
+
+![layouts/elevator.yaml: 1 階で Nav2 がかごに入り、2 階へ移動、2 階の地図を読み込んで 2 階の壁の先へ出る](docs/elevator.gif)
+
+```bash
+python3 scripts/make_maps.py layouts/elevator.yaml   # maps/elevator_1F.yaml, maps/elevator_2F.yaml
+scripts/run_sim.sh --layout layouts/elevator.yaml
+ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/elevator_1F.yaml
+ros2 topic pub --once /kachaka/sim/elevator/go std_msgs/msg/String "{data: 2F}"
+ros2 topic echo /kachaka/sim/elevator   # {"floor": "2F", "state": "open", "robot_floor": "2F", ...}
+```
+
+フロアごとに別の保存地図で走ります。`scripts/make_maps.py` がレイアウトから地図を描きます（壁、かご、
+動かない箱。ドアは開いた状態）。各フロアの map 座標系は開始位置をそのフロアへずらしたものなので、
+かごの中の位置はどのフロアの地図でも同じ座標です。乗った後は次のフロアの地図を読み込みます。
+そのとき乗る前の map 上の位置（TF の `map` → `base_footprint`。`/amcl_pose` は 0.25 m か 0.2 rad
+動いたときしか出ないので遅れることがあります）を一緒に渡します（kachaka-api の `SwitchMap` の `initial_pose`、
+または `sim/map/load` の `"pose"`）。command_server は地図を読み込み、AMCL にその位置を与え、
+向きまで合ったのを確かめてから応答します（AMCL は新しい地図で初期化し直すので、別に送った
+`/initialpose` は失われることがあります）。`tests/ros_elevator_check.py` は 1 階でかごに入り、2 階へ移動し、
+地図を切り替えて 2 階のゴールまで走ります。
+
+実機がどう乗るかは建物側の仕組みによります。三菱電機ビルソリューションズと Preferred Robotics の実証では、
+カチャカが建物のプラットフォーム（Ville-feuille）に依頼し、Ville-feuille がかごを呼んで行き先階を登録し、
+乗るかごと乗り降りのタイミングをカチャカに伝えます
+（[プレスリリース、2024-09-28](https://www.excite.co.jp/news/article/Prtimes_2024-09-28-115855-30/)）。
+戸田建設の TODA BUILDING では、同社が公開 API で作ったシステムでカチャカプロがエレベーターを使い
+フロア間で郵便物を運んでいます（[LOGISTICS TODAY、2026-07-17](https://www.logi-today.com/978771)）。
+kachaka-api にはエレベーターの呼び出しがないため `sim/elevator/go` はシミュレータ専用で、かごの大きさ
+（1.4 × 1.4 m）、ドア（0.9 m）、時間は推定です（`config/robot.yaml` の `elevator`）。
+
+#### フロアを縦に積む
+
+`elevator` に `stack: vertical` を書くと、フロアを 3 m（推定）ずつ縦に積み、かごの床を台にして
+ロボット（とシェルフ）を昇降路に沿って運びます。テレポートはしません。レイアウトの書き方は同じ
+（フロア k は x + k × 10 m）なので同じ保存地図が使え、各フロアの map 座標系は同じ x, y の開始位置です。
+`sim/elevator` には `stack` と `robot_z`（1 階からの高さ）が加わります。上の階にはドアと動く人・箱を
+置けません。かごの向きは 90° の倍数にします。
+
+![layouts/elevator_vertical.yaml: 同じ走行をフロアを縦に積んで。カメラはロボットを追って 2 階の床を抜けて上がる](docs/elevator_vertical.gif)
+
+```bash
+python3 scripts/make_maps.py layouts/elevator.yaml
+scripts/run_sim.sh --layout layouts/elevator_vertical.yaml
+ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/elevator_1F.yaml
+```
 
 ### レイアウトファイル
 

@@ -22,6 +22,10 @@ are, on top of a world (the built-in room or an Isaac Sim scene).
     doors:
       - {pose: [0.6, -0.6, 1.5708], kind: sliding, width: 0.8, open: true, cycle: [10, 5]}
     drops: [[1.0, 0.0, 0.4, 0.8]]   # x, y, size x, size y
+    floors:                     # more floors, side by side (see elevator.py)
+      - {name: 1F}
+      - {name: 2F, walls: [[-1.0, 0.5, 1.0, 0.5]], people: [[0.0, -1.0, 0.0]]}
+    elevator: {pose: [2.525, 0.0, -1.5708], size: [1.4, 1.4], door_width: 0.9, ride: 5.0, start: 1F}
 
 Poses are [x, y, yaw] in the world frame (m, rad). Any number in a pose may
 be a range [lo, hi] instead: it is drawn uniformly with the layout's seed, and
@@ -40,6 +44,18 @@ and optionally speed (m/s; config 'movers'), pause (s at each waypoint) and
 appear: [there s, away s] (gone part of the time, from a random phase).
 A mover waits while the robot is in its way.
 
+Floors (the built-in room only) need an elevator. The top-level keys are on
+the first floor; each floor may add walls, doors, people and boxes of its
+own, in the same coordinates as the first floor's (the simulator puts floor
+k at x + k * elevator.FLOOR_SPACING). Each floor is the room with a doorway
+cut where the elevator's door is. The elevator's pose is the middle of its
+doorway, x along the wall, with the car on the +y side; size, door_width
+and ride (s per floor) default to the config's `elevator` section, start
+to the first floor. stack: vertical stacks the floors in the stage instead
+(floor k lifted by k * elevator.FLOOR_HEIGHT, the car's floor a platform
+that carries the robot up); its yaw must be a multiple of 90 degrees, and
+doors and moving people or boxes are only on the first floor.
+
 Plain Python: the simulator reads it before Isaac Sim starts.
 """
 
@@ -53,10 +69,13 @@ from pathlib import Path
 import yaml
 
 from .drive import Pose2D
+from .elevator import STACKS, floor_offset
 from .scenes import PERSON_COLLIDER, ROOM_BOXES, ROOM_SIZE, ROOM_WALL, SHELF_SIZE
 
 KEYS = ("world", "seed", "clearance", "spawn", "charger", "shelves", "locations", "people", "boxes", "walls",
-        "doors", "drops")
+        "doors", "drops", "floors", "elevator")
+FLOOR_KEYS = ("name", "people", "boxes", "walls", "doors")
+ELEVATOR_KEYS = ("pose", "size", "door_width", "ride", "start", "stack")
 DOOR_KINDS = ("sliding", "hinged")
 # Footprint radii [m] for keeping randomised objects apart: half the diagonal
 # of each object's outline.
@@ -104,6 +123,16 @@ class Door:
 
 
 @dataclass
+class Elevator:
+    pose: Pose2D
+    size: tuple[float, float] | None = None  # None: the config's
+    door_width: float | None = None
+    ride: float | None = None
+    start: str | None = None  # floor name; None: the first
+    stack: str = "side"  # elevator.STACKS: floors side by side, or stacked with a moving car floor
+
+
+@dataclass
 class Layout:
     """A resolved layout: every pose is fixed. None means "the world's default"
     (for the keys that have one)."""
@@ -122,6 +151,12 @@ class Layout:
     walls: list[tuple[float, float, float, float]] = field(default_factory=list)
     doors: list[Door] = field(default_factory=list)
     drops: list[tuple[float, float, float, float]] = field(default_factory=list)
+    floors: list[str] = field(default_factory=list)  # names; empty: one floor, no elevator
+    elevator: Elevator | None = None
+    # People on the floors after the first, in world coordinates (the first
+    # floor's are `people`, which may be None for the world's default).
+    floor_people: list[Pose2D] = field(default_factory=list)
+    floor_people_motion: list[Motion | None] = field(default_factory=list)
     randomised: bool = False  # some pose was drawn from a range
 
 
@@ -233,7 +268,86 @@ def parse_layout(data: dict, seed: int | None = None, world: str | None = None, 
         if auto is not None and (kind == "hinged" or cycle):
             raise LayoutError(f"{path}: doors[{i}]: an automatic door is sliding and has no cycle")
         out.doors.append(Door(pose, kind, width, bool(e.get("open", True)), cycle, auto))
+    _floors(data, out, world, path)
     return out
+
+
+def _floors(data: dict, out: Layout, world: str, path: str) -> None:
+    """The floors and the elevator: each floor's objects are parsed as a
+    layout of their own and moved to where the floor is."""
+    floors, elevator = _list(data, "floors", path), data.get("elevator")
+    if not floors and elevator is None:
+        return
+    if len(floors) < 2 or elevator is None:
+        raise LayoutError(f"{path}: floors need an elevator and at least two floors")
+    if world != "room":
+        raise LayoutError(f"{path}: floors need the built-in room world")
+    for k, f in enumerate(floors):
+        if not isinstance(f, dict) or "name" not in f:
+            raise LayoutError(f"{path}: floors[{k}] needs a name")
+        unknown = set(f) - set(FLOOR_KEYS)
+        if unknown:
+            raise LayoutError(f"{path}: floors[{k}]: unknown key(s) {', '.join(sorted(unknown))}; "
+                              f"known: {', '.join(FLOOR_KEYS)}")
+        out.floors.append(str(f["name"]))
+    _unique(out.floors, "floor", path)
+    if not isinstance(elevator, dict) or "pose" not in elevator:
+        raise LayoutError(f"{path}: elevator needs a pose")
+    unknown = set(elevator) - set(ELEVATOR_KEYS)
+    if unknown:
+        raise LayoutError(f"{path}: elevator: unknown key(s) {', '.join(sorted(unknown))}; "
+                          f"known: {', '.join(ELEVATOR_KEYS)}")
+    e = elevator
+    start = str(e["start"]) if e.get("start") is not None else None
+    if start is not None and start not in out.floors:
+        raise LayoutError(f"{path}: elevator.start {start!r} is not a floor")
+    stack = str(e.get("stack", "side"))
+    if stack not in STACKS:
+        raise LayoutError(f"{path}: elevator.stack {stack!r}: one of {', '.join(STACKS)}")
+    out.elevator = Elevator(Pose2D(*_numbers(e["pose"], 3, "elevator.pose", path)),
+                            _numbers(e["size"], 2, "elevator.size", path) if e.get("size") else None,
+                            float(e["door_width"]) if e.get("door_width") else None,
+                            float(e["ride"]) if e.get("ride") else None, start, stack)
+    if stack == "vertical" and abs(math.remainder(out.elevator.pose.yaw, math.pi / 2)) > 1e-3:
+        raise LayoutError(f"{path}: elevator.pose: a stacked elevator's yaw must be a multiple of 90 degrees")
+    for k, f in enumerate(floors):
+        sub = parse_layout({key: v for key, v in f.items() if key != "name"}, out.seed + k, world,
+                           f"{path}: floors[{k}]")
+        out.randomised = out.randomised or sub.randomised
+        if k == 0:
+            out.walls += sub.walls
+            out.doors += sub.doors
+            out.boxes += sub.boxes
+            out.floor_people += sub.people or []
+            out.floor_people_motion += sub.people_motion
+            continue
+        if stack == "vertical" and (sub.doors or any(b.motion for b in sub.boxes)
+                                    or any(m is not None for m in sub.people_motion)):
+            raise LayoutError(f"{path}: floors[{k}]: doors and moving boxes or people are only on the first "
+                              "floor with a stacked elevator")
+        dx, dy = floor_offset(k)
+        out.walls += [(x0 + dx, y0 + dy, x1 + dx, y1 + dy) for x0, y0, x1, y1 in sub.walls]
+        for d in sub.doors:
+            d.pose = Pose2D(d.pose.x + dx, d.pose.y + dy, d.pose.yaw)
+            out.doors.append(d)
+        for b in sub.boxes:
+            b.name = f"{b.name}_f{k + 1}"
+            b.pose = Pose2D(b.pose.x + dx, b.pose.y + dy, b.pose.yaw)
+            _shift_motion(b.motion, dx, dy)
+            out.boxes.append(b)
+        for p, m in zip(sub.people or [], sub.people_motion):
+            out.floor_people.append(Pose2D(p.x + dx, p.y + dy, p.yaw))
+            _shift_motion(m, dx, dy)
+            out.floor_people_motion.append(m)
+
+
+def _shift_motion(m: Motion | None, dx: float, dy: float) -> None:
+    if m is None:
+        return
+    m.route = [(x + dx, y + dy) for x, y in m.route]
+    if m.wander:
+        (x0, x1), (y0, y1) = m.wander
+        m.wander = ((x0 + dx, x1 + dx), (y0 + dy, y1 + dy))
 
 
 MOTION_KEYS = ("route", "wander", "speed", "pause", "appear")

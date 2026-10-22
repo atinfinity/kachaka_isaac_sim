@@ -19,13 +19,13 @@ from kachaka_isaac_sim.scenes import (
     PERSON_COLLIDER,
     ROOM_BOXES,
     ROOM_HEIGHT,
-    ROOM_SIZE,
     ROOM_WALL,
     SHELF_CASTER_RADIUS,
     SHELF_LEG_SIZE,
     SHELF_LEG_XY,
     SHELF_PLATES,
     SHELF_SIZE,
+    room_walls,
 )
 
 ROBOT_PATH = "/World/kachaka"
@@ -126,6 +126,66 @@ def add_floor_with_drops(stage: Usd.Stage, holes, extent: float = 20.0, thicknes
                 approximation="none")
 
 
+def add_slab(stage: Usd.Stage, root: str, tiles, thickness: float = 0.1, overlap: float = 0.001) -> None:
+    """A floor slab of boxes (x0, y0, x1, y1), top at z=0, for a stacked
+    floor (the elevator's shaft is the gap between the tiles). Exact triangle
+    meshes, overlapping, as add_floor_with_drops."""
+    UsdGeom.Xform.Define(stage, root)
+    for i, (x0, y0, x1, y1) in enumerate(tiles):
+        add_box(stage, f"{root}/tile_{i:02d}", ((x0 + x1) / 2, (y0 + y1) / 2, -thickness / 2),
+                (x1 - x0 + 2 * overlap, y1 - y0 + 2 * overlap, thickness), (0.62, 0.66, 0.72),
+                approximation="none")
+
+
+def add_ceiling_light(stage: Usd.Stage, path: str, rect, z: float, intensity: float) -> None:
+    """A rect light over `rect` (x0, y0, x1, y1) at height `z`, shining down:
+    the ceiling light of a floor under a stacked one, whose slab keeps the
+    dome light out."""
+    x0, y0, x1, y1 = rect
+    light = UsdLux.RectLight.Define(stage, path)
+    light.CreateWidthAttr(x1 - x0)
+    light.CreateHeightAttr(y1 - y0)
+    light.CreateIntensityAttr(intensity)
+    UsdGeom.Xformable(light.GetPrim()).AddTranslateOp().Set(Gf.Vec3d((x0 + x1) / 2, (y0 + y1) / 2, z))
+
+
+def add_platform(stage: Usd.Stage, path: str, rect, thickness: float, z: float) -> None:
+    """The elevator car's floor as a kinematic box over `rect` (x0, y0, x1, y1),
+    its middle at `z`; elevator.Elevator moves it through its translate op."""
+    x0, y0, x1, y1 = rect
+    body = UsdGeom.Xform.Define(stage, path)
+    UsdGeom.Xformable(body.GetPrim()).AddTranslateOp().Set(Gf.Vec3d((x0 + x1) / 2, (y0 + y1) / 2, z))
+    UsdPhysics.RigidBodyAPI.Apply(body.GetPrim()).CreateKinematicEnabledAttr(True)
+    add_box(stage, f"{path}/floor", (0.0, 0.0, 0.0), (x1 - x0, y1 - y0, thickness), (0.55, 0.57, 0.6))
+
+
+def lift(stage: Usd.Stage, path: str, offset) -> None:
+    """Move the prim at `path` by `offset` (x, y, z) in its parent's frame,
+    before its own transform: a translate op (suffix "floor") put first, so
+    code that sets the prim's own ops (doors) keeps working."""
+    if not any(offset):
+        return
+    xf = UsdGeom.Xformable(stage.GetPrimAtPath(path))
+    ops = xf.GetOrderedXformOps()
+    op = xf.AddTranslateOp(opSuffix="floor")
+    op.Set(Gf.Vec3d(*offset))
+    xf.SetXformOpOrder([op, *ops])
+
+
+def lift_children(stage: Usd.Stage, root: str, offset_at) -> None:
+    """Lift each child of `root` by `offset_at(x, y)`, where (x, y) is the
+    child's place in the world (lift)."""
+    prim = stage.GetPrimAtPath(root)
+    if not prim.IsValid():
+        return
+    cache = UsdGeom.XformCache()
+    for child in prim.GetChildren():
+        if not child.IsA(UsdGeom.Xformable):
+            continue
+        t = cache.GetLocalToWorldTransform(child).ExtractTranslation()
+        lift(stage, str(child.GetPath()), offset_at(t[0], t[1]))
+
+
 def enable_contact_report(stage: Usd.Stage, path: str = BASE_LINK) -> None:
     """PhysX contact reports for the robot body (physics_sensors.ContactSensor).
     Apply before the simulation starts."""
@@ -135,18 +195,26 @@ def enable_contact_report(stage: Usd.Stage, path: str = BASE_LINK) -> None:
     api.CreateThresholdAttr().Set(0.0)
 
 
-def add_simple_room(stage: Usd.Stage) -> None:
+def add_simple_room(stage: Usd.Stage, root: str = "/World/Room", offset=(0.0, 0.0), openings=()) -> None:
     """A walled room with a couple of obstacles, enough to test teleop and SLAM
-    (scenes.ROOM_*)."""
-    (size_x, size_y), height, t = ROOM_SIZE, ROOM_HEIGHT, ROOM_WALL
-    root = "/World/Room"
+    (scenes.ROOM_*), moved by `offset` (x, y), with doorways cut in its walls
+    at `openings` (scenes.room_walls, before the offset)."""
+    height, (dx, dy) = ROOM_HEIGHT, offset
     UsdGeom.Xform.Define(stage, root)
-    add_box(stage, f"{root}/wall_n", (0, size_y / 2 + t / 2, height / 2), (size_x + 2 * t, t, height))
-    add_box(stage, f"{root}/wall_s", (0, -size_y / 2 - t / 2, height / 2), (size_x + 2 * t, t, height))
-    add_box(stage, f"{root}/wall_e", (size_x / 2 + t / 2, 0, height / 2), (t, size_y, height))
-    add_box(stage, f"{root}/wall_w", (-size_x / 2 - t / 2, 0, height / 2), (t, size_y, height))
-    for name, center, size, color in ROOM_BOXES:
-        add_box(stage, f"{root}/{name}", center, size, color)
+    for name, (cx, cy), (sx, sy) in room_walls(openings):
+        add_box(stage, f"{root}/{name}", (cx + dx, cy + dy, height / 2), (sx, sy, height))
+    for name, (cx, cy, cz), size, color in ROOM_BOXES:
+        add_box(stage, f"{root}/{name}", (cx + dx, cy + dy, cz), size, color)
+
+
+def add_floor_marking(stage: Usd.Stage, path: str, rect, color, z: float = 0.0) -> None:
+    """A flat coloured patch (x0, y0, x1, y1) lying on the floor, visual
+    only: no collider, so the LiDAR and the step sensors (PhysX raycasts) do
+    not see it. A marking `z` higher draws over one below."""
+    x0, y0, x1, y1 = rect
+    t = 0.002
+    add_box(stage, path, ((x0 + x1) / 2, (y0 + y1) / 2, 0.001 + z + t / 2), (x1 - x0, y1 - y0, t), color,
+            collider=False)
 
 
 def add_wall(stage: Usd.Stage, path: str, start, end, thickness: float = ROOM_WALL,

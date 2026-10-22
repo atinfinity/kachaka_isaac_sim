@@ -672,20 +672,23 @@ class KachakaApiServer(pb2_grpc.KachakaApiServicer):
             return fail(ERROR_NEEDS_SAVED_MAP)
         if self.map_load_pub.get_subscription_count() == 0:
             return fail(ERROR_SERVER_UNAVAILABLE)
-        req_id = uuid.uuid4().hex
-        self.map_load_pub.publish(String(data=json.dumps({"id": req_id, "map_id": request.map_id})))
-        with self.map_cond:
-            if not self.map_cond.wait_for(lambda: req_id in self.map_replies, timeout=20.0):
-                return fail(ERROR_SERVER_UNAVAILABLE)
-            reply = self.map_replies.pop(req_id)
-        if not reply.get("success"):
-            return fail(ERROR_MAP)
         if request.HasField("initial_pose"):
             p = request.initial_pose
             pose = (p.x, p.y, p.theta)
         else:
             pose = tuple(meta.get("charger_pose") or (0.0, 0.0, 0.0))
-        self._publish_initial_pose(*pose)
+        # command_server gives AMCL the pose with the map and answers once
+        # AMCL holds it (AMCL starts over on a new map; see command_server.py).
+        load = {"id": uuid.uuid4().hex, "map_id": request.map_id}
+        if self.initial_pose_pub.get_subscription_count() > 0:  # AMCL runs
+            load["pose"] = [float(v) for v in pose]
+        self.map_load_pub.publish(String(data=json.dumps(load)))
+        with self.map_cond:
+            if not self.map_cond.wait_for(lambda: load["id"] in self.map_replies, timeout=40.0):
+                return fail(ERROR_SERVER_UNAVAILABLE)
+            reply = self.map_replies.pop(load["id"])
+        if not reply.get("success"):
+            return fail(ERROR_MAP)
         self.store.set("map_id", request.map_id)
         return pb2.SwitchMapResponse(result=pb2.Result(success=True))
 

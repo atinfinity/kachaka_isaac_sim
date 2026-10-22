@@ -1,0 +1,17 @@
+# layouts/elevator.yaml with the floors stacked: 2F stands
+# elevator.FLOOR_HEIGHT above 1F and the car's floor carries the robot up
+# (tests/ros_elevator_check.py, record_demo.sh elevator_vertical). The floors
+# are laid out as in elevator.yaml, so its saved maps fit:
+# python3 scripts/make_maps.py layouts/elevator.yaml
+#   scripts/run_sim.sh --layout layouts/elevator_vertical.yaml
+world: room
+floors:
+  - name: 1F
+  - name: 2F
+    walls:
+      - [-0.5, -2.0, -0.5, -0.6]
+    boxes:
+      - {name: desk, pose: [-1.6, 1.4, 0.0], size: [1.2, 0.6, 0.7], color: [0.45, 0.35, 0.25]}
+    people:
+      - [-1.8, -1.2, 0.0]
+elevator: {pose: [2.525, 0.0, -1.5708], stack: vertical}

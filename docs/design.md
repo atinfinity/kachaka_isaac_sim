@@ -365,9 +365,13 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   tells the modes apart by map_server's parameter service: with it
   (`navigation.launch.py`), `GetCurrentMapId` is the launch map until
   `SwitchMap`. `SwitchMap` publishes `sim/map/load`; `command_server` calls
-  map_server's `load_map`, clears the costmaps and answers on
-  `sim/map/loaded`, then the server publishes `/initialpose` for AMCL, as
-  does `SetRobotPose`.
+  map_server's `load_map`, gives AMCL the pose in the request (`"pose"`:
+  `initial_pose` or the map's charger pose) on `/initialpose` until AMCL
+  reports it (position and heading) and stays quiet for 1.5 s, clears the
+  costmaps and answers on `sim/map/loaded`. AMCL re-initialises when the new
+  map reaches it, so an `/initialpose` published after the answer alone could
+  be overtaken (seen: ~20° off after an elevator ride). `SetRobotPose`
+  publishes `/initialpose` directly.
 - **Locations** are the charger (`home`, the default), each shelf's home
   (`<id>_home`) and the layout's extra locations.
 - **Manual control.** `SetRobotVelocity` takes values normalized to the speed
@@ -544,7 +548,71 @@ static boxes (`--wall`, `world.add_wall`).
   closed automatic door as an obstacle, so a goal behind the only doorway
   may not be planned until the door has opened (not tested); `tests/ros_auto_door_check.py`
   sends the robot up to the door first.
-- **Not done**: elevators between floors (separate maps).
+- Elevators: see [Elevator](#elevator).
+
+## Elevator
+
+Issue #48. `kachaka_isaac_sim/elevator.py`, `floor_maps.py`,
+`scripts/make_maps.py`, `layouts/elevator.yaml`, `layouts/elevator_vertical.yaml`.
+
+- **Floors side by side**: floor k is the room moved k × 10 m along x
+  (`FLOOR_SPACING`) by default. A layout's `floors` entries are sub-layouts
+  (walls, doors, boxes, people) moved to their floor; shelves, the charger
+  and the spawn pose stay on the first floor. These side-by-side
+  coordinates are the "logical" ones that layouts, `floor_maps`, `floor_of`
+  and `ElevatorState` always use.
+- **Stacked floors** (`elevator.stack: vertical`): the stage is built in
+  logical coordinates, then each upper floor's groups (its room, look and
+  car) and each wall, box and person on it (by `floor_of` of its place) get
+  an extra translate op put first (`world.lift`, `stage_offset`): back to
+  x of the first floor and `FLOOR_HEIGHT` (3 m, assumed) up per floor. Each
+  upper floor has a slab (`add_slab`, exact triangle meshes, top at the
+  floor) over the room and car with the car's inside left open
+  (`slab_tiles`). Car walls are `FLOOR_HEIGHT` tall, so they line the shaft.
+  A floor under another gets a ceiling light (`add_ceiling_light`, a rect
+  light at `CEILING_LIGHT` x the dome light), as the slab keeps the dome
+  light out.
+  The car's floor is a kinematic box (`/World/Elevator/Platform`) that
+  `Elevator` moves every pre-physics step to `ElevatorState.position`
+  (smoothstep between floors while riding); it reaches 2 mm under the walls
+  and slab (kinematic and static bodies do not collide), so the step
+  sensors see no gap at the doorway. Friction carries the robot and any
+  shelf; nothing is teleported, `odom` and the map frame need no shift. The
+  robot's logical pose (`logical_pose`: floor from its height above the
+  start, rounded) is what `Elevator`, `sim/elevator` and `to_map` use;
+  `sim/elevator` adds `stack` and `robot_z`. Doors and movers (they set
+  world poses) on upper floors are not lifted, so the layout rejects them;
+  the car's yaw must be a multiple of 90° (`inside_rect`). Object detection
+  does not see people on upper floors (its targets are logical poses).
+  The recording camera follows the robot's height (`--record-follow`), and
+  a far near clip cuts the floor above.
+- **Car**: walls behind a doorway in a room wall, and a sliding door
+  (`doors.Doors`, its own instance, not listed on `sim/doors`) on each
+  floor. `ElevatorState` is plain Python: `go` sets the target, `step` closes
+  the door, waits `ride` s per floor once it is closed, then reports the
+  arrival and opens the door on the new floor. While closing, the door
+  reopens as long as the robot's base_footprint is within `door_sensor` of
+  the doorway (assumed door sensor).
+- **The ride** (side by side) happens between physics steps (main loop, `take_ride`): the
+  robot articulation and any shelf inside the car (and the towed shelf) are
+  moved by the floor offset with their velocities kept. `NoisyOdometry.shift`
+  moves its origin by the same amount, so `odom` does not jump; wheel
+  odometry integrates the wheels and never sees it. `SimRobot.map_origin`
+  moves too, so sim-only map poses stay in the current floor's map frame.
+- **Maps**: SLAM's map frame is the spawn pose, so each floor's map frame is
+  the spawn pose moved to that floor; a pose in the car is the same on every
+  floor's map, and after a ride the next floor's map is loaded and AMCL is
+  given the pose it had. `floor_map` rasterises the layout's static geometry
+  (doors open, movers and people left out); the origin is snapped so that
+  cell centres never sit on a wall face (otherwise thin walls came out one
+  cell jagged).
+- **Floor looks**: each floor's room gets a floor tint and its name in
+  seven-segment strokes (`FLOOR_LOOKS`, `label_segments`), thin boxes
+  without colliders, so the PhysX-raycast LiDAR and step sensors miss them.
+- **ROS**: `sim/elevator/go` (String) and latched `sim/elevator` (JSON).
+  kachaka-api has no elevator calls; on the real robot the building's system
+  drives the ride (sources in the README).
+- **Not done**: RViz markers for the car; people riding; more than one car.
 
 ## Layout files
 

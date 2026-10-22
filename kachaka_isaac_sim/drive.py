@@ -156,6 +156,16 @@ class NoisyOdometry:
         holds."""
         self._last_gt = None
 
+    def shift(self, dx: float, dy: float) -> None:
+        """The robot was carried by (dx, dy) in the world (an elevator ride):
+        the odometry reads as if it had not moved."""
+        if self.origin is not None:
+            self.origin.x += dx
+            self.origin.y += dy
+        if self._last_gt is not None:
+            self._last_gt.x += dx
+            self._last_gt.y += dy
+
     def update(self, gt: Pose2D) -> Pose2D:
         if self.origin is None:
             self.origin = Pose2D(gt.x, gt.y, gt.yaw)

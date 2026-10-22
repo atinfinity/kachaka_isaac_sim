@@ -11,9 +11,12 @@
 # second simulator run with a drop in the floor. With --nav, collisions seen
 # during the Nav2 checks are logged to build/smoke_collisions.log, and
 # tests/ros_door_check.py runs in a third simulator run with a door,
-# tests/ros_auto_door_check.py in a fourth with an automatic door, and
+# tests/ros_auto_door_check.py in a fourth with an automatic door,
 # tests/ros_nav_check.py --no-collisions in a fifth with people and a cart
-# moving across the way (layouts/room_movers.yaml).
+# moving across the way (layouts/room_movers.yaml), and
+# tests/ros_elevator_check.py in a sixth with two floors and an elevator
+# (layouts/elevator.yaml), on saved maps per floor, and again with the floors
+# stacked (layouts/elevator_vertical.yaml).
 #
 # Needs the ROS image: docker compose -f docker/compose.yaml build
 set -euo pipefail
@@ -36,7 +39,7 @@ trap cleanup EXIT
 ros() {
     docker run --rm --network host --ipc host \
         -e FASTDDS_BUILTIN_TRANSPORTS="UDPv4?sockets_size=4194304" \
-        -v "$PWD/tests:/tests:ro" "$@"
+        -v "$PWD/tests:/tests:ro" -v "$PWD/maps:/maps" "$@"
 }
 
 start_sim() {
@@ -55,17 +58,24 @@ FAILED=()
 echo "[smoke] running checks"
 ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_smoke_check.py
 
+# SLAM + Nav2, or Nav2 on a saved map: start_nav [launch file and arguments]
 start_nav() {
-    echo "[smoke] starting SLAM + Nav2 (log: $NAV_LOG)"
+    local launch=("${@:-slam.launch.py}")
+    ((${#launch[@]} > 1)) || [[ "${launch[0]}" != slam.launch.py ]] || launch+=(nav:=true)
+    echo "[smoke] starting ${launch[*]} (log: $NAV_LOG)"
     ros --name "$NAV_CONTAINER" kachaka-isaac-sim-ros:jazzy \
-        ros2 launch kachaka_sim_bringup slam.launch.py nav:=true rviz:=false > "$NAV_LOG" 2>&1 &
+        ros2 launch kachaka_sim_bringup "${launch[@]}" rviz:=false > "$NAV_LOG" 2>&1 &
     NAV_PID=$!
+    # On a saved map Nav2 waits for AMCL's first pose (the check gives it):
+    # wait for localization then.
+    local manager=lifecycle_manager_navigation
+    [[ "${launch[0]}" == navigation.launch.py ]] && manager=lifecycle_manager_localization
     for _ in $(seq 120); do
-        grep -q "\[lifecycle_manager_navigation\]: .*Managed nodes are active" "$NAV_LOG" && break
+        grep -q "\[$manager\]: .*Managed nodes are active" "$NAV_LOG" && break
         kill -0 "$NAV_PID" 2>/dev/null || { echo "[smoke] Nav2 exited; see $NAV_LOG"; exit 1; }
         sleep 1
     done
-    grep -q "\[lifecycle_manager_navigation\]: .*Managed nodes are active" "$NAV_LOG" \
+    grep -q "\[$manager\]: .*Managed nodes are active" "$NAV_LOG" \
         || { echo "[smoke] Nav2 did not become active; see $NAV_LOG"; exit 1; }
 }
 
@@ -115,6 +125,26 @@ if $NAV; then
     start_nav
     echo "[smoke] running ros_nav_check --no-collisions (moving people)"
     ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_nav_check.py --no-collisions || FAILED+=(ros_nav_check_movers)
+    docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
+
+    # Two floors and an elevator, on saved maps drawn from the layout.
+    stop_sim
+    docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$PWD/maps:/repo/maps" \
+        kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py /repo/layouts/elevator.yaml --out /repo/maps
+    LOG=build/smoke_sim_elevator.log
+    start_sim --layout layouts/elevator.yaml
+    start_nav navigation.launch.py map:=/maps/elevator_1F.yaml
+    echo "[smoke] running ros_elevator_check"
+    ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_elevator_check.py || FAILED+=(ros_elevator_check)
+    docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
+
+    # The same with the floors stacked: the car's floor carries the robot up.
+    stop_sim
+    LOG=build/smoke_sim_elevator_vertical.log
+    start_sim --layout layouts/elevator_vertical.yaml
+    start_nav navigation.launch.py map:=/maps/elevator_1F.yaml
+    echo "[smoke] running ros_elevator_check (stacked floors)"
+    ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_elevator_check.py || FAILED+=(ros_elevator_check_vertical)
     docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
 fi
 

@@ -578,6 +578,29 @@ class KachakaSimNode:
         self.doors_pub.publish(String(data=json.dumps(msg)))
         self.tap("doors", msg)
 
+    def add_elevator(self, elevator, robot_pose) -> None:
+        """The elevator (elevator.Elevator): sim/elevator/go (String, a floor
+        name) calls the car, and the latched JSON state goes out on
+        sim/elevator. `robot_pose` gives the robot's world Pose2D."""
+        self.elevator = elevator
+        self._elevator_robot = robot_pose
+        self.elevator_pub = self.node.create_publisher(String, f"{self.ns}/sim/elevator", LATCHED)
+
+        def on_go(msg):
+            # Subscription callbacks run in the sim loop between steps.
+            ok, text = self.elevator.go(msg.data.strip())
+            (self.node.get_logger().info if ok else self.node.get_logger().warning)(f"elevator: {text}")
+
+        self.node.create_subscription(String, f"{self.ns}/sim/elevator/go", on_go, 10)
+
+    def publish_elevator(self) -> None:
+        """Latched JSON {floors, floor (where the car is), target, state (open,
+        closing, riding or opening), door (the car door on its floor),
+        robot_floor, robot_in_car}, sent when it changes."""
+        msg = self.elevator.status(self._elevator_robot())
+        self.elevator_pub.publish(String(data=json.dumps(msg)))
+        self.tap("elevator", msg)
+
     def add_movers(self) -> None:
         """The moving people and boxes' ground truth on sim/movers (sim-only)."""
         self.movers_pub = self.node.create_publisher(String, f"{self.ns}/sim/movers", 10)
