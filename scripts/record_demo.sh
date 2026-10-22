@@ -13,6 +13,9 @@
 #   scripts/record_demo.sh scene office  # Nav2 route in an Isaac Sim scene -> build/scene_office.mp4
 #                                        # (both views follow the robot)
 #   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
+#   scripts/record_demo.sh notebooks sensors  # kachaka-api demo notebooks in JupyterLab
+#   scripts/record_demo.sh notebooks control  #   -> docs/notebooks_<set>.gif (the browser instead of
+#   scripts/record_demo.sh notebooks map      #   RViz, or next to RViz for map; needs chromium on the host)
 #   scripts/record_demo.sh front_stop  # front obstacle stop on/off at a wall -> build/front_stop.mp4
 #   scripts/record_demo.sh cliff  # step sensors at a drop, power button, a collision -> docs/cliff.gif
 #   scripts/record_demo.sh speed  # manual vs autonomous top speed, towing and alone -> docs/speed.gif
@@ -23,11 +26,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 DEMO=${1:-nav}
 SIM_ARGS=()
+CAMERAS=(--no-cameras)  # the demos that do not show a camera image skip rendering it
 RVIZ_SED=""  # sed script applied to demo.rviz
 LABEL="RViz: slam_toolbox + Nav2"
 COMPOSE_ARGS=()
 RUN=""       # run in the ROS container
 EXEC_ARGS=()  # docker exec options for RUN
+BROWSER=""   # set: HOST_RUN records the right-hand video itself
+LEFT=""      # with BROWSER: "rviz" puts the RViz capture on the left, not the simulator
+SAVE_MAP=""  # set: save the SLAM map under this name (twice) first; LAUNCH then uses it
 HOST_RUN=""  # or on the host
 # ROS side: SLAM + Nav2 with RViz, or e.g. "navigation.launch.py map:=/maps/x.yaml" (RViz started separately)
 LAUNCH="slam.launch.py nav:=true"
@@ -117,6 +124,27 @@ case "$DEMO" in
         LABEL="RViz: slam_toolbox + Nav2 (driven by kachaka-api)"
         COMPOSE_ARGS=(--height 540)
         HOST_RUN="uv run --no-project --with kachaka-api==3.17.5.0 python scripts/api_demo.py $PWD/build/api/captions.csv" ;;
+    notebooks)
+        SET=${2:-control}
+        GIF=docs/notebooks_$SET.gif
+        VIEW=(0.0 -2.4 7.5 0.0 -0.1 0.0)
+        LABEL="JupyterLab: kachaka-api demo notebooks"
+        RVIZ_CROP="0 0 960 720"
+        COMPOSE_ARGS=(--height 450)
+        SPEED=${SPEED:-4}
+        CAMERAS=()
+        BROWSER=1  # record_notebook_demo.py writes the right-hand video, not ffmpeg
+        if [[ "$SET" == map ]]; then
+            # switch_map needs two maps, and set_robot_pose a map to localize on
+            SAVE_MAP=0_notebooks_demo
+            LAUNCH="navigation.launch.py map:=/maps/$SAVE_MAP.yaml"
+            LEFT=rviz
+            COMPOSE_ARGS+=(--left-video left --left-crop 740 95 660 745 --left-label "RViz: Nav2 (AMCL)")
+        fi
+        HOST_RUN="uv run --no-project --with kachaka-api==3.17.5.0 --with jupyterlab --with ipympl
+            --with ipywidgets --with plotly --with anywidget --with fastapi --with uvicorn --with nest_asyncio
+            --with opencv-python-headless --with matplotlib --with numpy --with pillow --with pyyaml --with websockets
+            python scripts/record_notebook_demo.py $PWD/build/notebooks_$SET $SET" ;;
     front_stop)
         GIF=build/front_stop.mp4
         VIEW=(1.9 -1.7 0.9 1.9 0.0 0.05)  # from the south, side-on to the path at the east wall
@@ -142,9 +170,10 @@ case "$DEMO" in
         COMPOSE_ARGS=(--height 540)
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_speed_demo.py /build/speed/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|auto_door|movers|elevator|elevator_vertical|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
+    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|auto_door|movers|elevator|elevator_vertical|scene <world>|api|notebooks [sensors|control|map]|front_stop|cliff|speed]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
+[[ "$DEMO" == notebooks ]] && OUT=build/notebooks_$SET
 DISPLAY_NUM=99
 COMPOSE=(docker compose -f docker/compose.yaml)
 rm -rf "$OUT" && mkdir -p "$OUT"
@@ -154,12 +183,27 @@ cleanup() {
     docker logs kachaka-demo-ros > "$OUT/ros.log" 2>&1 || true
     docker rm -f kachaka-demo-ros >/dev/null 2>&1 || true
     pgrep -f "^\S*/bin/python \S*run_sim.py" | xargs -r kill 2>/dev/null || true
+    if [[ -n "$SAVE_MAP" ]]; then
+        docker rm -f kachaka-demo-slam >/dev/null 2>&1 || true
+        rm -f maps/"${SAVE_MAP:?}".yaml maps/"${SAVE_MAP:?}".pgm maps/"${SAVE_MAP:?}"_2.yaml maps/"${SAVE_MAP:?}"_2.pgm
+    fi
 }
 trap cleanup EXIT
 
 echo "[demo] starting the simulator"
-scripts/run_sim.sh --headless --no-cameras --record "$OUT/sim" --record-view "${VIEW[@]}" "${SIM_ARGS[@]}" > "$OUT/sim.log" 2>&1 &
+scripts/run_sim.sh --headless "${CAMERAS[@]}" --record "$OUT/sim" --record-view "${VIEW[@]}" "${SIM_ARGS[@]}" > "$OUT/sim.log" 2>&1 &
 until grep -q "\[kachaka\] running" "$OUT/sim.log"; do sleep 2; done
+
+if [[ -n "$SAVE_MAP" ]]; then
+    [[ -e maps/$SAVE_MAP.yaml ]] && { echo "[demo] maps/$SAVE_MAP.yaml exists: another run? remove it first"; exit 1; }
+    echo "[demo] saving the SLAM map as maps/$SAVE_MAP"
+    docker run -d --rm --name kachaka-demo-slam --network host --ipc host \
+        -e FASTDDS_BUILTIN_TRANSPORTS="UDPv4?sockets_size=4194304" \
+        kachaka-isaac-sim-ros:jazzy ros2 launch kachaka_sim_bringup slam.launch.py rviz:=false > /dev/null
+    uv run --no-project --with kachaka-api==3.17.5.0 --with numpy --with pyyaml --with pillow \
+        python tests/demo_notebooks_check.py --save-map "$SAVE_MAP"
+    docker rm -f kachaka-demo-slam > /dev/null
+fi
 
 echo "[demo] starting SLAM, Nav2 and RViz (Xvfb :$DISPLAY_NUM)"
 docker run -d --rm --name kachaka-demo-ros --network host --ipc host \
@@ -180,10 +224,14 @@ until [[ -S /tmp/.X11-unix/X$DISPLAY_NUM ]]; do sleep 1; done
 sleep 25  # let Nav2 come up and RViz draw the first map
 
 echo "[demo] recording"
-date +%s.%N > "$OUT/rviz_start.txt"
-ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 0 -framerate 10 -video_size 1440x900 -i ":$DISPLAY_NUM" \
-    -c:v libx264 -preset ultrafast -pix_fmt yuv420p "$OUT/rviz.mp4" &
-FFMPEG_PID=$!
+if [[ -z "$BROWSER" || -n "$LEFT" ]]; then
+    CAPTURE=rviz
+    [[ -n "$LEFT" ]] && CAPTURE=left  # the browser is rviz.mp4 then
+    date +%s.%N > "$OUT/${CAPTURE}_start.txt"
+    ffmpeg -hide_banner -loglevel error -f x11grab -draw_mouse 0 -framerate 10 -video_size 1440x900 -i ":$DISPLAY_NUM" \
+        -c:v libx264 -preset ultrafast -pix_fmt yuv420p "$OUT/$CAPTURE.mp4" &
+    FFMPEG_PID=$!
+fi
 if [[ -n "$HOST_RUN" ]]; then
     $HOST_RUN | tee "$OUT/run.log"
 else
@@ -191,8 +239,10 @@ else
 fi
 date +%s.%N > "$OUT/end.txt"
 sleep 1
-kill -INT "$FFMPEG_PID"; wait "$FFMPEG_PID" || true
-FFMPEG_PID=
+if [[ -n "${FFMPEG_PID:-}" ]]; then
+    kill -INT "$FFMPEG_PID"; wait "$FFMPEG_PID" || true
+    FFMPEG_PID=
+fi
 
 # Stop the simulator so the frame writer finishes the last PNGs.
 pgrep -f "^\S*/bin/python \S*run_sim.py" | xargs -r kill -INT

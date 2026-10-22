@@ -993,6 +993,18 @@ while they serve. With kachaka-api 3.17.5.0:
 | save_object_detection_features | skipped | never ends: it waits for stamps newer than the wall clock, and the simulator stamps with simulation time (#69) |
 | run_custom_object_detection | skipped | needs a trained `predictor.onnx`, and the simulator returns no detection features (#70) |
 
+The same notebooks in a live JupyterLab, driven by `scripts/record_demo.sh notebooks sensors|control|map`
+(the recorder clicks the buttons and the plot, and turns or drives the robot during the sensor streams):
+
+![Camera stream, object detection, LiDAR scan, IMU plot, undistort, QR code and feature matching notebooks while the robot turns](docs/notebooks_sensors.gif)
+
+![teleop buttons, the command GUI's MoveToPose and ReturnHome, speak, follow_path along an ellipse, and clicks on the live map plot that send the robot there](docs/notebooks_control.gif)
+
+![RViz with Nav2 on a saved map beside get/set_robot_pose, switch_map, the error code table, and the HTTP server notebooks answering requests](docs/notebooks_map.gif)
+
+The map that `get_png_map` returns is grayscale, so `plot_map_robot_lidar` draws it in
+matplotlib's default colormap (yellow); the real robot's PNG format is not checked here.
+
 ## Performance
 
 Physics runs at 120 Hz. Rendering, which the cameras need, runs at
@@ -1106,7 +1118,7 @@ uv run --no-project --with kachaka-api==3.17.5.0 python tests/api_aio_check.py  
 map; its docstring gives the steps (save the SLAM map, then restart the ROS 2
 side with `navigation.launch.py`).
 
-`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights; `scripts/record_dashboard_demo.py docs/dashboard.gif` records the web dashboard (with the simulator, Nav2 and the dashboard running, and Chromium on the host), and with `--scenario reset` it records `docs/sim_reset.gif`. `scripts/detection_demo.py --out docs/object_detection.gif` records object detection (kachaka-api only).
+`scripts/record_demo.sh` records the GIFs above (`scripts/record_demo.sh dock` for the charger, `shelf` for the shelf, `front_stop` for the front obstacle stop, `notebooks sensors|control|map` for the demo notebooks in JupyterLab, with Chromium on the host); `scripts/record_torch_demo.sh docs/torch.gif` records the torch lights; `scripts/record_dashboard_demo.py docs/dashboard.gif` records the web dashboard (with the simulator, Nav2 and the dashboard running, and Chromium on the host), and with `--scenario reset` it records `docs/sim_reset.gif`. `scripts/detection_demo.py --out docs/object_detection.gif` records object detection (kachaka-api only).
 
 ## License
 
