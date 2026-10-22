@@ -256,10 +256,19 @@ not detected, and `GetObjectDetectionFeatures` stays empty since there is no
 network.
 
 The room has two people (`people.room` in `config/robot.yaml`): Isaac Sim's
-bundled characters (`people.characters`, standing still with the arms down) with
-a 1.7 m box collider so LiDAR and Nav2 see them. Without the asset server they
-are capsule mannequins. `--person X Y YAW` places others and `--no-people`
-removes them. The Isaac Sim scenes have none by default.
+bundled characters (`people.characters`, standing still with the arms down).
+Without the asset server they are capsule mannequins. `--person X Y YAW` places
+others and `--no-people` removes them. The Isaac Sim scenes have none by default.
+
+The LiDAR and Nav2 see a person by their colliders
+([`legs.py`](kachaka_isaac_sim/legs.py)): a capsule for each thigh and shin,
+0.13 m across (assumed), and an invisible box over the upper body from 0.75 m
+up (0.28 × 0.5 m). The LiDAR scans 0.105 m above the floor, so a person shows as
+two small arcs 0.2 m apart, the shins. A walking person's legs swing with the
+gait: the arcs swap front and back, and a leg lifted in its swing drops out of
+the scan for a moment. Sizes scale with `people.height`.
+
+![Three walking characters and a mannequin with their leg colliders in red, and the LiDAR scan below: two arcs per person that swap front and back](docs/person_legs.gif)
 
 The results are on `GetObjectDetection` and on the real bridge's ROS 2 topic
 `/kachaka/object_detection/result` (`kachaka_interfaces/ObjectDetectionListStamped`).
@@ -410,9 +419,11 @@ boxes:
   (s; there for a while, then gone, starting at a point of the cycle drawn with
   the seed).
 - A mover turns towards its next waypoint, then walks. It waits while the robot
-  is right in its way, and does not appear on top of the robot. Nothing else
-  stops it: the robot has to keep out of its way.
-- Characters swing their legs and arms as they walk.
+  is right in its way, and does not appear on top of the robot. After waiting
+  `movers.give_way` s (3) it turns back to its last waypoint, or wanders
+  elsewhere: the robot may be unable to leave with someone so close. Nothing
+  else stops it: the robot has to keep out of its way.
+- People swing their legs (the leg colliders too) and characters their arms as they walk.
 - `sim/reset` puts them back at the start.
 
 ```bash

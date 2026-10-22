@@ -56,12 +56,32 @@ def test_pauses_at_a_waypoint():
 def test_waits_while_the_robot_is_in_its_way():
     st = MoverState(spec())
     robot = Pose2D(1.0, 0.0, math.pi)  # right ahead
-    run(st, 3.0, robot)
+    run(st, 2.5, robot)
     assert st.pose.x < 1.0 - 0.3 - ROBOT_RADIUS
     assert st.blocked
     run(st, 5.0, Pose2D(1.0, 1.5, 0.0))  # gone to the side
     assert st.pose.x == pytest.approx(2.0)
     assert not st.blocked
+
+
+def test_turns_back_after_waiting_long_for_the_robot():
+    st = MoverState(spec(start=Pose2D(1.0, 0.0, 0.0), route=[(-1.0, 0.0), (3.0, 0.0)]))
+    run(st, 2.0)  # turned round, walking towards (-1, 0)
+    robot = Pose2D(st.pose.x - 0.5, 0.0, 0.0)
+    run(st, 2.9, robot)
+    assert st.blocked and st.target == (-1.0, 0.0)
+    run(st, 2.6, robot)  # gives way: back to where it came from ...
+    assert st.pose.x == pytest.approx(1.0) and not st.blocked
+    assert st.target == (-1.0, 0.0)  # ... then on as before
+
+
+def test_wanders_elsewhere_after_waiting_long_for_the_robot():
+    area = ((-1.0, 1.0), (-1.0, 1.0))
+    st = MoverState(spec(route=[], wander=area, seed=1))
+    target = st.target
+    robot = Pose2D(0.5 * target[0], 0.5 * target[1], 0.0)
+    run(st, 3.5, robot)
+    assert st.target != target
 
 
 def test_does_not_wait_for_a_robot_beside_its_path():
