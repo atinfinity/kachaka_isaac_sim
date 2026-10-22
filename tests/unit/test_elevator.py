@@ -5,8 +5,10 @@ import pytest
 from kachaka_isaac_sim.config import load_config
 from kachaka_isaac_sim.drive import NoisyOdometry, Pose2D
 from kachaka_isaac_sim.elevator import (
+    FLOOR_HEIGHT,
     FLOOR_LOOKS,
     FLOOR_SPACING,
+    PLATFORM_THICKNESS,
     ElevatorSpec,
     ElevatorState,
     car_walls,
@@ -14,7 +16,11 @@ from kachaka_isaac_sim.elevator import (
     floor_look,
     floor_of,
     label_segments,
+    logical_pose,
+    platform_z,
     shifted,
+    slab_tiles,
+    stage_offset,
 )
 from kachaka_isaac_sim.floor_maps import floor_map
 from kachaka_isaac_sim.layout import LayoutError, parse_layout
@@ -234,3 +240,80 @@ def test_floor_label_segments():
 def test_floors_look_different():
     assert floor_look(0) != floor_look(1)
     assert floor_look(0) == floor_look(len(FLOOR_LOOKS))
+
+
+# --- stacked floors -----------------------------------------------------------
+def test_stage_offset_lifts_upper_floors_over_the_first():
+    assert stage_offset(0, "vertical") == (0.0, 0.0, 0.0)
+    assert stage_offset(2, "side") == (0.0, 0.0, 0.0)
+    assert stage_offset(2, "vertical") == (-2 * FLOOR_SPACING, 0.0, 2 * FLOOR_HEIGHT)
+
+
+def test_logical_pose_takes_the_floor_from_the_height():
+    p = Pose2D(1.0, 0.5, 0.3)
+    assert logical_pose(p, 0.0, "vertical", 3) == p
+    assert logical_pose(p, FLOOR_HEIGHT + 0.01, "vertical", 3) == shifted(p, 1)
+    assert logical_pose(p, 0.4 * FLOOR_HEIGHT, "vertical", 3) == p  # still nearer the first
+    assert logical_pose(p, 9 * FLOOR_HEIGHT, "vertical", 3) == shifted(p, 2)
+    assert logical_pose(p, FLOOR_HEIGHT, "side", 3) == p
+
+
+def test_slab_tiles_cover_all_but_the_hole():
+    outer, hole = (0.0, 0.0, 4.0, 3.0), (1.0, 1.0, 2.0, 2.0)
+    tiles = slab_tiles(outer, hole)
+    assert sum((x1 - x0) * (y1 - y0) for x0, y0, x1, y1 in tiles) == pytest.approx(12.0 - 1.0)
+    for x, y in [(0.5, 0.5), (3.5, 2.5), (1.5, 0.5), (2.5, 1.5)]:
+        assert any(x0 < x < x1 and y0 < y < y1 for x0, y0, x1, y1 in tiles)
+    assert not any(x0 < 1.5 < x1 and y0 < 1.5 < y1 for x0, y0, x1, y1 in tiles)
+    assert slab_tiles(outer, (5.0, 5.0, 6.0, 6.0)) == [outer]
+    assert len(slab_tiles(outer, (0.0, 1.0, 1.0, 3.0))) == 2  # at a corner
+
+
+def test_inside_rect_is_the_car_inside():
+    s = spec()
+    x0, y0, x1, y1 = s.inside_rect(0, ROOM_WALL)
+    w, d = s.size
+    # Yaw -90 degrees: the car lies along +x from the doorway.
+    assert (x0, x1) == pytest.approx((POSE.x + ROOM_WALL / 2, POSE.x + ROOM_WALL / 2 + d))
+    assert (y0, y1) == pytest.approx((-w / 2, w / 2))
+    assert s.inside(Pose2D((x0 + x1) / 2, 0.0, 0.0), 0, ROOM_WALL)
+    assert s.inside_rect(1, ROOM_WALL)[0] == pytest.approx(x0 + FLOOR_SPACING)
+    assert s.outer_rect(0, ROOM_WALL) == pytest.approx((x0 - ROOM_WALL, y0 - ROOM_WALL, x1 + ROOM_WALL,
+                                                        y1 + ROOM_WALL))
+
+
+def test_position_eases_between_floors_while_riding():
+    st = ElevatorState(spec(ride=2.0))
+    assert st.position == 0.0
+    st.go("3F")
+    run(st, "open")
+    run(st, "closed")
+    assert st.phase == "riding" and st.position == 0.0
+    seen = []
+    while st.phase == "riding":
+        run(st)
+        seen.append(st.position)
+    assert seen == sorted(seen) and seen[-1] == 2.0
+    assert 0.9 < seen[len(seen) // 2 - 1] < 1.1  # halfway at half time
+    assert platform_z(st.position) == pytest.approx(2 * FLOOR_HEIGHT + 0.001 - PLATFORM_THICKNESS / 2)
+
+
+def test_layout_vertical_stack():
+    lay = parse_layout({**FLOORS, "elevator": {**FLOORS["elevator"], "stack": "vertical"}}, world="room")
+    assert lay.elevator.stack == "vertical"
+    assert lay.walls[1] == (FLOOR_SPACING, 1, FLOOR_SPACING + 1, 1)  # still laid out side by side
+    assert parse_layout(FLOORS, world="room").elevator.stack == "side"
+    assert elevator_spec(lay.elevator, lay.floors, load_config().elevator).stack == "vertical"
+
+
+@pytest.mark.parametrize("elevator, floor2, msg", [
+    ({"stack": "up"}, {}, "stack"),
+    ({"stack": "vertical", "pose": [2.525, 0.0, 0.5]}, {}, "90 degrees"),
+    ({"stack": "vertical"}, {"doors": [{"pose": [0.0, 0.0, 0.0]}]}, "first floor"),
+    ({"stack": "vertical"}, {"people": [{"pose": [0.0, 0.0, 0.0], "route": [[1.0, 0.0]]}]}, "first floor"),
+])
+def test_layout_vertical_stack_errors(elevator, floor2, msg):
+    data = {"world": "room", "floors": [{"name": "1F"}, {"name": "2F", **floor2}],
+            "elevator": {"pose": [2.525, 0.0, -1.5708], **elevator}}
+    with pytest.raises(LayoutError, match=msg):
+        parse_layout(data, world="room")

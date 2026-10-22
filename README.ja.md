@@ -351,6 +351,22 @@ ros2 topic echo /kachaka/sim/elevator   # {"floor": "2F", "state": "open", "robo
 kachaka-api にはエレベーターの呼び出しがないため `sim/elevator/go` はシミュレータ専用で、かごの大きさ
 （1.4 × 1.4 m）、ドア（0.9 m）、時間は推定です（`config/robot.yaml` の `elevator`）。
 
+#### フロアを縦に積む
+
+`elevator` に `stack: vertical` を書くと、フロアを 3 m（推定）ずつ縦に積み、かごの床を台にして
+ロボット（とシェルフ）を昇降路に沿って運びます。テレポートはしません。レイアウトの書き方は同じ
+（フロア k は x + k × 10 m）なので同じ保存地図が使え、各フロアの map 座標系は同じ x, y の開始位置です。
+`sim/elevator` には `stack` と `robot_z`（1 階からの高さ）が加わります。上の階にはドアと動く人・箱を
+置けません。かごの向きは 90° の倍数にします。
+
+![layouts/elevator_vertical.yaml: 同じ走行をフロアを縦に積んで。カメラはロボットを追って 2 階の床を抜けて上がる](docs/elevator_vertical.gif)
+
+```bash
+python3 scripts/make_maps.py layouts/elevator.yaml
+scripts/run_sim.sh --layout layouts/elevator_vertical.yaml
+ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/elevator_1F.yaml
+```
+
 ### レイアウトファイル
 
 `--layout FILE` で YAML ファイルを読み、ロボットの開始位置と、充電器・シェルフ・

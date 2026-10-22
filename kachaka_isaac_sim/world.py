@@ -126,6 +126,54 @@ def add_floor_with_drops(stage: Usd.Stage, holes, extent: float = 20.0, thicknes
                 approximation="none")
 
 
+def add_slab(stage: Usd.Stage, root: str, tiles, thickness: float = 0.1, overlap: float = 0.001) -> None:
+    """A floor slab of boxes (x0, y0, x1, y1), top at z=0, for a stacked
+    floor (the elevator's shaft is the gap between the tiles). Exact triangle
+    meshes, overlapping, as add_floor_with_drops."""
+    UsdGeom.Xform.Define(stage, root)
+    for i, (x0, y0, x1, y1) in enumerate(tiles):
+        add_box(stage, f"{root}/tile_{i:02d}", ((x0 + x1) / 2, (y0 + y1) / 2, -thickness / 2),
+                (x1 - x0 + 2 * overlap, y1 - y0 + 2 * overlap, thickness), (0.62, 0.66, 0.72),
+                approximation="none")
+
+
+def add_platform(stage: Usd.Stage, path: str, rect, thickness: float, z: float) -> None:
+    """The elevator car's floor as a kinematic box over `rect` (x0, y0, x1, y1),
+    its middle at `z`; elevator.Elevator moves it through its translate op."""
+    x0, y0, x1, y1 = rect
+    body = UsdGeom.Xform.Define(stage, path)
+    UsdGeom.Xformable(body.GetPrim()).AddTranslateOp().Set(Gf.Vec3d((x0 + x1) / 2, (y0 + y1) / 2, z))
+    UsdPhysics.RigidBodyAPI.Apply(body.GetPrim()).CreateKinematicEnabledAttr(True)
+    add_box(stage, f"{path}/floor", (0.0, 0.0, 0.0), (x1 - x0, y1 - y0, thickness), (0.55, 0.57, 0.6))
+
+
+def lift(stage: Usd.Stage, path: str, offset) -> None:
+    """Move the prim at `path` by `offset` (x, y, z) in its parent's frame,
+    before its own transform: a translate op (suffix "floor") put first, so
+    code that sets the prim's own ops (doors) keeps working."""
+    if not any(offset):
+        return
+    xf = UsdGeom.Xformable(stage.GetPrimAtPath(path))
+    ops = xf.GetOrderedXformOps()
+    op = xf.AddTranslateOp(opSuffix="floor")
+    op.Set(Gf.Vec3d(*offset))
+    xf.SetXformOpOrder([op, *ops])
+
+
+def lift_children(stage: Usd.Stage, root: str, offset_at) -> None:
+    """Lift each child of `root` by `offset_at(x, y)`, where (x, y) is the
+    child's place in the world (lift)."""
+    prim = stage.GetPrimAtPath(root)
+    if not prim.IsValid():
+        return
+    cache = UsdGeom.XformCache()
+    for child in prim.GetChildren():
+        if not child.IsA(UsdGeom.Xformable):
+            continue
+        t = cache.GetLocalToWorldTransform(child).ExtractTranslation()
+        lift(stage, str(child.GetPath()), offset_at(t[0], t[1]))
+
+
 def enable_contact_report(stage: Usd.Stage, path: str = BASE_LINK) -> None:
     """PhysX contact reports for the robot body (physics_sensors.ContactSensor).
     Apply before the simulation starts."""

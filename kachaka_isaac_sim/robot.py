@@ -68,6 +68,7 @@ class SimRobot:
         self.spawn = Pose2D(self.map_origin.x, self.map_origin.y, self.map_origin.yaw)
         self.gt = Pose2D(0.0, 0.0, 0.0)
         self.start_z = float(self.art.get_world_poses()[0].numpy()[0][2])
+        self.z = self.start_z  # base height, at the ground truth's rate
         self.hold_until = -math.inf  # cmd_vel is ignored until then (after a reset)
         self.next_shelves = start_time
         if shelves is not None:
@@ -187,7 +188,7 @@ class SimRobot:
             self.fused_odom.reset(o)  # SLAM starts its new map here, at the spawn pose
         else:
             self.fused_odom.teleported()
-        self.gt = Pose2D(o.x, o.y, o.yaw)
+        self.gt, self.z = Pose2D(o.x, o.y, o.yaw), self.start_z
         self.on_charger = self.charger is not None and self.charger.docked(self.gt)
         self.battery.reset()
         self.cliff.reset()
@@ -237,7 +238,7 @@ class SimRobot:
             qd = self.art.get_dof_velocities().numpy()[0]
             yaw = yaw_from_quat(*quat)
             gt = Pose2D(float(pos[0]), float(pos[1]), yaw)
-            self.gt = gt
+            self.gt, self.z = gt, float(pos[2])
             self.on_charger = self.charger is not None and self.charger.docked(gt)
             # The COM offset only adds a sideways term, so the forward
             # projection of the COM velocity is exact.

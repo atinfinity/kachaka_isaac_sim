@@ -1,8 +1,15 @@
-"""An elevator between floors. The floors stand side by side in one stage,
-FLOOR_SPACING apart along x, each with the same car at the same place; a
-ride closes the car's door, waits, moves what is in the car to the same
-place in the other floor's car and opens the door there. The robot's
-odometry does not see the move, as it would not on a real ride.
+"""An elevator between floors. Every floor is laid out as if the floors
+stood side by side, FLOOR_SPACING apart along x, each with the same car at
+the same place (the "logical" coordinates of layouts, maps and this module).
+In the stage the floors are either
+
+- side by side ("side"): a ride closes the car's door, waits, moves what is
+  in the car to the same place in the other floor's car and opens the door
+  there. The robot's odometry does not see the move, as it would not on a
+  real ride.
+- stacked ("vertical"): floor k is lifted to k * FLOOR_HEIGHT above the
+  first (stage_offset), and the car's floor is a platform that carries the
+  robot up or down the shaft (ElevatorState.position).
 
 Commands come from ROS (sim/elevator/go, a floor name) and the state goes
 out on sim/elevator (see ros_node.KachakaSimNode.add_elevator).
@@ -31,8 +38,10 @@ from .drive import Pose2D
 if TYPE_CHECKING:
     from pxr import Usd
 
-FLOOR_SPACING = 10.0  # m along x between floors in the stage
+FLOOR_SPACING = 10.0  # m along x between floors (logical coordinates)
+FLOOR_HEIGHT = 3.0  # m between stacked floors (assumed)
 PHASES = ("open", "closing", "riding", "opening")
+STACKS = ("side", "vertical")
 
 
 def floor_offset(k: int) -> tuple[float, float]:
@@ -48,6 +57,40 @@ def floor_of(x: float) -> int:
 def shifted(p: Pose2D, k: int) -> Pose2D:
     dx, dy = floor_offset(k)
     return Pose2D(p.x + dx, p.y + dy, p.yaw)
+
+
+def stage_offset(k: int, stack: str) -> tuple[float, float, float]:
+    """What moves floor k from its logical place to its place in the stage:
+    nothing side by side; stacked, back over the first floor and up."""
+    if stack != "vertical" or k == 0:
+        return 0.0, 0.0, 0.0
+    dx, dy = floor_offset(k)
+    return -dx, -dy, k * FLOOR_HEIGHT
+
+
+def logical_pose(p: Pose2D, z: float, stack: str, floors: int) -> Pose2D:
+    """A stage pose `p` at height `z` above the first floor in logical
+    coordinates: stacked, its floor (by height) moved out along x."""
+    if stack != "vertical":
+        return p
+    k = min(max(round(z / FLOOR_HEIGHT), 0), floors - 1)
+    return shifted(p, k)
+
+
+def slab_tiles(outer: tuple[float, float, float, float], hole: tuple[float, float, float, float]) \
+        -> list[tuple[float, float, float, float]]:
+    """Rectangles (x0, y0, x1, y1) that cover `outer` except `hole`."""
+    x0, y0, x1, y1 = outer
+    hx0, hy0, hx1, hy1 = max(hole[0], x0), max(hole[1], y0), min(hole[2], x1), min(hole[3], y1)
+    if hx0 >= hx1 or hy0 >= hy1:
+        return [outer]
+    tiles = [(x0, y0, x1, hy0), (x0, hy1, x1, y1), (x0, hy0, hx0, hy1), (hx1, hy0, x1, hy1)]
+    return [t for t in tiles if t[2] - t[0] > 1e-9 and t[3] - t[1] > 1e-9]
+
+
+def smoothstep(u: float) -> float:
+    u = min(max(u, 0.0), 1.0)
+    return u * u * (3.0 - 2.0 * u)
 
 
 # Each floor's look, visual only (no collider: the LiDAR and the step sensors
@@ -92,6 +135,7 @@ class ElevatorSpec:
     door_width: float = 0.9  # m
     ride: float = 5.0  # s per floor, door closed
     start: int = 0  # floor the car is at (and after sim/reset)
+    stack: str = "side"  # how the floors stand in the stage (STACKS)
 
     def local(self, p: Pose2D, k: int) -> tuple[float, float]:
         """`p` (world) in the car's frame on floor k."""
@@ -115,6 +159,24 @@ class ElevatorSpec:
         name = self.floors[k]
         return DoorSpec(f"elevator_{name}", f"/World/Elevator/F{k + 1}/door", shifted(self.pose, k),
                         self.door_width, "sliding", open=k == self.start)
+
+    def inside_rect(self, k: int, wall: float) -> tuple[float, float, float, float]:
+        """Floor k's car inside as a world (x0, y0, x1, y1); the car's yaw must
+        be a multiple of 90 degrees."""
+        o = shifted(self.pose, k)
+        c, s = round(math.cos(o.yaw)), round(math.sin(o.yaw))
+        w, d = self.size
+        xs, ys = [], []
+        for x in (-w / 2, w / 2):
+            for y in (wall / 2, wall / 2 + d):
+                xs.append(o.x + c * x - s * y)
+                ys.append(o.y + s * x + c * y)
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def outer_rect(self, k: int, wall: float) -> tuple[float, float, float, float]:
+        """Floor k's car with its walls, as inside_rect."""
+        x0, y0, x1, y1 = self.inside_rect(k, wall)
+        return x0 - wall, y0 - wall, x1 + wall, y1 + wall
 
 
 def car_walls(spec: ElevatorSpec, k: int, wall: float) -> list[tuple[tuple[float, float], tuple[float, float]]]:
@@ -144,6 +206,7 @@ class ElevatorState:
     target: int = field(init=False)
     phase: str = field(init=False)
     ride_left: float = field(init=False)
+    ride_total: float = field(init=False)
     held: bool = field(init=False)  # the door is held open for something in the doorway
 
     def __post_init__(self):
@@ -152,8 +215,17 @@ class ElevatorState:
     def reset(self) -> None:
         self.floor = self.target = self.spec.start
         self.phase = "open"
-        self.ride_left = 0.0
+        self.ride_left = self.ride_total = 0.0
         self.held = False
+
+    @property
+    def position(self) -> float:
+        """Where the car is, in floors from the first: between floors while
+        riding, easing in and out."""
+        if self.phase != "riding" or self.ride_total <= 0.0:
+            return float(self.floor)
+        u = smoothstep(1.0 - self.ride_left / self.ride_total)
+        return self.floor + (self.target - self.floor) * u
 
     def index(self, name: str) -> int | None:
         return self.spec.floors.index(name) if name in self.spec.floors else None
@@ -184,7 +256,7 @@ class ElevatorState:
                 out.append(("door", self.floor, True))
             elif door == "closed" and not blocked:
                 self.phase = "riding"
-                self.ride_left = abs(self.target - self.floor) * self.spec.ride
+                self.ride_left = self.ride_total = abs(self.target - self.floor) * self.spec.ride
         elif self.phase == "riding":
             self.ride_left -= dt
             if self.ride_left <= 0.0:
@@ -197,13 +269,27 @@ class ElevatorState:
         return out
 
 
+PLATFORM_PATH = "/World/Elevator/Platform"
+PLATFORM_THICKNESS = 0.1  # m
+# The platform reaches this far under the car walls and the slab round the
+# shaft (kinematic and static bodies do not collide), so no gap shows up to
+# the step sensors at the doorway.
+PLATFORM_OVERLAP = 0.002  # m
+
+
+def platform_z(position: float) -> float:
+    """The platform's middle for the car at `position` (floors from the
+    first): its top just above that floor."""
+    return position * FLOOR_HEIGHT + 0.001 - PLATFORM_THICKNESS / 2
+
+
 def elevator_spec(layout_elevator, floors: list[str], cfg: SimpleNamespace) -> ElevatorSpec:
     """The ElevatorSpec for a layout's elevator (layout.Elevator), with the
     config's `elevator` section for what the layout leaves out."""
     e = layout_elevator
     size = tuple(e.size) if e.size else tuple(float(v) for v in cfg.size)
     return ElevatorSpec(e.pose, list(floors), size, float(e.door_width or cfg.door_width),
-                        float(e.ride or cfg.ride), floors.index(e.start) if e.start else 0)
+                        float(e.ride or cfg.ride), floors.index(e.start) if e.start else 0, e.stack)
 
 
 class Elevator:
@@ -212,18 +298,37 @@ class Elevator:
     a finished ride once, for moving what was in the car."""
 
     def __init__(self, stage: Usd.Stage, spec: ElevatorSpec, door_cfg: SimpleNamespace, wall: float, robot_pose,
-                 robot_radius: float):
+                 robot_radius: float, robot_z=None):
         from .doors import Doors
 
         self.spec = spec
         self.wall = wall
         self.state = ElevatorState(spec)
         self.doors = Doors(stage, [spec.door(k) for k in range(len(spec.floors))], door_cfg, wall)
-        self.robot_pose = robot_pose  # () -> world Pose2D
+        self.robot_pose = robot_pose  # () -> logical Pose2D
+        self.robot_z = robot_z  # () -> height above the first floor; stacked only
         self.robot_radius = robot_radius
         self.ride: tuple[int, int] | None = None
         self.changed = True
         self.robot_place = None  # (floor, in the car) as last published
+        self.platform = None  # stacked: the platform's translate op
+        if spec.stack == "vertical":
+            from pxr import UsdGeom
+
+            prim = stage.GetPrimAtPath(PLATFORM_PATH)
+            self.platform = next(op for op in UsdGeom.Xformable(prim).GetOrderedXformOps()
+                                 if op.GetOpType() == UsdGeom.XformOp.TypeTranslate)
+            self.platform_xy = self.platform.Get()
+            self.platform_z = None
+            self._move_platform()
+
+    def _move_platform(self) -> None:
+        from pxr import Gf
+
+        z = platform_z(self.state.position)
+        if z != self.platform_z:
+            self.platform_z = z
+            self.platform.Set(Gf.Vec3d(self.platform_xy[0], self.platform_xy[1], z))
 
     def go(self, name: str) -> tuple[bool, str]:
         ok, msg = self.state.go(name)
@@ -235,6 +340,8 @@ class Elevator:
         self.doors.reset()
         self.ride = None
         self.changed = True
+        if self.platform is not None:
+            self._move_platform()
 
     def step(self, dt: float) -> None:
         st = self.state
@@ -251,6 +358,8 @@ class Elevator:
             else:
                 self.ride = action[1:]
         self.doors.step(dt)
+        if self.platform is not None:
+            self._move_platform()
         if (st.phase, st.floor) != before or self.doors.take_changed():
             self.changed = True
 
@@ -264,6 +373,9 @@ class Elevator:
 
     def status(self, robot: Pose2D) -> dict:
         st, names = self.state, self.spec.floors
-        return {"floors": names, "floor": names[st.floor], "target": names[st.target], "state": st.phase,
-                "door": self.doors.states[st.floor].state, "robot_floor": names[min(floor_of(robot.x), len(names) - 1)],
-                "robot_in_car": self.spec.inside(robot, st.floor, self.wall)}
+        out = {"floors": names, "floor": names[st.floor], "target": names[st.target], "state": st.phase,
+               "door": self.doors.states[st.floor].state, "robot_floor": names[min(floor_of(robot.x), len(names) - 1)],
+               "robot_in_car": self.spec.inside(robot, st.floor, self.wall), "stack": self.spec.stack}
+        if self.robot_z is not None:
+            out["robot_z"] = round(self.robot_z(), 3)
+        return out

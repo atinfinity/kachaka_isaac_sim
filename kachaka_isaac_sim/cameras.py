@@ -153,11 +153,12 @@ class RecordCamera:
             name, rgb = item
             Image.fromarray(rgb).save(self.out / name, compress_level=1)
 
-    def capture(self, sim_time: float, robot_xy: tuple[float, float] | None = None) -> None:
+    def capture(self, sim_time: float, robot_xy: tuple[float, ...] | None = None) -> None:
         import time
 
         if self.follow and robot_xy is not None:
-            self._translate.Set(Gf.Vec3d(self.eye[0] + robot_xy[0], self.eye[1] + robot_xy[1], self.eye[2]))
+            dz = robot_xy[2] if len(robot_xy) > 2 else 0.0  # height above the start, on stacked floors
+            self._translate.Set(Gf.Vec3d(self.eye[0] + robot_xy[0], self.eye[1] + robot_xy[1], self.eye[2] + dz))
         if sim_time + 1e-9 < self.next_time:
             return
         self.next_time = max(self.next_time + self.period, sim_time)

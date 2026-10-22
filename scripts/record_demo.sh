@@ -8,6 +8,7 @@
 #   scripts/record_demo.sh door   # Nav2 replans when a door closes and opens -> docs/door.gif
 #   scripts/record_demo.sh movers # Nav2 goals among people and a cart on the move -> docs/movers.gif
 #   scripts/record_demo.sh elevator  # Nav2 into the elevator on 1F, ride, out on 2F -> docs/elevator.gif
+#   scripts/record_demo.sh elevator_vertical  # the same with the floors stacked -> docs/elevator_vertical.gif
 #   scripts/record_demo.sh scene office  # Nav2 route in an Isaac Sim scene -> build/scene_office.mp4
 #                                        # (both views follow the robot)
 #   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
@@ -72,6 +73,19 @@ case "$DEMO" in
         docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$PWD/maps:/repo/maps" \
             kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py /repo/layouts/elevator.yaml --out /repo/maps
         RUN="python3 /tests/ros_elevator_check.py --captions /build/elevator/captions.csv" ;;
+    elevator_vertical)
+        GIF=docs/elevator_vertical.gif
+        # Follows the robot up too; from above, near clip at 4.4 m: what is
+        # higher than 2.6 m over the robot's floor (the floor above) is cut.
+        VIEW=(0.0 -1.2 7.0 0.3 0.0 0.0)
+        SIM_ARGS=(--layout layouts/elevator_vertical.yaml --record-follow --record-near 4.4)
+        LAUNCH="navigation.launch.py map:=/maps/elevator_1F.yaml"
+        RVIZ_SED="/Name: Current View/a\\      Target Frame: base_footprint"
+        LABEL="RViz: Nav2 on each floor's map"
+        SPEED=${SPEED:-4}
+        docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$PWD/maps:/repo/maps" \
+            kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py /repo/layouts/elevator.yaml --out /repo/maps
+        RUN="python3 /tests/ros_elevator_check.py --captions /build/elevator_vertical/captions.csv" ;;
     scene)
         WORLD=${2:?usage: $0 scene <office|hospital|warehouse|simple_room>}
         DEMO=scene_$WORLD
@@ -120,7 +134,7 @@ case "$DEMO" in
         COMPOSE_ARGS=(--height 540)
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_speed_demo.py /build/speed/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|movers|elevator|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
+    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|movers|elevator|elevator_vertical|scene <world>|api|front_stop|cliff|speed]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 DISPLAY_NUM=99

@@ -396,6 +396,25 @@ kachaka-api has no elevator calls, so `sim/elevator/go` is sim-only, and the
 car's size (1.4 × 1.4 m), door (0.9 m) and timing are assumed (`elevator` in
 `config/robot.yaml`).
 
+#### Stacked floors
+
+With `stack: vertical` in the `elevator` entry the floors stand one above
+the other, 3 m apart (assumed), and the car's floor is a platform that
+carries the robot (and a shelf) up the shaft during the ride: nothing is
+teleported. The layout is written as before (floor k at x + k × 10 m), so
+the same saved maps fit, and each floor's map frame is the spawn pose at the
+same x, y. `sim/elevator` adds `stack` and `robot_z` (height above the
+first floor). Upper floors may not have doors or moving people and boxes,
+and the car's yaw must be a multiple of 90°.
+
+![layouts/elevator_vertical.yaml: the same run with the floors stacked; the camera follows the robot up through 2F's floor](docs/elevator_vertical.gif)
+
+```bash
+python3 scripts/make_maps.py layouts/elevator.yaml
+scripts/run_sim.sh --layout layouts/elevator_vertical.yaml
+ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/elevator_1F.yaml
+```
+
 ### Layout files
 
 `--layout FILE` reads a YAML file that says where the robot starts and where

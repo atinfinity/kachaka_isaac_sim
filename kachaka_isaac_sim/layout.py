@@ -51,7 +51,10 @@ k at x + k * elevator.FLOOR_SPACING). Each floor is the room with a doorway
 cut where the elevator's door is. The elevator's pose is the middle of its
 doorway, x along the wall, with the car on the +y side; size, door_width
 and ride (s per floor) default to the config's `elevator` section, start
-to the first floor.
+to the first floor. stack: vertical stacks the floors in the stage instead
+(floor k lifted by k * elevator.FLOOR_HEIGHT, the car's floor a platform
+that carries the robot up); its yaw must be a multiple of 90 degrees, and
+doors and moving people or boxes are only on the first floor.
 
 Plain Python: the simulator reads it before Isaac Sim starts.
 """
@@ -66,13 +69,13 @@ from pathlib import Path
 import yaml
 
 from .drive import Pose2D
-from .elevator import floor_offset
+from .elevator import STACKS, floor_offset
 from .scenes import PERSON_COLLIDER, ROOM_BOXES, ROOM_SIZE, ROOM_WALL, SHELF_SIZE
 
 KEYS = ("world", "seed", "clearance", "spawn", "charger", "shelves", "locations", "people", "boxes", "walls",
         "doors", "drops", "floors", "elevator")
 FLOOR_KEYS = ("name", "people", "boxes", "walls", "doors")
-ELEVATOR_KEYS = ("pose", "size", "door_width", "ride", "start")
+ELEVATOR_KEYS = ("pose", "size", "door_width", "ride", "start", "stack")
 DOOR_KINDS = ("sliding", "hinged")
 # Footprint radii [m] for keeping randomised objects apart: half the diagonal
 # of each object's outline.
@@ -125,6 +128,7 @@ class Elevator:
     door_width: float | None = None
     ride: float | None = None
     start: str | None = None  # floor name; None: the first
+    stack: str = "side"  # elevator.STACKS: floors side by side, or stacked with a moving car floor
 
 
 @dataclass
@@ -293,10 +297,15 @@ def _floors(data: dict, out: Layout, world: str, path: str) -> None:
     start = str(e["start"]) if e.get("start") is not None else None
     if start is not None and start not in out.floors:
         raise LayoutError(f"{path}: elevator.start {start!r} is not a floor")
+    stack = str(e.get("stack", "side"))
+    if stack not in STACKS:
+        raise LayoutError(f"{path}: elevator.stack {stack!r}: one of {', '.join(STACKS)}")
     out.elevator = Elevator(Pose2D(*_numbers(e["pose"], 3, "elevator.pose", path)),
                             _numbers(e["size"], 2, "elevator.size", path) if e.get("size") else None,
                             float(e["door_width"]) if e.get("door_width") else None,
-                            float(e["ride"]) if e.get("ride") else None, start)
+                            float(e["ride"]) if e.get("ride") else None, start, stack)
+    if stack == "vertical" and abs(math.remainder(out.elevator.pose.yaw, math.pi / 2)) > 1e-3:
+        raise LayoutError(f"{path}: elevator.pose: a stacked elevator's yaw must be a multiple of 90 degrees")
     for k, f in enumerate(floors):
         sub = parse_layout({key: v for key, v in f.items() if key != "name"}, out.seed + k, world,
                            f"{path}: floors[{k}]")
@@ -308,6 +317,10 @@ def _floors(data: dict, out: Layout, world: str, path: str) -> None:
             out.floor_people += sub.people or []
             out.floor_people_motion += sub.people_motion
             continue
+        if stack == "vertical" and (sub.doors or any(b.motion for b in sub.boxes)
+                                    or any(m is not None for m in sub.people_motion)):
+            raise LayoutError(f"{path}: floors[{k}]: doors and moving boxes or people are only on the first "
+                              "floor with a stacked elevator")
         dx, dy = floor_offset(k)
         out.walls += [(x0 + dx, y0 + dy, x1 + dx, y1 + dy) for x0, y0, x1, y1 in sub.walls]
         for d in sub.doors:

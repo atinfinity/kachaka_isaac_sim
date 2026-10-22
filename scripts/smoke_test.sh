@@ -14,7 +14,8 @@
 # tests/ros_nav_check.py --no-collisions in a fourth with people and a cart
 # moving across the way (layouts/room_movers.yaml), and
 # tests/ros_elevator_check.py in a fifth with two floors and an elevator
-# (layouts/elevator.yaml), on saved maps per floor.
+# (layouts/elevator.yaml), on saved maps per floor, and again with the floors
+# stacked (layouts/elevator_vertical.yaml).
 #
 # Needs the ROS image: docker compose -f docker/compose.yaml build
 set -euo pipefail
@@ -125,6 +126,15 @@ if $NAV; then
     start_nav navigation.launch.py map:=/maps/elevator_1F.yaml
     echo "[smoke] running ros_elevator_check"
     ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_elevator_check.py || FAILED+=(ros_elevator_check)
+    docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
+
+    # The same with the floors stacked: the car's floor carries the robot up.
+    stop_sim
+    LOG=build/smoke_sim_elevator_vertical.log
+    start_sim --layout layouts/elevator_vertical.yaml
+    start_nav navigation.launch.py map:=/maps/elevator_1F.yaml
+    echo "[smoke] running ros_elevator_check (stacked floors)"
+    ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_elevator_check.py || FAILED+=(ros_elevator_check_vertical)
     docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
 fi
 

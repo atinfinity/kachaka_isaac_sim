@@ -540,15 +540,36 @@ static boxes (`--wall`, `world.add_wall`).
 ## Elevator
 
 Issue #48. `kachaka_isaac_sim/elevator.py`, `floor_maps.py`,
-`scripts/make_maps.py`, `layouts/elevator.yaml`.
+`scripts/make_maps.py`, `layouts/elevator.yaml`, `layouts/elevator_vertical.yaml`.
 
 - **Floors side by side**: floor k is the room moved k × 10 m along x
-  (`FLOOR_SPACING`), not stacked in z. Stacked floors would need a floor
-  slab with holes for nothing and would move the robot in z, which the cliff
-  sensors (they compare with the start height) and the ground plane do not
-  expect. A layout's `floors` entries are sub-layouts (walls, doors, boxes,
-  people) moved to their floor; shelves, the charger and the spawn pose stay
-  on the first floor.
+  (`FLOOR_SPACING`) by default. A layout's `floors` entries are sub-layouts
+  (walls, doors, boxes, people) moved to their floor; shelves, the charger
+  and the spawn pose stay on the first floor. These side-by-side
+  coordinates are the "logical" ones that layouts, `floor_maps`, `floor_of`
+  and `ElevatorState` always use.
+- **Stacked floors** (`elevator.stack: vertical`): the stage is built in
+  logical coordinates, then each upper floor's groups (its room, look and
+  car) and each wall, box and person on it (by `floor_of` of its place) get
+  an extra translate op put first (`world.lift`, `stage_offset`): back to
+  x of the first floor and `FLOOR_HEIGHT` (3 m, assumed) up per floor. Each
+  upper floor has a slab (`add_slab`, exact triangle meshes, top at the
+  floor) over the room and car with the car's inside left open
+  (`slab_tiles`). Car walls are `FLOOR_HEIGHT` tall, so they line the shaft.
+  The car's floor is a kinematic box (`/World/Elevator/Platform`) that
+  `Elevator` moves every pre-physics step to `ElevatorState.position`
+  (smoothstep between floors while riding); it reaches 2 mm under the walls
+  and slab (kinematic and static bodies do not collide), so the step
+  sensors see no gap at the doorway. Friction carries the robot and any
+  shelf; nothing is teleported, `odom` and the map frame need no shift. The
+  robot's logical pose (`logical_pose`: floor from its height above the
+  start, rounded) is what `Elevator`, `sim/elevator` and `to_map` use;
+  `sim/elevator` adds `stack` and `robot_z`. Doors and movers (they set
+  world poses) on upper floors are not lifted, so the layout rejects them;
+  the car's yaw must be a multiple of 90° (`inside_rect`). Object detection
+  does not see people on upper floors (its targets are logical poses).
+  The recording camera follows the robot's height (`--record-follow`), and
+  a far near clip cuts the floor above.
 - **Car**: walls behind a doorway in a room wall, and a sliding door
   (`doors.Doors`, its own instance, not listed on `sim/doors`) on each
   floor. `ElevatorState` is plain Python: `go` sets the target, `step` closes
@@ -556,7 +577,7 @@ Issue #48. `kachaka_isaac_sim/elevator.py`, `floor_maps.py`,
   arrival and opens the door on the new floor. While closing, the door
   reopens as long as the robot's base_footprint is within `door_sensor` of
   the doorway (assumed door sensor).
-- **The ride** happens between physics steps (main loop, `take_ride`): the
+- **The ride** (side by side) happens between physics steps (main loop, `take_ride`): the
   robot articulation and any shelf inside the car (and the towed shelf) are
   moved by the floor offset with their velocities kept. `NoisyOdometry.shift`
   moves its origin by the same amount, so `odom` does not jump; wheel

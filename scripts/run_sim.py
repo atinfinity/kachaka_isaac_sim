@@ -277,6 +277,32 @@ def layout_objects(layout, charger_pose, shelf_specs, people, boxes_root):
     return objs
 
 
+def stack_floors(stage, spec, boxes_root) -> None:
+    """Stack the floors (elevator.stage_offset): lift each upper floor's room,
+    look and car, and the walls, boxes and people on it (by where they are),
+    and add the car's platform at the start floor."""
+    from kachaka_isaac_sim import world
+    from kachaka_isaac_sim.elevator import (
+        PLATFORM_OVERLAP,
+        PLATFORM_PATH,
+        PLATFORM_THICKNESS,
+        floor_of,
+        platform_z,
+        stage_offset,
+    )
+
+    n = len(spec.floors)
+    for k in range(1, n):
+        for group in (f"/World/Floors/F{k + 1}", f"/World/Floors/Look{k + 1}", f"/World/Elevator/F{k + 1}"):
+            world.lift(stage, group, stage_offset(k, spec.stack))
+    for root in ("/World/Walls", boxes_root, "/World/People"):
+        world.lift_children(stage, root, lambda x, y: stage_offset(min(floor_of(x), n - 1), spec.stack))
+    x0, y0, x1, y1 = spec.inside_rect(0, world.ROOM_WALL)
+    d = PLATFORM_OVERLAP
+    world.add_platform(stage, PLATFORM_PATH, (x0 - d, y0 - d, x1 + d, y1 + d), PLATFORM_THICKNESS,
+                       platform_z(spec.start))
+
+
 def check_overlaps(objs, spawn) -> list[str]:
     """Warnings for objects whose outline overlaps another collider (PhysX
     overlap query, from 3 cm above the floor). Needs the simulation running."""
@@ -341,6 +367,8 @@ def main() -> int:
     app.update()
     SimulationManager.switch_physics_engine("physx")
 
+    from pxr import UsdGeom
+
     from kachaka_isaac_sim import world
     from kachaka_isaac_sim.ros_node import KachakaSimNode
 
@@ -353,18 +381,37 @@ def main() -> int:
         world.add_floor_with_drops(stage, holes)
     elevator_spec = None
     if layout and layout.elevator:
-        from kachaka_isaac_sim.elevator import car_walls, elevator_spec, floor_look, floor_offset, label_segments
+        from kachaka_isaac_sim.elevator import (
+            FLOOR_HEIGHT,
+            car_walls,
+            elevator_spec,
+            floor_look,
+            floor_offset,
+            label_segments,
+            slab_tiles,
+        )
         from kachaka_isaac_sim.scenes import ROOM_SIZE
 
         elevator_spec = elevator_spec(layout.elevator, layout.floors, cfg.elevator)
         e = elevator_spec
+        stacked = e.stack == "vertical"
         opening = [(e.pose.x, e.pose.y, e.pose.yaw, e.door_width)]
         world.add_simple_room(stage, openings=opening)
         for k in range(len(e.floors)):
+            for group in (f"/World/Floors/F{k + 1}", f"/World/Floors/Look{k + 1}", f"/World/Elevator/F{k + 1}"):
+                UsdGeom.Xform.Define(stage, group)  # lifted as a whole when stacked
             if k:
                 world.add_simple_room(stage, f"/World/Floors/F{k + 1}", floor_offset(k), opening)
+            if k and stacked:
+                # The floor under floor k, with the shaft left open.
+                (ox, oy), (sx, sy), w = floor_offset(k), ROOM_SIZE, world.ROOM_WALL
+                room = (ox - sx / 2 - w, oy - sy / 2 - w, ox + sx / 2 + w, oy + sy / 2 + w)
+                world.add_slab(stage, f"/World/Floors/F{k + 1}/slab",
+                               [room, *slab_tiles(e.outer_rect(k, w), e.inside_rect(k, w))])
             for i, (a, b) in enumerate(car_walls(e, k, world.ROOM_WALL)):
-                world.add_wall(stage, f"/World/Elevator/F{k + 1}/wall_{i}", a, b)
+                # Stacked, the car walls are the shaft, floor to floor.
+                world.add_wall(stage, f"/World/Elevator/F{k + 1}/wall_{i}", a, b,
+                               height=FLOOR_HEIGHT if stacked else world.ROOM_HEIGHT)
             world.add_door(stage, e.door(k), cfg.door)
             # Each floor's tint and name on the floor, so a ride shows (visual only).
             (ox, oy), (sx, sy) = floor_offset(k), ROOM_SIZE
@@ -409,6 +456,8 @@ def main() -> int:
         world.add_person(stage, f"/World/People/P{i + 1:02d}", pose, float(cfg.people.height), character,
                          kinematic=motion is not None)
     moving = mover_specs(cfg, layout, people, motions, boxes_root)
+    if elevator_spec and elevator_spec.stack == "vertical":
+        stack_floors(stage, elevator_spec, boxes_root)
     world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
     world.apply_contact_materials(stage, cfg.drive)
     world.disable_pin_collision(stage)
@@ -531,16 +580,34 @@ def main() -> int:
         node.add_movers()
         print(f"[kachaka] {len(moving)} moving: {', '.join(m.path.rpartition('/')[2] for m in moving)}", flush=True)
 
+    def robot_height() -> float:
+        """The base's height above where it started."""
+        return robot.z - robot.start_z
+
+    def robot_place():
+        """The robot's logical pose (elevator.logical_pose): its floor moved
+        out along x, also when the floors are stacked."""
+        if elevator_spec is None:
+            return robot.gt
+        from kachaka_isaac_sim.elevator import logical_pose
+
+        return logical_pose(robot.gt, robot_height(), elevator_spec.stack, len(elevator_spec.floors))
+
     elevator = None
     if elevator_spec:
         from kachaka_isaac_sim.elevator import Elevator
 
-        elevator = Elevator(stage, elevator_spec, cfg.door, world.ROOM_WALL, lambda: robot.gt,
-                            float(cfg.elevator.door_sensor))
-        node.add_elevator(elevator, lambda: robot.gt)
+        elevator = Elevator(stage, elevator_spec, cfg.door, world.ROOM_WALL, robot_place,
+                            float(cfg.elevator.door_sensor),
+                            robot_height if elevator_spec.stack == "vertical" else None)
+        node.add_elevator(elevator, robot_place)
 
     def ride(start: int, end: int) -> None:
-        """Carry what is in the car from floor `start` to floor `end`."""
+        """Carry what is in the car from floor `start` to floor `end` (side by
+        side; stacked, the platform has carried it)."""
+        if elevator_spec.stack == "vertical":
+            print(f"[kachaka] elevator: at {elevator_spec.floors[end]}", flush=True)
+            return
         (x0, y0), (x1, y1) = floor_offset(start), floor_offset(end)
         dx, dy = x1 - x0, y1 - y0
         if elevator_spec.inside(robot.gt, start, world.ROOM_WALL):
@@ -610,7 +677,7 @@ def main() -> int:
             t1 = time.perf_counter()
             publish_cameras(node, cameras, robot.t, tof_off=robot.sensors_paused, detector=detector)
             if recorder:
-                recorder.capture(robot.t - sim_start, (robot.gt.x, robot.gt.y))
+                recorder.capture(robot.t - sim_start, (robot.gt.x, robot.gt.y, robot_height()))
             timing[0] += t1 - t0
             timing[1] += time.perf_counter() - t1
             timing[2] += 1

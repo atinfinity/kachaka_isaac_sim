@@ -1,7 +1,8 @@
 """Nav2 from one floor to another by the elevator (#48).
 
-Run against the simulator started with layouts/elevator.yaml and Nav2 on
-the first floor's saved map (scripts/smoke_test.sh --nav does this):
+Run against the simulator started with layouts/elevator.yaml (or
+layouts/elevator_vertical.yaml, the floors stacked) and Nav2 on the first
+floor's saved map (scripts/smoke_test.sh --nav does this):
 
     python3 scripts/make_maps.py layouts/elevator.yaml
     scripts/run_sim.sh --layout layouts/elevator.yaml
@@ -9,7 +10,8 @@ the first floor's saved map (scripts/smoke_test.sh --nav does this):
 
 1. On 1F, Nav2 drives to the landing and into the car (door open).
 2. sim/elevator/go 2F: the door closes, the car rides, the door opens on 2F.
-   The robot must now be on 2F (ground truth 10 m further along x).
+   The robot must now be on 2F: ground truth 10 m further along x, or,
+   stacked, carried FLOOR_HEIGHT up (sim/elevator's robot_z) on the spot.
 3. The 2F map is loaded with AMCL's estimate from before the ride (TF map ->
    base_footprint; /amcl_pose lags after a small turn) (sim/map/load
    with "pose": command_server -> map_server, then AMCL until it holds the
@@ -48,6 +50,7 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 FLOOR_SPACING = 10.0  # m along x between floors in the stage (kachaka_isaac_sim/elevator.py)
+FLOOR_HEIGHT = 3.0  # m between stacked floors (elevator.py)
 LANDING = (1.7, 0.0, 0.0)  # in front of the car door on the east wall
 IN_CAR = (3.25, 0.0, math.pi)  # the car's middle, facing the door
 GOAL_2F = (-1.5, 0.2, math.pi)  # west of 2F's partition wall, below its desk
@@ -73,6 +76,7 @@ class ElevatorCheck(Node):
         self.tf = Buffer()
         self.tf_listener = TransformListener(self.tf, self)
         self.gt = None  # world frame
+        self.spacing = FLOOR_SPACING  # world x between floors: none when stacked
         self.amcl = None  # map frame
         self.elevator = None
         self.loaded = []
@@ -172,7 +176,7 @@ class ElevatorCheck(Node):
             handle.cancel_goal_async()
             return False, "timeout"
         ok = result.result().status == GoalStatus.STATUS_SUCCEEDED
-        err = math.hypot(self.gt[0] - floor * FLOOR_SPACING - x, self.gt[1] - y)
+        err = math.hypot(self.gt[0] - floor * self.spacing - x, self.gt[1] - y)
         return ok and err < TOLERANCE, \
             f"status {result.result().status}, error {err:.2f} m, {time.monotonic() - start:.0f} s"
 
@@ -199,6 +203,9 @@ def main():
         return ok
 
     print(f"elevator: {node.elevator}", flush=True)
+    stacked = node.elevator.get("stack") == "vertical"
+    if stacked:
+        node.spacing = 0.0
     check("car on 1F with the door open", node.elevator["floor"] == "1F" and node.elevator["state"] == "open"
           and node.elevator["door"] == "open", f"{node.elevator['floor']}, {node.elevator['state']}")
     check("AMCL at the spawn pose on 1F", node.set_pose((0.0, 0.0, 0.0)))
@@ -220,7 +227,13 @@ def main():
               f"{e['floor']}, {e['state']}, robot on {e['robot_floor']}, {time.monotonic() - t0:.0f} s")
         node.spin_until(lambda: False, 1.0)
         dx, dy = node.gt[0] - before[0], node.gt[1] - before[1]
-        check("carried 10 m along x", abs(dx - FLOOR_SPACING) < 0.05 and abs(dy) < 0.05, f"({dx:.3f}, {dy:.3f})")
+        if stacked:
+            dz = node.elevator.get("robot_z", 0.0)
+            check(f"carried {FLOOR_HEIGHT:.0f} m up", abs(dz - FLOOR_HEIGHT) < 0.05 and math.hypot(dx, dy) < 0.05,
+                  f"up {dz:.3f}, moved ({dx:.3f}, {dy:.3f})")
+        else:
+            check("carried 10 m along x", abs(dx - FLOOR_SPACING) < 0.05 and abs(dy) < 0.05,
+                  f"({dx:.3f}, {dy:.3f})")
         node.say(f"2F: switching to the {args.maps}_2F map")
         node.loaded.clear()
         node.map_load_pub.publish(String(data=json.dumps({"id": 1, "map_id": f"{args.maps}_2F",
@@ -230,14 +243,14 @@ def main():
         if check(f"load {args.maps}_2F with AMCL's pose", res["success"], res.get("message", "")):
             node.spin_until(lambda: False, 1.0)
             amcl, gt = node.map_pose(), node.gt
-            err = math.hypot(amcl[0] - (gt[0] - FLOOR_SPACING), amcl[1] - gt[1])
+            err = math.hypot(amcl[0] - (gt[0] - node.spacing), amcl[1] - gt[1])
             yaw_err = abs(wrap(amcl[2] - gt[2]))
             check("AMCL agrees with ground truth right after the switch", err < 0.15 and yaw_err < 0.1,
                   f"{err:.2f} m, {math.degrees(yaw_err):.1f} deg")
             node.say("2F (2F map): out of the car to the goal")
             check("out of the car to the 2F goal", *node.go(GOAL_2F, 1))
             amcl, gt = node.map_pose(), node.gt
-            err = math.hypot(amcl[0] - (gt[0] - FLOOR_SPACING), amcl[1] - gt[1])
+            err = math.hypot(amcl[0] - (gt[0] - node.spacing), amcl[1] - gt[1])
             check("AMCL agrees with ground truth on 2F", err < 0.2, f"{err:.2f} m")
             node.say("2F: arrived")
     check("no collisions", node.collisions == 0, f"{node.collisions}")
