@@ -488,7 +488,7 @@ machine through DDS discovery.
 | Blue line | Nav2's global plan | `/plan` |
 | Green outline | robot footprint | `/local_costmap/published_footprint` |
 | Dark grey / blue | shelf / towed shelf | `/shelf_markers` |
-| Orange cylinder / brown box | moving person / box (red while waiting for the robot), cyan arrow for its velocity | `/mover_markers` |
+| Orange cylinder / brown box | moving person / box (red while waiting for the robot), green arrow for its velocity | `/mover_markers` |
 | Violet / yellow / faint grey panel | door closed / opening or closing / open | `/door_markers` |
 
 The costmaps (off by default) use RViz's `costmap` scheme.

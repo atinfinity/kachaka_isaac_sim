@@ -19,7 +19,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 PERSON = ColorRGBA(r=0.95, g=0.6, b=0.2, a=0.8)
 BOX = ColorRGBA(r=0.7, g=0.55, b=0.35, a=0.8)
 BLOCKED = ColorRGBA(r=0.9, g=0.2, b=0.2, a=0.8)
-ARROW = ColorRGBA(r=0.2, g=0.8, b=0.9, a=0.9)
+ARROW = ColorRGBA(r=0.2, g=0.85, b=0.25, a=0.9)  # green
 LABEL = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
 ARROW_SECONDS = 1.0  # the arrow shows the distance covered in this time
 PARTS = 3  # body, label, arrow

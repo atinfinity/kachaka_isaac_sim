@@ -445,7 +445,7 @@ docker compose -f docker/compose.yaml up navigation
 | 青い線 | Nav2 のグローバルプラン | `/plan` |
 | 緑の枠 | ロボットのフットプリント | `/local_costmap/published_footprint` |
 | 濃い灰色 / 青 | シェルフ / 牽引中のシェルフ | `/shelf_markers` |
-| オレンジの円柱 / 茶色の箱 | 動く人 / 箱（ロボット待ちの間は赤）、水色の矢印は速度 | `/mover_markers` |
+| オレンジの円柱 / 茶色の箱 | 動く人 / 箱（ロボット待ちの間は赤）、緑の矢印は速度 | `/mover_markers` |
 | 紫 / 黄色 / 薄い灰色のパネル | ドア 閉 / 開閉中 / 開 | `/door_markers` |
 
 コストマップ（既定では非表示）は RViz の `costmap` 配色です。
