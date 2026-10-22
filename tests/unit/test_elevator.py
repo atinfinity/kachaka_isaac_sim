@@ -5,12 +5,15 @@ import pytest
 from kachaka_isaac_sim.config import load_config
 from kachaka_isaac_sim.drive import NoisyOdometry, Pose2D
 from kachaka_isaac_sim.elevator import (
+    FLOOR_LOOKS,
     FLOOR_SPACING,
     ElevatorSpec,
     ElevatorState,
     car_walls,
     elevator_spec,
+    floor_look,
     floor_of,
+    label_segments,
     shifted,
 )
 from kachaka_isaac_sim.floor_maps import floor_map
@@ -214,3 +217,20 @@ def test_noisy_odometry_does_not_see_a_shift():
     odom.shift(FLOOR_SPACING, 0.0)
     after = odom.update(Pose2D(1.5 + FLOOR_SPACING, 2.0, 0.3))
     assert (after.x, after.y, after.yaw) == pytest.approx((before.x, before.y, before.yaw))
+
+
+def test_floor_label_segments():
+    one = label_segments("1F", (0.0, 0.0), height=1.0)
+    assert len(one) == 2 + 4  # "1": b, c; "F": a, e, f, g
+    two = label_segments("2F", (0.0, 0.0), height=1.0)
+    assert len(two) == 5 + 4
+    for x0, y0, x1, y1 in one + two:
+        assert 0.0 <= x0 < x1 <= 1.2 and 0.0 <= y0 < y1 <= 1.0
+    # "F" starts a character later, after "1"'s space.
+    assert min(r[0] for r in one[2:]) == pytest.approx(0.7)
+    assert label_segments("?", (0.0, 0.0)) == []
+
+
+def test_floors_look_different():
+    assert floor_look(0) != floor_look(1)
+    assert floor_look(0) == floor_look(len(FLOOR_LOOKS))

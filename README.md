@@ -356,7 +356,9 @@ floor's car; then the door opens there. The odometry does not see the move.
 The door reopens while the robot is in the doorway, like a door sensor.
 `sim/elevator` (latched JSON) gives `floors`, `floor` (where the car is),
 `target`, `state` (open, closing, riding, opening), `door`, `robot_floor` and
-`robot_in_car`; `sim/reset` sends the car back to its start floor.
+`robot_in_car`; `sim/reset` sends the car back to its start floor. Each
+floor has its own floor tint and its name written on the floor (visual
+only; the sensors do not see them), so a ride shows in the viewport.
 
 ![layouts/elevator.yaml: Nav2 drives into the car on 1F, the car rides to 2F, the 2F map is loaded and Nav2 drives out past 2F's wall](docs/elevator.gif)
 
@@ -372,8 +374,13 @@ Each floor navigates on its own saved map. `scripts/make_maps.py` draws them
 from the layout (walls, the car, standing boxes; doors open). Each floor's
 map frame is the spawn pose moved to that floor, so a pose in the car reads
 the same on every floor's map. After a ride, load the next floor's map
-(kachaka-api `SwitchMap`, or `sim/map/load` with command_server) and give
-AMCL the same map pose on `/initialpose`. `tests/ros_elevator_check.py`
+with the robot's map pose from before the ride (TF `map` → `base_footprint`;
+`/amcl_pose` is only sent after 0.25 m or 0.2 rad of motion, so it can lag):
+kachaka-api `SwitchMap` with
+`initial_pose`, or `sim/map/load` with `"pose"`. command_server loads the
+map, gives AMCL the pose and answers once AMCL holds it, heading included
+(AMCL starts over on a new map, so an `/initialpose` sent on its own can be
+lost). `tests/ros_elevator_check.py`
 drives into the car on 1F, rides to 2F, switches the map and drives to a goal
 on 2F.
 

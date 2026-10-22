@@ -319,7 +319,8 @@ ros2 topic echo /kachaka/sim/doors   # {"doors": [{"id": "D01", "state": "closin
 かごへ移し、そこでドアが開きます。オドメトリはこの移動を見ません。ロボットが出入口にいる間は
 ドアセンサーのように開き直します。`sim/elevator`（latched の JSON）に `floors`、`floor`（かごの階）、
 `target`、`state`（open、closing、riding、opening）、`door`、`robot_floor`、`robot_in_car` を出します。
-`sim/reset` でかごは開始階に戻ります。
+`sim/reset` でかごは開始階に戻ります。フロアごとに床の色を変え、床にフロア名を描いています
+（見た目だけで、センサーには映りません）。乗ったことがビューポートで分かります。
 
 ![layouts/elevator.yaml: 1 階で Nav2 がかごに入り、2 階へ移動、2 階の地図を読み込んで 2 階の壁の先へ出る](docs/elevator.gif)
 
@@ -333,9 +334,12 @@ ros2 topic echo /kachaka/sim/elevator   # {"floor": "2F", "state": "open", "robo
 
 フロアごとに別の保存地図で走ります。`scripts/make_maps.py` がレイアウトから地図を描きます（壁、かご、
 動かない箱。ドアは開いた状態）。各フロアの map 座標系は開始位置をそのフロアへずらしたものなので、
-かごの中の位置はどのフロアの地図でも同じ座標です。乗った後は次のフロアの地図を読み込み
-（kachaka-api の `SwitchMap`、または command_server の `sim/map/load`）、同じ map 座標を
-`/initialpose` で AMCL に与えます。`tests/ros_elevator_check.py` は 1 階でかごに入り、2 階へ移動し、
+かごの中の位置はどのフロアの地図でも同じ座標です。乗った後は次のフロアの地図を読み込みます。
+そのとき乗る前の map 上の位置（TF の `map` → `base_footprint`。`/amcl_pose` は 0.25 m か 0.2 rad
+動いたときしか出ないので遅れることがあります）を一緒に渡します（kachaka-api の `SwitchMap` の `initial_pose`、
+または `sim/map/load` の `"pose"`）。command_server は地図を読み込み、AMCL にその位置を与え、
+向きまで合ったのを確かめてから応答します（AMCL は新しい地図で初期化し直すので、別に送った
+`/initialpose` は失われることがあります）。`tests/ros_elevator_check.py` は 1 階でかごに入り、2 階へ移動し、
 地図を切り替えて 2 階のゴールまで走ります。
 
 実機がどう乗るかは建物側の仕組みによります。三菱電機ビルソリューションズと Preferred Robotics の実証では、

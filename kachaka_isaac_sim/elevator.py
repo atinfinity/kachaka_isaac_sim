@@ -50,6 +50,40 @@ def shifted(p: Pose2D, k: int) -> Pose2D:
     return Pose2D(p.x + dx, p.y + dy, p.yaw)
 
 
+# Each floor's look, visual only (no collider: the LiDAR and the step sensors
+# are PhysX raycasts and do not see it), so the floors are told apart in the
+# viewport: (floor tint, lettering).
+FLOOR_LOOKS = (((0.93, 0.84, 0.66), (0.55, 0.38, 0.12)),
+               ((0.66, 0.80, 0.95), (0.12, 0.30, 0.60)),
+               ((0.72, 0.90, 0.72), (0.15, 0.45, 0.15)))
+
+# Seven segments, a (top) to g (middle), lit for each character.
+_SEGMENTS = {"0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc", "5": "afgcd", "6": "afgedc",
+             "7": "abc", "8": "abcdefg", "9": "abcdfg", "B": "cdefg", "F": "aefg"}
+
+
+def floor_look(k: int) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    return FLOOR_LOOKS[k % len(FLOOR_LOOKS)]
+
+
+def label_segments(text: str, origin: tuple[float, float], height: float = 0.8) \
+        -> list[tuple[float, float, float, float]]:
+    """`text` as seven-segment strokes on the floor, (x0, y0, x1, y1) each,
+    reading along +x from `origin` (bottom left), up along +y. Characters
+    without segments (_SEGMENTS) are left out, keeping their space."""
+    h, w = height, 0.5 * height
+    s = 0.14 * height
+    rects = {"a": (0, h - s, w, h), "b": (w - s, h / 2, w, h), "c": (w - s, 0, w, h / 2), "d": (0, 0, w, s),
+             "e": (0, 0, s, h / 2), "f": (0, h / 2, s, h), "g": (0, h / 2 - s / 2, w, h / 2 + s / 2)}
+    out, (x, y) = [], origin
+    for ch in text.upper():
+        for seg in _SEGMENTS.get(ch, ""):
+            x0, y0, x1, y1 = rects[seg]
+            out.append((x + x0, y + y0, x + x1, y + y1))
+        x += 1.4 * w
+    return out
+
+
 @dataclass
 class ElevatorSpec:
     pose: Pose2D  # middle of the doorway on the first floor, x along the wall; the car is on its +y side

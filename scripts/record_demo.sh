@@ -71,7 +71,7 @@ case "$DEMO" in
         SPEED=${SPEED:-4}
         docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$PWD/maps:/repo/maps" \
             kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py /repo/layouts/elevator.yaml --out /repo/maps
-        RUN="python3 /tests/ros_elevator_check.py" ;;
+        RUN="python3 /tests/ros_elevator_check.py --captions /build/elevator/captions.csv" ;;
     scene)
         WORLD=${2:?usage: $0 scene <office|hospital|warehouse|simple_room>}
         DEMO=scene_$WORLD

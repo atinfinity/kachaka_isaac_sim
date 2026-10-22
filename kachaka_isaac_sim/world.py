@@ -147,6 +147,16 @@ def add_simple_room(stage: Usd.Stage, root: str = "/World/Room", offset=(0.0, 0.
         add_box(stage, f"{root}/{name}", (cx + dx, cy + dy, cz), size, color)
 
 
+def add_floor_marking(stage: Usd.Stage, path: str, rect, color, z: float = 0.0) -> None:
+    """A flat coloured patch (x0, y0, x1, y1) lying on the floor, visual
+    only: no collider, so the LiDAR and the step sensors (PhysX raycasts) do
+    not see it. A marking `z` higher draws over one below."""
+    x0, y0, x1, y1 = rect
+    t = 0.002
+    add_box(stage, path, ((x0 + x1) / 2, (y0 + y1) / 2, 0.001 + z + t / 2), (x1 - x0, y1 - y0, t), color,
+            collider=False)
+
+
 def add_wall(stage: Usd.Stage, path: str, start, end, thickness: float = ROOM_WALL,
              height: float = ROOM_HEIGHT) -> None:
     """A straight wall from `start` to `end` (x, y), centred on that line."""

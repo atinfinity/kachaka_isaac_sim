@@ -365,9 +365,13 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   tells the modes apart by map_server's parameter service: with it
   (`navigation.launch.py`), `GetCurrentMapId` is the launch map until
   `SwitchMap`. `SwitchMap` publishes `sim/map/load`; `command_server` calls
-  map_server's `load_map`, clears the costmaps and answers on
-  `sim/map/loaded`, then the server publishes `/initialpose` for AMCL, as
-  does `SetRobotPose`.
+  map_server's `load_map`, gives AMCL the pose in the request (`"pose"`:
+  `initial_pose` or the map's charger pose) on `/initialpose` until AMCL
+  reports it (position and heading) and stays quiet for 1.5 s, clears the
+  costmaps and answers on `sim/map/loaded`. AMCL re-initialises when the new
+  map reaches it, so an `/initialpose` published after the answer alone could
+  be overtaken (seen: ~20° off after an elevator ride). `SetRobotPose`
+  publishes `/initialpose` directly.
 - **Locations** are the charger (`home`, the default), each shelf's home
   (`<id>_home`) and the layout's extra locations.
 - **Manual control.** `SetRobotVelocity` takes values normalized to the speed
@@ -565,6 +569,9 @@ Issue #48. `kachaka_isaac_sim/elevator.py`, `floor_maps.py`,
   (doors open, movers and people left out); the origin is snapped so that
   cell centres never sit on a wall face (otherwise thin walls came out one
   cell jagged).
+- **Floor looks**: each floor's room gets a floor tint and its name in
+  seven-segment strokes (`FLOOR_LOOKS`, `label_segments`), thin boxes
+  without colliders, so the PhysX-raycast LiDAR and step sensors miss them.
 - **ROS**: `sim/elevator/go` (String) and latched `sim/elevator` (JSON).
   kachaka-api has no elevator calls; on the real robot the building's system
   drives the ride (sources in the README).

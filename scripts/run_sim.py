@@ -353,7 +353,8 @@ def main() -> int:
         world.add_floor_with_drops(stage, holes)
     elevator_spec = None
     if layout and layout.elevator:
-        from kachaka_isaac_sim.elevator import car_walls, elevator_spec, floor_offset
+        from kachaka_isaac_sim.elevator import car_walls, elevator_spec, floor_look, floor_offset, label_segments
+        from kachaka_isaac_sim.scenes import ROOM_SIZE
 
         elevator_spec = elevator_spec(layout.elevator, layout.floors, cfg.elevator)
         e = elevator_spec
@@ -365,6 +366,14 @@ def main() -> int:
             for i, (a, b) in enumerate(car_walls(e, k, world.ROOM_WALL)):
                 world.add_wall(stage, f"/World/Elevator/F{k + 1}/wall_{i}", a, b)
             world.add_door(stage, e.door(k), cfg.door)
+            # Each floor's tint and name on the floor, so a ride shows (visual only).
+            (ox, oy), (sx, sy) = floor_offset(k), ROOM_SIZE
+            tint, ink = floor_look(k)
+            world.add_floor_marking(stage, f"/World/Floors/Look{k + 1}/tint",
+                                    (ox - sx / 2, oy - sy / 2, ox + sx / 2, oy + sy / 2), tint)
+            for i, r in enumerate(label_segments(e.floors[k], (ox + 0.0, oy + 0.45))):
+                world.add_floor_marking(stage, f"/World/Floors/Look{k + 1}/label_{i:02d}",
+                                        (r[0], r[1], r[2], r[3]), ink, z=0.002)
         print(f"[kachaka] floors {', '.join(e.floors)}, elevator at {e.floors[e.start]}", flush=True)
     elif args.world == "room":
         world.add_simple_room(stage)

@@ -48,10 +48,13 @@
   the docking servers, so docking does not depend on how well the SLAM map
   lines up with the world.
 - Enlarges the Nav2 costmaps' footprint while a shelf is towed.
-- `sim/map/load` (JSON {"id", "map_id"}) loads `<maps_dir>/<map_id>.yaml`
-  into Nav2's map_server and answers on `sim/map/loaded` ({"id", "success",
-  "message"}), for the gRPC SwitchMap. Only navigation.launch.py runs a
-  map_server.
+- `sim/map/load` (JSON {"id", "map_id", "pose"}) loads
+  `<maps_dir>/<map_id>.yaml` into Nav2's map_server and answers on
+  `sim/map/loaded` ({"id", "success", "message"}), for the gRPC SwitchMap.
+  With "pose" ([x, y, yaw] on the new map) it also gives AMCL that pose and
+  answers only once AMCL reports it, position and heading: AMCL starts over
+  on a new map, and an /initialpose sent apart from the load can land before
+  that and be lost. Only navigation.launch.py runs a map_server.
 - `sim/reset/event` (JSON {"id", "clear_map"}, from the simulator's
   `sim/reset` service): drops the running and queued commands without a
   result, clears the costmaps, goes back to the default settings and, with
@@ -74,7 +77,15 @@ from dataclasses import dataclass
 
 import rclpy
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Point32, Polygon, Pose2D, PoseArray, PoseStamped, Twist
+from geometry_msgs.msg import (
+    Point32,
+    Polygon,
+    Pose2D,
+    PoseArray,
+    PoseStamped,
+    PoseWithCovarianceStamped,
+    Twist,
+)
 from kachaka_interfaces.action import ExecKachakaCommand
 from kachaka_interfaces.msg import (
     KachakaCommand,
@@ -349,6 +360,11 @@ class CommandServer(Node):
         self.load_map_client = self.create_client(LoadMap, "map_server/load_map", callback_group=group)
         self.map_loaded_pub = self.create_publisher(String, f"{prefix}/sim/map/loaded", 10)
         self.create_subscription(String, f"{prefix}/sim/map/load", self._on_map_load, 10, callback_group=group)
+        self.initial_pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
+        self.amcl_cond = threading.Condition()
+        self.amcl_poses: list[P2] = []  # since the last _set_amcl_pose started
+        self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self._on_amcl_pose, LATCHED,
+                                 callback_group=group)
         self.slam_reset_client = (self.create_client(SlamReset, "slam_toolbox/reset", callback_group=group)
                                   if SlamReset else None)
         self.create_subscription(String, f"{prefix}/sim/reset/event", self._on_sim_reset, 10, callback_group=group)
@@ -507,10 +523,53 @@ class CommandServer(Node):
             reply(False, f"map_server could not load {url} (result {res.result})")
         else:
             self.get_logger().info(f"loaded map {url}")
+            pose = req.get("pose")
+            if pose is not None and not self._set_amcl_pose(P2(*map(float, pose))):
+                reply(False, f"AMCL did not take the pose {pose} on {req['map_id']}")
+                return
             for client in self.clear_clients:
                 if client.service_is_ready():
                     client.call_async(ClearEntireCostmap.Request())
             reply(True)
+
+    def _on_amcl_pose(self, msg: PoseWithCovarianceStamped) -> None:
+        p = msg.pose.pose
+        with self.amcl_cond:
+            self.amcl_poses.append(P2(p.position.x, p.position.y, _yaw(p.orientation)))
+            self.amcl_cond.notify_all()
+
+    def _set_amcl_pose(self, pose: P2, timeout: float = 15.0, settle: float = 1.5) -> bool:
+        """Send AMCL `pose` until it reports it (0.05 m, 0.05 rad) and says
+        nothing else for `settle` seconds. AMCL takes the new map in its own
+        time and starts over then, so one /initialpose can be overtaken; the
+        robot stands still meanwhile, so AMCL is quiet once it holds."""
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = self.map_frame
+        msg.pose.pose = _stamped(self.map_frame, Time().to_msg(), pose).pose
+        msg.pose.covariance[0] = msg.pose.covariance[7] = 0.03 ** 2
+        msg.pose.covariance[35] = 0.03 ** 2
+
+        def near(q: P2) -> bool:
+            return math.hypot(q.x - pose.x, q.y - pose.y) < 0.05 and abs(_wrap(q.yaw - pose.yaw)) < 0.05
+
+        deadline = time.monotonic() + timeout
+        with self.amcl_cond:
+            self.amcl_poses.clear()
+        held = False  # the last report matched
+        while time.monotonic() < deadline:
+            if not held:
+                msg.header.stamp = self.get_clock().now().to_msg()
+                self.initial_pose_pub.publish(msg)
+            with self.amcl_cond:
+                self.amcl_cond.wait_for(lambda: self.amcl_poses, timeout=settle if held else 2.0)
+                got, self.amcl_poses[:] = list(self.amcl_poses), []
+            if not got:
+                if held:
+                    self.get_logger().info(f"AMCL at ({pose.x:.2f}, {pose.y:.2f}, {pose.yaw:.2f})")
+                    return True
+                continue
+            held = near(got[-1])
+        return False
 
     def _set_state(self, **changes) -> None:
         with self.state_lock:
