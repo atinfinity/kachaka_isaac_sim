@@ -343,37 +343,6 @@ def disable_pin_collision(stage: Usd.Stage, base: str = BASE_LINK) -> None:
             UsdPhysics.CollisionAPI(p).CreateCollisionEnabledAttr(False)
 
 
-# Parts of the body at the LiDAR's height (0.105 m), from a slice of the
-# official body.stl in base_link: the housing around the laser (x 0.116 to
-# 0.208, y +-0.045) and a bump at the back (x -0.024 to 0.029, y +-0.025).
-# The URDF collision box ends at 0.095 m, so without these another robot's
-# LiDAR sees through the body. z spans 0.095 m to the mesh top (0.113 m).
-LIDAR_TARGET_Z = (0.095, 0.113)
-LIDAR_TARGETS = {"lidar_housing": ((0.162, 0.0025), (0.092, 0.091)),
-                 "back_bump": ((0.0025, 0.002), (0.053, 0.050))}  # name: ((x, y), (length, width))
-RAY_ONLY_GROUP = "/World/CollisionGroups/ray_only"
-
-
-def add_lidar_targets(stage: Usd.Stage, base: str = BASE_LINK) -> list[str]:
-    """Colliders on `base` that other robots' LiDAR rays hit but nothing
-    touches (a collision group that collides with no group): the bottom plate
-    of a shelf at 0.107 m overlaps them. Invisible; the mesh shows the body.
-    Returns their paths."""
-    group = UsdPhysics.CollisionGroup.Get(stage, RAY_ONLY_GROUP)
-    if not group:
-        group = UsdPhysics.CollisionGroup.Define(stage, RAY_ONLY_GROUP)
-        group.CreateInvertFilteredGroupsAttr(True)  # collide only with the (no) listed groups
-    z0, z1 = LIDAR_TARGET_Z
-    paths = []
-    for name, ((x, y), (lx, ly)) in LIDAR_TARGETS.items():
-        path = f"{base}/{name}"
-        add_box(stage, path, (x, y, (z0 + z1) / 2), (lx, ly, z1 - z0))
-        UsdGeom.Imageable(stage.GetPrimAtPath(path)).MakeInvisible()
-        group.GetCollidersCollectionAPI().GetIncludesRel().AddTarget(path)
-        paths.append(path)
-    return paths
-
-
 def add_charger(stage: Usd.Stage, path: str, pose, cfg: SimpleNamespace) -> None:
     """L-shaped charging dock: a thin floor plate with two contacts and a back
     panel with a green LED, dark grey like the real one.

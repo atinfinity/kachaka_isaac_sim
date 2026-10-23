@@ -507,7 +507,6 @@ def main() -> int:
         world.add_robot(stage, ROBOT_USD, r.pose.x, r.pose.y, r.pose.yaw, path=r.prim_path)
         world.apply_contact_materials(stage, cfg.drive, base)
         world.disable_pin_collision(stage, base)
-        world.add_lidar_targets(stage, base)
         world.enable_contact_report(stage, base)
     from kachaka_isaac_sim.torches import Torches
     from kachaka_isaac_sim.urdf_tools import read_joints
@@ -645,6 +644,10 @@ def main() -> int:
                            ContactSensor(base, world.CASTER_SHAPES), spawn=r.pose)
         r_node.reset_handler = r_robot.reset  # this robot only; robot 0's sim/reset also resets the world
         others.append((r, r_node, r_api, r_robot))
+    # Each robot's LiDAR sees the others (fleet.body_ray_hits).
+    fleet_robots = [robot] + [o[3] for o in others]
+    for me in fleet_robots if len(fleet_robots) > 1 else ():
+        me.lidar.others = lambda me=me: [r.gt for r in fleet_robots if r is not me]
     movers = None
     if moving:
         from kachaka_isaac_sim.movers import Movers

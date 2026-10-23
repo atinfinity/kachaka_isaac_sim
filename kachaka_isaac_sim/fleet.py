@@ -8,16 +8,30 @@ prefix, kachaka-api port and noise seed:
     robot 1: /World/kachaka_1  /kachaka_1/...  kachaka_1/odom, ...     port P + 1
 
 All robots share one map frame: the map origin is robot 0's spawn pose.
+
+Robots see each other in their LiDAR scans through `body_ray_hits`: the
+official collision box ends at 0.095 m, below the LiDAR (0.105 m), so the
+PhysX rays pass over another robot. Colliders at that height would also
+touch a shelf's bottom plate (0.107 m), so the parts of the body there are
+intersected in 2D instead.
 """
 
 import copy
+import math
 from dataclasses import dataclass
 from types import SimpleNamespace
+
+import numpy as np
 
 from kachaka_isaac_sim.drive import Pose2D
 
 ROBOT_PATH = "/World/kachaka"  # world.ROBOT_PATH, without importing pxr
 SEED_STRIDE = 1000  # between robots' seeds; cameras use seed + n on top
+# Parts of the body at the LiDAR's height, from a slice of the official
+# body.stl at z = 0.105 m, in base_footprint: the housing around the laser
+# (x 0.116 to 0.208, y -0.043 to 0.048) and a bump at the back (x -0.024 to
+# 0.029, y -0.023 to 0.027). (centre x, centre y, half length, half width)
+LIDAR_HEIGHT_BODY = ((0.162, 0.0025, 0.046, 0.0455), (0.0025, 0.002, 0.0265, 0.025))
 
 
 @dataclass(frozen=True)
@@ -72,3 +86,32 @@ def robot_poses(robots: list[list[float]] | None, single: Pose2D) -> list[Pose2D
     if not robots:
         return [single]
     return [Pose2D(float(x), float(y), float(yaw)) for x, y, yaw in robots]
+
+
+def body_ray_hits(origin, dirs: np.ndarray, poses: list[Pose2D], max_range: float = math.inf) -> np.ndarray:
+    """Distance along each ray (2D: `origin` (x, y), `dirs` (n, 2) unit
+    vectors, world frame) to the nearest LIDAR_HEIGHT_BODY part of the robots
+    at `poses`; inf where a ray misses or the hit is beyond `max_range`.
+    A ray starting inside a part does not see it."""
+    dirs = np.asarray(dirs, float)[:, :2]
+    best = np.full(len(dirs), math.inf)
+    ox, oy = float(origin[0]), float(origin[1])
+    for p in poses:
+        c, s = math.cos(p.yaw), math.sin(p.yaw)
+        # Rays in the robot's frame.
+        rx, ry = ox - p.x, oy - p.y
+        lox, loy = c * rx + s * ry, -s * rx + c * ry
+        ldx = c * dirs[:, 0] + s * dirs[:, 1]
+        ldy = -s * dirs[:, 0] + c * dirs[:, 1]
+        ldx = np.where(np.abs(ldx) < 1e-12, 1e-12, ldx)
+        ldy = np.where(np.abs(ldy) < 1e-12, 1e-12, ldy)
+        for cx, cy, hx, hy in LIDAR_HEIGHT_BODY:
+            if abs(lox - cx) <= hx and abs(loy - cy) <= hy:
+                continue
+            tx1, tx2 = (cx - hx - lox) / ldx, (cx + hx - lox) / ldx
+            ty1, ty2 = (cy - hy - loy) / ldy, (cy + hy - loy) / ldy
+            near = np.maximum(np.minimum(tx1, tx2), np.minimum(ty1, ty2))
+            far = np.minimum(np.maximum(tx1, tx2), np.maximum(ty1, ty2))
+            hit = (near <= far) & (near >= 0.0) & (near <= max_range)
+            best = np.where(hit & (near < best), near, best)
+    return best

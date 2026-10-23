@@ -48,3 +48,31 @@ def test_robot_poses():
 def test_no_robots():
     with pytest.raises(ValueError):
         fleet_specs(load_config(), [], 26400, None)
+
+
+def test_body_ray_hits():
+    import math
+
+    import numpy as np
+
+    from kachaka_isaac_sim.drive import Pose2D
+    from kachaka_isaac_sim.fleet import LIDAR_HEIGHT_BODY, body_ray_hits
+
+    dirs = np.array([[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]])
+    # A robot 2 m ahead, facing us: its housing front (x = 0.208) is nearest.
+    hits = body_ray_hits((0.0, 0.0), dirs, [Pose2D(2.0, 0.0, math.pi)])
+    assert abs(hits[0] - (2.0 - 0.208)) < 1e-9
+    assert math.isinf(hits[1]) and math.isinf(hits[2])
+    # Facing away: the back bump (x = -0.024) is hit first.
+    assert abs(body_ray_hits((0.0, 0.0), dirs[:1], [Pose2D(2.0, 0.0, 0.0)])[0] - 1.976) < 1e-9
+    # Between the parts (y = 0.04 misses the bump, hits the housing).
+    assert abs(body_ray_hits((0.0, 0.04), dirs[:1], [Pose2D(2.0, 0.0, 0.0)])[0] - 2.116) < 1e-9
+    # Out of range, passing beside, and the nearest of two robots.
+    assert math.isinf(body_ray_hits((0.0, 0.0), dirs[:1], [Pose2D(2.0, 0.0, 0.0)], 1.5)[0])
+    assert math.isinf(body_ray_hits((0.0, 0.1), dirs[:1], [Pose2D(2.0, 0.0, 0.0)])[0])
+    near = body_ray_hits((0.0, 0.0), dirs[:1], [Pose2D(3.0, 0.0, 0.0), Pose2D(1.0, 0.0, 0.0)])[0]
+    assert abs(near - 0.976) < 1e-9
+    # Axis-aligned rays still work after a rotation, and every part is in the URDF box.
+    assert abs(body_ray_hits((0.0, 0.0), dirs[2:], [Pose2D(0.0, 1.0, -math.pi / 2)])[0] - (1 - 0.208)) < 1e-9
+    for cx, cy, hx, hy in LIDAR_HEIGHT_BODY:
+        assert abs(cx) + hx <= 0.387 / 2 + 0.03 and abs(cy) + hy <= 0.12

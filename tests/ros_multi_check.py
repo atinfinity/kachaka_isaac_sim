@@ -10,7 +10,7 @@ Run against two robots facing each other in the default room:
 2. Each robot publishes ground truth, scan and odometry in its namespace, and
    TF {prefix}odom -> {prefix}base_footprint; its odometry starts at zero.
 3. Each robot's LiDAR sees the other: the rays towards it end on its LiDAR
-   housing (world.LIDAR_TARGETS), which faces the viewer 0.12 to 0.21 m in
+   housing (fleet.LIDAR_HEIGHT_BODY), which faces the viewer 0.12 to 0.21 m in
    front of its centre.
 4. Turning robot 1 moves robot 1 only.
 5. No collisions (sim/collision of either robot).
