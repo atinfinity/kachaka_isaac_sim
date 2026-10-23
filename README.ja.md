@@ -607,6 +607,7 @@ docker compose -f docker/compose.yaml up navigation
 ```bash
 scripts/run_sim.sh --world office        # Isaac Sim のシーン: office, hospital, warehouse, simple_room
 scripts/run_sim.sh --world /path/to.usd  # 任意の USD シーン
+scripts/run_sim.sh --world map:maps/site.yaml   # 占有格子地図から壁を作る（「地図からワールドを作る」を参照）
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
 scripts/run_sim.sh --layout layouts/room.yaml   # レイアウトファイル（--layout-seed N）、レイアウトファイルの節を参照
 scripts/run_sim.sh --no-cameras          # LiDAR とオドメトリだけでよいとき（速い）
@@ -687,6 +688,33 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 - **warehouse のラック**は LiDAR の高さでは脚しか映らないため、コストマップ上は壁ではなく柱の列になり、
   Nav2 が棚の下の脚の間を通ろうとすることがあります。テストは 1 本の通路（x = −13）の中だけを走ります。
   ラックの北のホール（y > 25）は通路から LiDAR が届かず、近づくまで地図に載りません。
+
+### 地図からワールドを作る
+
+![エレベーターのレイアウトの 1 階の地図から作ったワールドで、同じ地図の Nav2 が走る](docs/map_world.gif)
+
+`--world map:<パス>` は占有格子地図から壁を作ります。実際の現場をすばやく再現したいときに使います。
+読める地図は、Nav2 の地図（`map_saver_cli` の yaml。解像度・原点・しきい値もそのまま使います）、
+カチャカの PNG 書き出し、その他の画像（暗い所が障害物、明るい所が空き。`--map-resolution` で 1 ピクセルあたりの m を指定。
+原点は左下の角）です。
+
+```bash
+scripts/run_sim.sh --world map:maps/site.yaml
+scripts/run_sim.sh --world map:floor_plan.png --map-resolution 0.05 --x 2 --y 3
+ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/site.yaml
+```
+
+- 障害物のセルは高さ `map_world.wall_height`（1 m。`--map-wall-height` で変更）の壁になります。
+  セルはできるだけ少ない箱にまとめ、1 つのメッシュとして作ります。空きと未知のセルは床です。
+- ワールド座標系は地図の座標系と同じです。地図の原点にスポーンすれば（既定）、同じ地図の `navigation.launch.py` がすぐに自己位置を合わせ、
+  地図上でクリックしたゴールがそのままワールドの位置になります。別の位置に置くときは `--x`/`--y`/`--yaw` を地図の座標で指定します。
+  スポーン位置が壁の上なら警告を出します。
+- 充電器は yaml の `charger_pose`（`make_maps.py` やシミュレータの地図書き出しが書く値）に置きます。
+  `--charger` か `--no-charger` を指定すればそちらが優先です。
+- すべての障害物が壁と同じ高さになります。地図には机や棚、段差の情報がないためです。箱やドア、人はレイアウトファイルで足してください。
+
+`tests/ros_map_world_check.py` は地図から作ったワールドを確かめます。AMCL の位置が真値と合うこと、LiDAR の点が地図の壁に乗ること、
+充電器が `charger_pose` にあること、Nav2 がゴールまで何にも触れずに着くことです（`smoke_test.sh --nav` がエレベータのレイアウトの 1 階の地図で実行します）。
 
 ## ROS 2 インターフェース
 

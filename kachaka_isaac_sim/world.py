@@ -98,6 +98,35 @@ def add_box(stage: Usd.Stage, path: str, center, size, color=(0.8, 0.8, 0.78), c
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(approximation)
 
 
+def add_box_mesh(stage: Usd.Stage, path: str, boxes, height: float, color=(0.8, 0.8, 0.78)) -> int:
+    """Static boxes (map_world.WallBox: centre, size, yaw), floor to `height`,
+    as one triangle-mesh collider: a map can make thousands. Returns the count."""
+    pts, counts, idx = [], [], []
+    faces = [0, 2, 3, 1, 4, 5, 7, 6, 0, 1, 5, 4, 2, 6, 7, 3, 0, 4, 6, 2, 1, 3, 7, 5]
+    for b in boxes:
+        c, s = math.cos(b.yaw), math.sin(b.yaw)
+        base = len(pts)
+        for z in (0.0, height):
+            for uy in (-1, 1):
+                for ux in (-1, 1):
+                    lx, ly = ux * b.sx / 2, uy * b.sy / 2
+                    pts.append(Gf.Vec3f(b.x + c * lx - s * ly, b.y + s * lx + c * ly, z))
+        counts += [4] * 6
+        idx += [base + i for i in faces]
+    if not pts:
+        return 0
+    mesh = UsdGeom.Mesh.Define(stage, path)
+    mesh.CreatePointsAttr(pts)
+    mesh.CreateFaceVertexCountsAttr(counts)
+    mesh.CreateFaceVertexIndicesAttr(idx)
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    mesh.CreateExtentAttr([Gf.Vec3f(min(xs), min(ys), 0.0), Gf.Vec3f(max(xs), max(ys), height)])
+    mesh.CreateDisplayColorAttr([Gf.Vec3f(*color)])
+    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+    UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("none")
+    return len(boxes)
+
+
 def add_moving_box(stage: Usd.Stage, path: str, pose, size, color) -> None:
     """A box as a kinematic body at `pose` (x, y, yaw) on the floor, which
     movers.Movers moves."""

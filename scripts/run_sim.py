@@ -6,6 +6,7 @@ up the ROS 2 environment that Isaac Sim needs before the process starts.
     scripts/run_sim.sh --world empty   # floor only
     scripts/run_sim.sh --world office  # Isaac Sim indoor scene (needs internet)
     scripts/run_sim.sh --world /path/to/scene.usd
+    scripts/run_sim.sh --world map:maps/site.yaml   # walls from an occupancy map
     scripts/run_sim.sh --layout layouts/room.yaml   # charger, shelves, ... from a file
 """
 
@@ -23,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from kachaka_isaac_sim.config import DEFAULT_CONFIG, load_config
 from kachaka_isaac_sim.hazards import hole_rect
+from kachaka_isaac_sim.map_world import is_map_world
 
 ROBOT_USD = ROOT / "assets/generated/kachaka/kachaka.usda"
 ROBOT_URDF = ROOT / "build/kachaka.urdf"
@@ -35,8 +37,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", default=str(DEFAULT_CONFIG), help="robot parameters (YAML)")
     p.add_argument("--headless", action="store_true", help="run without a window")
     p.add_argument("--world",
-                   help="'room', 'empty', an Isaac scene (office, hospital, warehouse, simple_room) or a USD path/URL "
+                   help="'room', 'empty', an Isaac scene (office, hospital, warehouse, simple_room), a USD path/URL "
+                        "or map:<Nav2 map yaml or image> (walls from an occupancy map, kachaka_isaac_sim/map_world.py) "
                         "(default: the layout's world, else 'room')")
+    p.add_argument("--map-resolution", type=float, metavar="M",
+                   help="m per pixel of a map:<image> world (a map yaml has its own)")
+    p.add_argument("--map-wall-height", type=float, metavar="M",
+                   help="wall height of a map: world [m] (default: map_world.wall_height in the config)")
     p.add_argument("--layout", metavar="FILE",
                    help="world layout (YAML): spawn pose, charger, shelves, locations, people, boxes, walls, doors "
                         "and drops; see kachaka_isaac_sim/layout.py and layouts/. The options below override it "
@@ -246,6 +253,8 @@ def place_charger(args, cfg, layout):
         return (layout.charger.x, layout.charger.y, layout.charger.yaw) if layout.charger else None
     if args.world == "room":
         return tuple(cfg.charger.room_pose)
+    if args.map_file is not None and args.map_file.charger_pose:
+        return tuple(args.map_file.charger_pose)
     return None
 
 
@@ -362,6 +371,22 @@ def main() -> int:
     except (LayoutError, OSError) as e:
         print(f"layout: {e}", file=sys.stderr)
         return 1
+    args.map_file = None
+    if is_map_world(args.world):
+        from kachaka_isaac_sim.map_world import load_map, occupied_at
+        from kachaka_isaac_sim.maps import MapError
+
+        try:
+            args.map_file = load_map(args.world.removeprefix("map:"), args.map_resolution)
+        except MapError as e:
+            print(f"world: {e}", file=sys.stderr)
+            return 1
+        if occupied_at(args.map_file, args.x, args.y, radius=0.2):
+            print(f"[kachaka] warning: the spawn pose ({args.x:.2f}, {args.y:.2f}) is on the map's walls: "
+                  "give one with --x/--y (map frame)", flush=True)
+    elif args.map_resolution is not None:
+        print("--map-resolution is for a map:<image> world", file=sys.stderr)
+        return 1
     if not ROBOT_USD.exists() or not ROBOT_URDF.exists():
         print("Robot assets missing: run scripts/fetch_assets.py and scripts/build_usd.py first", file=sys.stderr)
         return 1
@@ -390,7 +415,7 @@ def main() -> int:
 
     stage = stage_utils.create_new_stage()
     world.setup_stage(stage, args.physics_hz, args.dome_light)
-    builtin = args.world in ("room", "empty")
+    builtin = args.world in ("room", "empty") or args.map_file is not None
     holes = [hole_rect(*d) for d in (layout.drops if layout else []) + [tuple(d) for d in args.drop or []]]
     world.add_ground(stage, visible=builtin, z=-float(cfg.drop.depth) if holes else 0.0)
     if holes:
@@ -446,6 +471,14 @@ def main() -> int:
         print(f"[kachaka] floors {', '.join(e.floors)}, elevator at {e.floors[e.start]}", flush=True)
     elif args.world == "room":
         world.add_simple_room(stage)
+    elif args.map_file is not None:
+        from kachaka_isaac_sim.map_world import wall_boxes
+
+        height = args.map_wall_height or float(cfg.map_world.wall_height)
+        n = world.add_box_mesh(stage, "/World/MapWalls", wall_boxes(args.map_file), height)
+        h, w = args.map_file.grid.shape
+        print(f"[kachaka] map world {args.world.removeprefix('map:')}: {w} x {h} cells at "
+              f"{args.map_file.resolution} m, {n} wall boxes {height} m high", flush=True)
     elif not builtin:
         world.load_world_usd(stage, world.resolve_world(args.world))
     walls = (layout.walls if layout else []) + [tuple(w) for w in args.wall or []]

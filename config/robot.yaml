@@ -285,6 +285,11 @@ elevator:
   door_sensor: 0.23         # m, the car door stays open while base_footprint is this close to the doorway
                             # (front of the body; assumed)
 
+# A world built from an occupancy map (run_sim.py --world map:<yaml or image>;
+# see kachaka_isaac_sim/map_world.py): occupied cells become walls.
+map_world:
+  wall_height: 1.0          # m, every wall the same (a map has no heights)
+
 # Kachaka Shelf (3-layer). The shelf rolls on four casters and is towed through
 # a fixed joint while docked. Its pose is the base_footprint pose of a robot
 # docked under it (the robot's docking pin under the shelf centre), and the
