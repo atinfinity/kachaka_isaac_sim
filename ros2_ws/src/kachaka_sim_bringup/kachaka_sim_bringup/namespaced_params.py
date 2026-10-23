@@ -15,8 +15,10 @@ the global one), so this rewrites values instead:
   a costmap resolves those in its own namespace (/kachaka_i/global_costmap);
 - map and everything else: unchanged (all robots share one map frame).
 
-AMCL's set_initial_pose is turned off: the map frame's origin is robot 0's
-spawn, not this robot's, so its start pose comes on its initialpose topic.
+AMCL starts at `initial_pose` (x, y, yaw in the map frame, whose origin is
+robot 0's spawn) when it is given, so the robot is localized, and drawn in
+RViz, from the start. Without it set_initial_pose is turned off: the map
+origin is not this robot's start, which then comes on its initialpose topic.
 """
 
 import tempfile
@@ -58,17 +60,32 @@ def rewrite(params, kachaka_namespace: str, frame_prefix: str, key: str = ""):
     return rewrite_value(key, params, kachaka_namespace, frame_prefix)
 
 
-def namespaced_params_file(src: str, namespace: str, out_dir: str | None = None) -> str:
+def parse_pose(text: str) -> tuple[float, float, float] | None:
+    """"x,y,yaw" -> (x, y, yaw); "" -> None."""
+    if not text.strip():
+        return None
+    values = [float(v) for v in text.split(",")]
+    if len(values) != 3:
+        raise ValueError(f"pose {text!r}: want x,y,yaw")
+    return values[0], values[1], values[2]
+
+
+def namespaced_params_file(src: str, namespace: str, out_dir: str | None = None,
+                           initial_pose: tuple[float, float, float] | None = None) -> str:
     """Write `src` rewritten for the robot in `namespace` (its Kachaka
     namespace too, frame prefix "<namespace>/") and return the new path.
-    An empty namespace returns `src`."""
+    `initial_pose` (x, y, yaw) is AMCL's start; None leaves it to
+    /<namespace>/initialpose. An empty namespace returns `src`."""
     ns = namespace.strip("/")
     if not ns:
         return src
     params = rewrite(yaml.safe_load(Path(src).read_text()), ns, f"{ns}/")
     amcl = (params.get("amcl") or {}).get("ros__parameters")
     if amcl is not None:
-        amcl["set_initial_pose"] = False
+        amcl["set_initial_pose"] = initial_pose is not None
+        if initial_pose is not None:
+            x, y, yaw = initial_pose
+            amcl["initial_pose"] = {"x": x, "y": y, "z": 0.0, "yaw": yaw}
     with tempfile.NamedTemporaryFile("w", prefix=f"nav2_params_{ns}_", suffix=".yaml", dir=out_dir,
                                      delete=False) as out:
         yaml.safe_dump(params, out, sort_keys=False)

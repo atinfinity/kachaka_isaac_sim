@@ -3,11 +3,13 @@ right angles, and they pass each other without touching.
 
     python3 scripts/make_maps.py --spawn -1.7 0.2 0                # maps/room.yaml
     scripts/run_sim.sh --no-cameras --no-shelves --robot -1.7 0.2 0 --robot 0.3 -1.8 1.5708
-    ros2 launch kachaka_sim_bringup fleet.launch.py map:=/maps/room.yaml robots:=2 rviz:=false
+    ros2 launch kachaka_sim_bringup fleet.launch.py map:=/maps/room.yaml robots:=2 initial_poses:=2.0,-2.0,1.5708 rviz:=false
     python3 tests/ros_multi_nav_check.py
 
-1. Each robot's AMCL gets its start (from ground truth, in the shared map
-   frame: robot 0's spawn) until TF map -> {prefix}base_footprint exists.
+1. Each robot's AMCL starts localized (robot 0 at the map origin, robot 1
+   at initial_poses): TF map -> {prefix}base_footprint before any
+   /initialpose. If not, it gets its start from ground truth (in the shared
+   map frame: robot 0's spawn) to go on.
 2. Each robot's {namespace}/other_robots (fleet_outlines) has the other
    robot's footprint around where the other robot is.
 3. Both get a goal at the same moment; the straight lines between start and
@@ -174,6 +176,9 @@ def main():
         check("ready", False, "no ground truth from " + ", ".join(ns for (ns, _, _), g in zip(ROBOTS, n.gt) if not g))
         return 1
     origin = n.gt[0]
+    n.wait(lambda: all(n.localized(i) for i in range(len(ROBOTS))), 30.0)
+    for i, (ns, _, prefix) in enumerate(ROBOTS):
+        check(f"{ns}: map -> {prefix}base_footprint before any /initialpose", n.localized(i))
     localized = n.set_poses(origin)
     for (ns, _, prefix), ok in zip(ROBOTS, localized):
         check(f"{ns}: AMCL publishes map -> {prefix}base_footprint", ok)

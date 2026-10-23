@@ -1,7 +1,8 @@
 from pathlib import Path
 
+import pytest
 import yaml
-from kachaka_sim_bringup.namespaced_params import namespaced_params_file, rewrite, rewrite_value
+from kachaka_sim_bringup.namespaced_params import namespaced_params_file, parse_pose, rewrite, rewrite_value
 
 SRC = Path(__file__).resolve().parents[1] / "config" / "nav2_params.yaml"
 
@@ -73,3 +74,17 @@ def test_file(tmp_path):
     expected = params_for("kachaka_1")
     expected["amcl"]["ros__parameters"]["set_initial_pose"] = False  # its start is not the map origin
     assert yaml.safe_load(Path(out).read_text()) == expected
+
+
+def test_file_initial_pose(tmp_path):
+    out = namespaced_params_file(str(SRC), "kachaka_1", str(tmp_path), initial_pose=(2.0, -2.0, 1.5708))
+    amcl = yaml.safe_load(Path(out).read_text())["amcl"]["ros__parameters"]
+    assert amcl["set_initial_pose"] is True
+    assert amcl["initial_pose"] == {"x": 2.0, "y": -2.0, "z": 0.0, "yaw": 1.5708}
+
+
+def test_parse_pose():
+    assert parse_pose("") is None
+    assert parse_pose("2,-2.5,1.57") == (2.0, -2.5, 1.57)
+    with pytest.raises(ValueError):
+        parse_pose("1,2")

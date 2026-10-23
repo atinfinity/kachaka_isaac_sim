@@ -9,6 +9,9 @@ Nav2 runs under /kachaka_i too (/kachaka_i/navigate_to_pose,
 (kachaka_sim_bringup.namespaced_params). TF stays on the shared /tf, and all
 robots share the map frame. Robot 0 uses navigation.launch.py.
 
+initial_pose:=x,y,yaw (the map frame) starts AMCL there; without it AMCL
+waits for /kachaka_i/initialpose.
+
 The shelf, charger and kachaka_command servers are robot 0's only.
 """
 
@@ -20,7 +23,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def _robot(context):
-    from kachaka_sim_bringup.namespaced_params import namespaced_params_file
+    from kachaka_sim_bringup.namespaced_params import namespaced_params_file, parse_pose
 
     ns = LaunchConfiguration("namespace").perform(context).strip("/")
     if not ns:
@@ -28,7 +31,8 @@ def _robot(context):
     pkg = FindPackageShare("kachaka_sim_bringup")
     nav2 = FindPackageShare("nav2_bringup")
     use_sim_time = LaunchConfiguration("use_sim_time")
-    params = namespaced_params_file(LaunchConfiguration("params_file").perform(context), ns)
+    params = namespaced_params_file(LaunchConfiguration("params_file").perform(context), ns,
+                                    initial_pose=parse_pose(LaunchConfiguration("initial_pose").perform(context)))
     return [GroupAction([
         PushRosNamespace(ns),
         # Nav2's launch files remap /tf to tf (the namespace's own); the
@@ -60,5 +64,7 @@ def generate_launch_description():
         DeclareLaunchArgument("use_sim_time", default_value="true"),
         DeclareLaunchArgument("params_file", default_value=PathJoinSubstitution([pkg, "config", "nav2_params.yaml"]),
                               description="written for robot 0; rewritten for this robot"),
+        DeclareLaunchArgument("initial_pose", default_value="",
+                              description="x,y,yaw in the map frame for AMCL's start; empty: wait for initialpose"),
         OpaqueFunction(function=_robot),
     ])

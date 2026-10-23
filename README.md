@@ -600,14 +600,19 @@ the room's map, with the map frame at robot 0's spawn:
 ```bash
 python3 scripts/make_maps.py --spawn -1.7 0.2 0     # maps/room.yaml
 scripts/run_sim.sh --no-cameras --no-shelves --robot -1.7 0.2 0 --robot 0.3 -1.8 1.5708
-ros2 launch kachaka_sim_bringup fleet.launch.py map:=/maps/room.yaml robots:=2
+ros2 launch kachaka_sim_bringup fleet.launch.py map:=/maps/room.yaml robots:=2 initial_poses:=2.0,-2.0,1.5708
 python3 /tests/ros_multi_nav_check.py   # their paths cross at right angles; they pass without touching
 ```
 
 ![Two robots cross at right angles; RViz shows robot 1's outline, now and 0.5 s ahead, in robot 0's local costmap](docs/fleet.gif)
 
-Each robot's AMCL needs its start pose, in the map frame, on its own
-`initialpose` topic. The kachaka_command, charger and shelf servers belong to
+Robot 0's AMCL starts at the map origin (its spawn). `initial_poses` gives
+the others' starts in the same map frame (`x,y,yaw` per robot, in a row:
+robot 1 above is 2 m ahead and 2 m to the right of robot 0, turned left), so
+every robot is localized, and drawn in RViz, from the start. A robot without
+one waits for its own `initialpose` topic. RViz draws every robot's model:
+`fleet.launch.py` adds a RobotModel on `/kachaka_i/robot_description` for
+each. The kachaka_command, charger and shelf servers belong to
 robot 0. Robots 1 and up use Nav2's actions directly.
 
 ### Scenario runner

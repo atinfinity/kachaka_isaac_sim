@@ -82,11 +82,11 @@ case "$DEMO" in
         GIF=docs/fleet.gif
         VIEW=(0.0 -3.2 6.0 0.0 -0.2 0.0)  # from the south, like movers
         SIM_ARGS=(--no-shelves --robot -1.7 0.2 0 --robot 0.3 -1.8 1.5708)
-        LAUNCH="fleet.launch.py map:=/maps/room.yaml robots:=2"
+        LAUNCH="fleet.launch.py map:=/maps/room.yaml robots:=2 initial_poses:=2.0,-2.0,1.5708"
         # Centre on the room (map origin = robot 0's spawn); robot 0's local
         # costmap and robot 1's outline from fleet_outlines.
         RVIZ_SED="s/^      X: 0$/      X: 1.7/; /Name: Local Costmap/{n;s/false/true/}; /Name: Other Robots/{n;s/false/true/}"
-        LABEL="RViz: robot 1 in robot 0's costmap"
+        LABEL="RViz: both robots and robot 0's costmap"
         docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$PWD/maps:/repo/maps" \
             kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py --spawn -1.7 0.2 0 --out /repo/maps
         RUN="python3 /tests/ros_multi_nav_check.py" ;;
@@ -227,7 +227,7 @@ docker run -d --rm --name kachaka-demo-ros --network host --ipc host \
         Xvfb :$DISPLAY_NUM -screen 0 1440x900x24 -nolisten tcp -ac &
         sleep 2
         sed '$RVIZ_SED' /ws/install/kachaka_sim_bringup/share/kachaka_sim_bringup/config/demo.rviz > /tmp/demo.rviz
-        if [[ '$LAUNCH' == slam.launch.py* ]]; then
+        if [[ '$LAUNCH' == slam.launch.py* || '$LAUNCH' == fleet.launch.py* ]]; then
             ros2 launch kachaka_sim_bringup $LAUNCH rviz_config:=/tmp/demo.rviz
         else
             ros2 run rviz2 rviz2 -d /tmp/demo.rviz --ros-args -p use_sim_time:=true &

@@ -165,7 +165,7 @@ if $NAV; then
         kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py --spawn -1.7 0.2 0 --out /repo/maps
     LOG=build/smoke_sim_fleet_nav.log
     start_sim --no-cameras --no-shelves --robot -1.7 0.2 0 --robot 0.3 -1.8 1.5708
-    start_nav fleet.launch.py map:=/maps/room.yaml robots:=2
+    start_nav fleet.launch.py map:=/maps/room.yaml robots:=2 initial_poses:=2.0,-2.0,1.5708
     echo "[smoke] running ros_multi_nav_check"
     ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_multi_nav_check.py || FAILED+=(ros_multi_nav_check)
     docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
