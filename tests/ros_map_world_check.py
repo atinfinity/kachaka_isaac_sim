@@ -9,8 +9,8 @@ layout's first-floor map):
     ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/elevator_1F.yaml
     python3 tests/ros_map_world_check.py --map /maps/elevator_1F.yaml
 
-1. The world frame is the map frame: AMCL's pose (TF map -> base_footprint)
-   matches ground truth at the start.
+1. The world frame is the map frame: AMCL, given ground truth as its initial
+   pose (on a saved map it waits for one), holds it (TF map -> base_footprint).
 2. The LiDAR sees the map's walls: most scan points, placed by ground truth,
    fall on an occupied cell of /map (or next to one).
 3. The charger stands at the map's `charger_pose` (sim/charger_pose).
@@ -27,7 +27,7 @@ import numpy as np
 import rclpy
 import yaml
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.action import ActionClient
@@ -61,6 +61,7 @@ class Check(Node):
                                  LATCHED)
         self.create_subscription(String, "/kachaka/sim/collision",
                                  lambda m: self.collisions.append(json.loads(m.data)), 10)
+        self.initial_pose = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
         self.tf = Buffer()
         TransformListener(self.tf, self)
         self.nav = ActionClient(self, NavigateToPose, "navigate_to_pose")
@@ -75,6 +76,22 @@ class Check(Node):
             if cond():
                 return True
             rclpy.spin_once(self, timeout_sec=0.1)
+        return False
+
+    def set_pose(self, timeout=30.0):
+        """Give AMCL ground truth (the world frame is the map frame) until it
+        publishes TF map -> base_footprint."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            x, y, yaw = self.gt
+            msg = PoseWithCovarianceStamped()
+            msg.header.frame_id = "map"
+            msg.pose.pose.position.x, msg.pose.pose.position.y = x, y
+            msg.pose.pose.orientation.z, msg.pose.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+            msg.pose.covariance[0] = msg.pose.covariance[7] = msg.pose.covariance[35] = 0.01
+            self.initial_pose.publish(msg)
+            if self.wait(lambda: self.lookup("map", "base_footprint") is not None, 2.0):
+                return True
         return False
 
     def lookup(self, parent, child):
@@ -150,11 +167,13 @@ def main():
         if not ok:
             failed.append(name)
 
-    ready = node.wait(lambda: node.gt and node.scan and node.map
-                      and node.lookup("map", "base_footprint") is not None, 60.0)
-    if not ready:
-        check("ready", False, "no ground truth, scan, /map or TF map -> base_footprint within 60 s")
+    if not node.wait(lambda: node.gt and node.scan and node.map, 60.0):
+        check("ready", False, "no ground truth, scan or /map within 60 s")
         return 1
+    if not node.set_pose():
+        check("ready", False, "AMCL gave no TF map -> base_footprint for the initial pose within 30 s")
+        return 1
+    node.wait(lambda: False, 2.0)  # let AMCL settle on the scan
     est = node.lookup("map", "base_footprint")
     err = math.hypot(est[0] - node.gt[0], est[1] - node.gt[1])
     check("localized", err < LOCALIZED, f"AMCL ({est[0]:.2f}, {est[1]:.2f}), ground truth "
