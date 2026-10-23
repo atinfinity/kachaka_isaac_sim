@@ -748,6 +748,8 @@ SLAM and Nav2. Things to know about the scenes:
 
 ### World from a map
 
+![Nav2 on the elevator layout's first-floor map, in a world built from that map](docs/map_world.gif)
+
 `--world map:<path>` builds walls from an occupancy map, to approximate a
 real site quickly: a Nav2 map pair (`map_saver_cli`'s yaml, with its
 resolution, origin and thresholds), a Kachaka PNG export or any other image
