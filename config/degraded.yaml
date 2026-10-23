@@ -1,0 +1,24 @@
+# Harder sensor conditions on top of config/robot.yaml (see its
+# `degradation` section). Values are test knobs, not measurements:
+#
+#   scripts/run_sim.sh --config config/degraded.yaml
+#
+# tests/ros_degradation_check.py checks them (scripts/smoke_test.sh runs it).
+base: robot.yaml
+
+degradation:
+  lidar:
+    invisible: ["/World/People/*"]  # people stand in for glass: the LiDAR sees through them
+    dropout: 0.2
+    noise_per_m: 0.005
+  odometry:
+    distance_scale_error: 0.1
+    turn_scale_error: -0.05
+  cameras:
+    noise: 6.0
+    exposure_jitter: 0.3
+    exposure_time: 0.02
+  imu:
+    gyro_bias: 0.02
+    gyro_bias_walk: 0.001
+    accel_bias: 0.05

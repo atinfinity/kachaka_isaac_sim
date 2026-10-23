@@ -33,6 +33,7 @@ class SimCamera:
         self.width, self.height = int(cfg.width), int(cfg.height)
         self.period = 1.0 / cfg.rate
         self.next_time = 0.0
+        self.degradation = None  # degradation.CameraDegradation for RGB frames, or None
 
         path = f"{parent_path}/sim_{name}"
         cam = UsdGeom.Camera.Define(stage, path)
@@ -74,15 +75,20 @@ class SimCamera:
         return np.where(invalid, 0.0, depth).astype(np.float32)
 
 
-def create_cameras(stage, cfg: SimpleNamespace, parent_path: str, joints: list[dict]) -> list[SimCamera]:
+def create_cameras(stage, cfg: SimpleNamespace, parent_path: str, joints: list[dict],
+                   seed: int | None = None) -> list[SimCamera]:
+    from .degradation import camera_degradation, section
     from .urdf_tools import frame_pose
 
     cams = []
     for name in ("front", "back"):
         c = getattr(cfg.cameras, name)
         if getattr(c, "enabled", True):
-            cams.append(SimCamera(stage, f"{name}_camera", "rgb", c, parent_path, *frame_pose(joints, c.frame_id),
-                                  near=float(c.near_clip), far=100.0))
+            cam = SimCamera(stage, f"{name}_camera", "rgb", c, parent_path, *frame_pose(joints, c.frame_id),
+                            near=float(c.near_clip), far=100.0)
+            deg = camera_degradation(section(cfg, "cameras"), None if seed is None else seed + len(cams))
+            cam.degradation = deg if deg.enabled else None
+            cams.append(cam)
     t = cfg.tof
     if getattr(t, "enabled", True):
         cams.append(SimCamera(stage, "tof_camera", "depth", t, parent_path, *frame_pose(joints, t.frame_id),

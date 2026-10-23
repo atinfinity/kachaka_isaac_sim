@@ -696,12 +696,40 @@ scripts/run_sim.sh --drop X Y SX SY      # a hole in the floor (repeatable), see
 scripts/run_sim.sh --wall X0 Y0 X1 Y1    # a wall segment (repeatable), see Doors
 scripts/run_sim.sh --door X Y YAW        # a door (repeatable; --door-kind, --door-width, --door-closed, --door-cycle, --door-auto)
 scripts/run_sim.sh --api-port 26400      # kachaka-api gRPC port (default 26400; 0 turns it off)
+scripts/run_sim.sh --config config/degraded.yaml   # degraded sensors, see Sensor degradation
 scripts/run_sim.sh --help
 ```
 
 Robot parameters (speed limits, sensor resolution and rates, noise) are in
 [`config/robot.yaml`](config/robot.yaml). Values not published by Preferred
-Robotics are marked *(est.)*.
+Robotics are marked *(est.)*. A config file can name another as its `base`
+and give only the keys it changes (as `config/degraded.yaml` does).
+
+### Sensor degradation
+
+The sensors are close to ideal by default. The `degradation` section of
+`config/robot.yaml` makes them worse, to see how SLAM, AMCL and Nav2 cope; all
+of it is off by default, and the values are test knobs, not measurements of
+the real robot:
+
+| Sensor | Keys | Effect |
+|---|---|---|
+| LiDAR | `invisible`, `dark`, `dark_range` | prim path patterns it sees through (glass), or sees only up close (black surfaces) |
+| | `dropout`, `noise_per_m` | rays that return nothing; range noise that grows with range |
+| Odometry | `slip_areas` | floor rectangles where the odometry (fused and wheel) reads `1 + slip` times the motion |
+| | `distance_scale_error`, `turn_scale_error` | scale errors everywhere |
+| Cameras | `noise`, `exposure_jitter`, `exposure_time` | pixel noise, an exposure that wanders, horizontal blur while turning (front and back RGB) |
+| IMU | `gyro_bias(_walk)`, `accel_bias(_walk)` | biases drawn at start that then wander; the gyro z bias also turns the orientation |
+
+The LiDAR works from collision shapes, so `invisible` and `dark` name prims
+(`["/World/Room/Glass*"]`), not materials. For more random odometry drift
+raise `odometry.fused_noise_*`. [`config/degraded.yaml`](config/degraded.yaml)
+turns most of them on:
+
+```bash
+scripts/run_sim.sh --config config/degraded.yaml --person 0.0 1.0 0.0
+python3 /tests/ros_degradation_check.py   # in the ROS 2 container: each effect shows up
+```
 
 ### Isaac Sim scenes
 
@@ -1137,6 +1165,7 @@ python3 /tests/ros_shelf_check.py    # shelf docking, towing and placing (same)
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE, MOVE_TO_LOCATION, SPEAK, goal_pose, cancel_all (same)
 python3 /tests/ros_detection_check.py   # object_detection/result while turning in place (same)
 python3 /tests/ros_hazard_check.py   # steps and collisions (no Nav2; sim started with --drop 1.0 0.0 0.4 0.8)
+python3 /tests/ros_degradation_check.py   # degraded sensors (sim started with --config config/degraded.yaml --person 0.0 1.0 0.0)
 python3 /tests/ros_door_check.py     # Nav2 and a door (sim started with --layout layouts/room_door.yaml)
 python3 /tests/ros_auto_door_check.py   # Nav2 and an automatic door (sim started with --layout layouts/room_auto_door.yaml)
 python3 /tests/ros_nav_check.py --no-collisions   # Nav2 goals among moving people (sim started with --layout layouts/room_movers.yaml)

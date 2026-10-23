@@ -622,12 +622,39 @@ scripts/run_sim.sh --drop X Y SX SY      # 床に穴を開ける（複数可。�
 scripts/run_sim.sh --wall X0 Y0 X1 Y1    # 壁（複数可。「ドア」を参照）
 scripts/run_sim.sh --door X Y YAW        # ドア（複数可。--door-kind、--door-width、--door-closed、--door-cycle、--door-auto）
 scripts/run_sim.sh --api-port 26400      # kachaka-api の gRPC ポート（既定 26400。0 で無効）
+scripts/run_sim.sh --config config/degraded.yaml   # センサーを劣化させる（「センサーの劣化」を参照）
 scripts/run_sim.sh --help
 ```
 
 ロボットのパラメータ（速度上限、センサーの解像度と周期、ノイズ）は
 [`config/robot.yaml`](config/robot.yaml) にあります。Preferred Robotics が公開していない値には
-*(est.)* と書いてあります。
+*(est.)* と書いてあります。設定ファイルは `base` で別のファイルを指定し、変える
+キーだけを書くこともできます（`config/degraded.yaml` がその例です）。
+
+### センサーの劣化
+
+既定ではセンサーはほぼ理想的です。`config/robot.yaml` の `degradation` で
+センサーを悪くして、SLAM・AMCL・Nav2 がどこまで耐えるかを試せます。既定ではすべて
+無効で、値は試験用のつまみであり、実機の測定値ではありません。
+
+| センサー | キー | 効果 |
+|---|---|---|
+| LiDAR | `invisible`、`dark`、`dark_range` | 透過するプリム（ガラス）、近くでしか見えないプリム（黒い面）のパスのパターン |
+| | `dropout`、`noise_per_m` | 何も返さないレイ、距離に比例して増えるノイズ |
+| オドメトリ | `slip_areas` | オドメトリ（fused とホイール）が動きの `1 + slip` 倍を読む床の長方形 |
+| | `distance_scale_error`、`turn_scale_error` | 全域のスケール誤差 |
+| カメラ | `noise`、`exposure_jitter`、`exposure_time` | 画素ノイズ、ゆらぐ露出、旋回中の水平ブレ（前後の RGB） |
+| IMU | `gyro_bias(_walk)`、`accel_bias(_walk)` | 起動時に決まり、その後ゆらぐバイアス。ジャイロ z のバイアスは姿勢も回す |
+
+LiDAR は衝突形状を見るので、`invisible` と `dark` は材質ではなくプリムを指定します
+（`["/World/Room/Glass*"]`）。オドメトリのランダムなドリフトを増やすには
+`odometry.fused_noise_*` を大きくします。[`config/degraded.yaml`](config/degraded.yaml)
+はほとんどを有効にします:
+
+```bash
+scripts/run_sim.sh --config config/degraded.yaml --person 0.0 1.0 0.0
+python3 /tests/ros_degradation_check.py   # ROS 2 コンテナで: それぞれの効果が出ているか
+```
 
 ### Isaac Sim のシーン
 
@@ -1008,6 +1035,7 @@ python3 /tests/ros_shelf_check.py    # シェルフのドッキング、牽引�
 python3 /tests/ros_command_check.py  # MOVE_TO_POSE、MOVE_TO_LOCATION、SPEAK、goal_pose、cancel_all（同上）
 python3 /tests/ros_detection_check.py   # その場で旋回しながら object_detection/result を確認（同上）
 python3 /tests/ros_hazard_check.py   # 段差と衝突（Nav2 不要。シミュレータは --drop 1.0 0.0 0.4 0.8 で起動）
+python3 /tests/ros_degradation_check.py   # センサーの劣化（シミュレータは --config config/degraded.yaml --person 0.0 1.0 0.0 で起動）
 python3 /tests/ros_door_check.py     # Nav2 とドア（シミュレータは --layout layouts/room_door.yaml で起動）
 python3 /tests/ros_auto_door_check.py   # Nav2 と自動ドア（シミュレータは --layout layouts/room_auto_door.yaml で起動）
 python3 /tests/ros_nav_check.py --no-collisions   # 動く人の間で Nav2 のゴール（シミュレータは --layout layouts/room_movers.yaml で起動）

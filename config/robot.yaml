@@ -175,6 +175,37 @@ imu:
   gyro_noise: 0.002         # rad/s stddev (est.)
   accel_noise: 0.02         # m/s^2 stddev (est.)
 
+# Harder sensor conditions (kachaka_isaac_sim/degradation.py), to see how
+# SLAM, AMCL and Nav2 cope. All off by default; the values are test knobs, not
+# measurements of the real robot. For more random odometry drift raise
+# odometry.fused_noise_*; for more LiDAR noise lidar.noise_stddev.
+degradation:
+  lidar:
+    # Prim path patterns (fnmatch; a prim and everything under it). The LiDAR
+    # sees through `invisible` (glass) and sees `dark` (black, low
+    # reflectivity) only within dark_range.
+    invisible: []           # e.g. ["/World/Room/Glass*"]
+    dark: []
+    dark_range: 1.5         # m
+    dropout: 0.0            # chance a ray returns nothing
+    noise_per_m: 0.0        # m of range noise stddev per metre of range, on top of noise_stddev
+  odometry:
+    # Floor rectangles where the wheels slip: the odometry (fused and wheel)
+    # reads (1 + slip) times the travel and turn made there.
+    slip_areas: []          # e.g. [{rect: [x0, y0, x1, y1], slip: 0.3}], world frame
+    distance_scale_error: 0.0   # e.g. 0.02: reads 2 % more distance than driven
+    turn_scale_error: 0.0       # e.g. -0.03: reads 3 % less turn
+  cameras:                  # front and back RGB
+    noise: 0.0              # pixel noise stddev, 8-bit levels
+    exposure_jitter: 0.0    # stddev of the wandering exposure, in stops
+    exposure_time_constant: 5.0  # s, how fast the exposure wanders
+    exposure_time: 0.0      # s the shutter is open: horizontal blur while turning
+  imu:
+    gyro_bias: 0.0          # rad/s, stddev of the bias at start, per axis
+    gyro_bias_walk: 0.0     # rad/s per sqrt(s); the z bias also turns the orientation
+    accel_bias: 0.0         # m/s^2
+    accel_bias_walk: 0.0    # m/s^2 per sqrt(s)
+
 stubs:
   version: "kachaka-isaac-sim 0.1.0"
 

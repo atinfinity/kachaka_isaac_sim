@@ -8,7 +8,8 @@
 #                                  # each check starts with sim/reset
 #
 # Both end with tests/ros_hazard_check.py (step sensors, collisions) in a
-# second simulator run with a drop in the floor. With --nav, collisions seen
+# simulator run with a drop in the floor, then tests/ros_degradation_check.py
+# in one with degraded sensors (config/degraded.yaml). With --nav, collisions seen
 # during the Nav2 checks are logged to build/smoke_collisions.log, and
 # tests/ros_door_check.py runs in a third simulator run with a door,
 # tests/ros_auto_door_check.py in a fourth with an automatic door,
@@ -154,6 +155,13 @@ LOG=build/smoke_sim_drop.log
 start_sim --drop 1.0 0.0 0.4 0.8
 echo "[smoke] running ros_hazard_check"
 ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_hazard_check.py || FAILED+=(ros_hazard_check)
+
+# Degraded sensors (config/degraded.yaml), a person to the robot's left.
+stop_sim
+LOG=build/smoke_sim_degraded.log
+start_sim --config config/degraded.yaml --person 0.0 1.0 0.0 --seed 1
+echo "[smoke] running ros_degradation_check"
+ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_degradation_check.py || FAILED+=(ros_degradation_check)
 if ((${#FAILED[@]})); then
     echo "[smoke] failed: ${FAILED[*]}"
     exit 1

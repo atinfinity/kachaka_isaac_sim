@@ -108,7 +108,10 @@ class WheelOdometry:
         self.v = self.w = 0.0
         self._last = None
 
-    def update(self, left_angle: float, right_angle: float, dt: float) -> Pose2D:
+    def update(self, left_angle: float, right_angle: float, dt: float,
+               scale: tuple[float, float] = (1.0, 1.0)) -> Pose2D:
+        """`scale`: (distance, turn) factors on the step, for wheels that slip
+        more than the physics makes them (degradation.OdometryDegradation)."""
         if self._last is None:
             self._last = (left_angle, right_angle)
             return self.pose
@@ -116,8 +119,8 @@ class WheelOdometry:
         dl = wrap_angle(left_angle - self._last[0]) * self.radius
         dr = wrap_angle(right_angle - self._last[1]) * self.radius
         self._last = (left_angle, right_angle)
-        ds = (dl + dr) / 2.0
-        dyaw = (dr - dl) / self.separation
+        ds = (dl + dr) / 2.0 * scale[0]
+        dyaw = (dr - dl) / self.separation * scale[1]
         mid = self.pose.yaw + dyaw / 2.0
         self.pose.x += ds * math.cos(mid)
         self.pose.y += ds * math.sin(mid)
