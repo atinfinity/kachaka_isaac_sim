@@ -604,7 +604,7 @@ ros2 launch kachaka_sim_bringup fleet.launch.py map:=/maps/room.yaml robots:=2 i
 python3 /tests/ros_multi_nav_check.py   # their paths cross at right angles; they pass without touching
 ```
 
-![Two robots cross at right angles; RViz shows robot 1's outline, now and 0.5 s ahead, in robot 0's local costmap](docs/fleet.gif)
+![Two robots cross at right angles; RViz shows robot 1's outline, now (yellow) and 0.5 s ahead (blue), in robot 0's local costmap](docs/fleet.gif)
 
 Robot 0's AMCL starts at the map origin (its spawn). `initial_poses` gives
 the others' starts in the same map frame (`x,y,yaw` per robot, in a row:
@@ -727,6 +727,7 @@ machine through DDS discovery.
 | Orange cylinder / brown box | moving person / box (red while waiting for the robot), green arrow for its velocity | `/mover_markers` |
 | Violet / yellow / faint grey panel | door closed / opening or closing / open | `/door_markers` |
 | Faint orange rectangle on the floor | an automatic door's sensor area | `/door_markers` |
+| Yellow / blue outline (`record_demo.sh fleet`) | another robot now / 0.5 s ahead | `{namespace}/other_robots` |
 
 The costmaps (off by default) use RViz's `costmap` scheme.
 

@@ -15,7 +15,8 @@ as a fleet sharing its poses would. The footprint topic only gives the
 shape: it comes with the costmap's updates (5 Hz), too late for a robot
 crossing at 0.5 m/s. The outline is placed with the newest TF instead, and
 again PREDICT s ahead at the robot's current speed, so the others react to
-where it is going.
+where it is going. Each point's intensity tells the two apart (0 now, 1
+predicted) for RViz; the costmaps read only x, y, z.
 
 `robots` lists the Nav2 namespaces, robot 0's first ('' for none).
 """
@@ -27,8 +28,8 @@ from geometry_msgs.msg import PolygonStamped
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
-from sensor_msgs.msg import PointCloud2
-from sensor_msgs_py.point_cloud2 import create_cloud_xyz32
+from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs_py.point_cloud2 import create_cloud
 from std_msgs.msg import Header
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -37,6 +38,9 @@ POINT_Z = 0.1  # m, within the costmaps' obstacle heights
 MAX_AGE = 1.0  # s; a pose older than this (its localization stopped) is left out
 PREDICT = 0.5  # s ahead for the second outline
 VELOCITY_WINDOW = 0.2  # s of TF to estimate the velocity from
+FIELDS = [PointField(name=n, offset=4 * k, datatype=PointField.FLOAT32, count=1)
+          for k, n in enumerate(("x", "y", "z", "intensity"))]
+NOW, PREDICTED = 0.0, 1.0  # intensity
 
 
 def outline(corners, step: float = OUTLINE_STEP) -> list[tuple[float, float]]:
@@ -106,9 +110,10 @@ class FleetOutlines(Node):
         p, q = t.transform.translation, t.transform.rotation
         self.shapes[i] = transform_2d([(c.x, c.y) for c in msg.polygon.points], p.x, p.y, yaw_of(q))
 
-    def _in_map(self, i: int) -> list[tuple[float, float]]:
-        """Robot i's outline in the map frame, now and PREDICT s ahead, or []
-        if its shape or pose is unknown or old."""
+    def _in_map(self, i: int) -> list[tuple[float, float, float]]:
+        """Robot i's outline in the map frame, now and PREDICT s ahead, as
+        (x, y, NOW or PREDICTED), or [] if its shape or pose is unknown or
+        old."""
         if self.shapes[i] is None:
             return []
         try:
@@ -120,14 +125,15 @@ class FleetOutlines(Node):
             return []
         ahead = predict(now, before, (stamp - then).nanoseconds * 1e-9, PREDICT)
         ring = outline(self.shapes[i])
-        return transform_2d(ring, *now) + transform_2d(ring, *ahead)
+        return ([(x, y, NOW) for x, y in transform_2d(ring, *now)]
+                + [(x, y, PREDICTED) for x, y in transform_2d(ring, *ahead)])
 
     def _publish(self) -> None:
         robots = [self._in_map(i) for i in range(len(self.robots))]
         header = Header(frame_id=self.map_frame, stamp=self.get_clock().now().to_msg())
         for i, pub in enumerate(self.pubs):
-            points = [(x, y, POINT_Z) for j, r in enumerate(robots) if j != i for x, y in r]
-            pub.publish(create_cloud_xyz32(header, points))
+            points = [(x, y, POINT_Z, kind) for j, r in enumerate(robots) if j != i for x, y, kind in r]
+            pub.publish(create_cloud(header, FIELDS, points))
 
 
 def main():
