@@ -9,8 +9,10 @@ layout's first-floor map):
     ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/elevator_1F.yaml
     python3 tests/ros_map_world_check.py --map /maps/elevator_1F.yaml
 
-1. The world frame is the map frame: AMCL, given ground truth as its initial
-   pose (on a saved map it waits for one), holds it (TF map -> base_footprint).
+1. The world frame is the map frame: AMCL starts at the map origin
+   (set_initial_pose in nav2_params.yaml), the spawn pose, so TF map ->
+   base_footprint comes before any /initialpose, and it agrees with ground
+   truth.
 2. The LiDAR sees the map's walls: most scan points, placed by ground truth,
    fall on an occupied cell of /map (or next to one).
 3. The charger stands at the map's `charger_pose` (sim/charger_pose).
@@ -170,7 +172,9 @@ def main():
     if not node.wait(lambda: node.gt and node.scan and node.map, 60.0):
         check("ready", False, "no ground truth, scan or /map within 60 s")
         return 1
-    if not node.set_pose():
+    started = node.wait(lambda: node.lookup("map", "base_footprint") is not None, 10.0)
+    check("map -> base_footprint before any /initialpose", started)
+    if not started and not node.set_pose():  # go on with ground truth as the initial pose
         check("ready", False, "AMCL gave no TF map -> base_footprint for the initial pose within 30 s")
         return 1
     node.wait(lambda: False, 2.0)  # let AMCL settle on the scan

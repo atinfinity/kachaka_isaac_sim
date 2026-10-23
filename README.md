@@ -766,9 +766,10 @@ ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/site.yaml
   `--map-wall-height`), merged into as few boxes as the grid allows and
   built as one mesh. Free and unknown cells are floor.
 - The world frame is the map frame: spawned at the map origin (the default),
-  `navigation.launch.py` on the same map localizes at once, and goals clicked
-  on the map are world poses. Give `--x`/`--y`/`--yaw` in the map frame
-  elsewhere; the simulator warns when the spawn pose is on a wall.
+  `navigation.launch.py` on the same map localizes at once (AMCL starts at
+  the map origin), and goals clicked on the map are world poses. Give
+  `--x`/`--y`/`--yaw` in the map frame elsewhere, and the same pose to AMCL
+  on `/initialpose`; the simulator warns when the spawn pose is on a wall.
 - The charger stands at the yaml's `charger_pose` (as `make_maps.py` and the
   simulator's map export write it) unless `--charger` or `--no-charger` says
   otherwise.
@@ -776,7 +777,7 @@ ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/site.yaml
   thresholds. Add boxes, doors or people with a layout file.
 
 `tests/ros_map_world_check.py` checks a map world: AMCL at the ground truth
-pose, the LiDAR's points on the map's walls, the charger at `charger_pose`
+pose from the start, the LiDAR's points on the map's walls, the charger at `charger_pose`
 and a Nav2 goal reached without touching anything (`smoke_test.sh --nav`
 runs it on the elevator layout's first-floor map).
 
