@@ -91,6 +91,15 @@ class Pose2D:
     yaw: float = 0.0
 
 
+def poses_of(p) -> list[Pose2D]:
+    """A robot pose, a list of them (several robots) or None, as a list."""
+    if p is None:
+        return []
+    if isinstance(p, Pose2D):
+        return [p]
+    return [q for q in p if q is not None]
+
+
 class WheelOdometry:
     """Dead reckoning from wheel joint angles, so wheel slip shows up as drift."""
 

@@ -20,6 +20,7 @@ def generate_launch_description():
         DeclareLaunchArgument("map", description="map YAML from map_saver_cli"),
         DeclareLaunchArgument("use_sim_time", default_value="true", description="false for a real Kachaka"),
         DeclareLaunchArgument("rviz", default_value="true"),
+        DeclareLaunchArgument("rviz_config", default_value=PathJoinSubstitution([pkg, "config", "kachaka.rviz"])),
         DeclareLaunchArgument("command_server", default_value="true",
                               description="serve kachaka_command/execute (RETURN_HOME, shelves) and auto homing; "
                                           "false for a real Kachaka, which has its own"),
@@ -61,7 +62,7 @@ def generate_launch_description():
         ),
         IncludeLaunchDescription(
             PathJoinSubstitution([pkg, "launch", "rviz.launch.py"]),
-            launch_arguments={"use_sim_time": use_sim_time}.items(),
+            launch_arguments={"use_sim_time": use_sim_time, "rviz_config": LaunchConfiguration("rviz_config")}.items(),
             condition=IfCondition(LaunchConfiguration("rviz")),
         ),
     ])

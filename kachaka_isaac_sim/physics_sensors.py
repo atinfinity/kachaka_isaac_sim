@@ -53,6 +53,9 @@ class Lidar:
         self.degradation = degradation if degradation is not None and degradation.enabled else None
         self.robot_prefix = robot_path + "/"
         self.ignore: set[str] = set()  # rigid bodies to see through (a towed shelf)
+        # The other robots' poses (callable returning Pose2D's), seen through
+        # fleet.body_ray_hits: their body at the LiDAR's height has no collider.
+        self.others = None
         self.offset = np.array(mount_xyz, dtype=float)
         self.mount_rot = quat_to_matrix(*mount_quat)
         self.rng = random.Random(seed)
@@ -98,8 +101,15 @@ class Lidar:
 
         ranges, raw = self.ranges, self.raw
         rng, stddev = self.rng, cfg.noise_stddev
+        robots = self.others() if self.others else None
+        if robots:
+            from kachaka_isaac_sim.fleet import body_ray_hits
+
+            first = body_ray_hits(origin, dirs, robots, cfg.max_range)
+        else:
+            first = np.full(len(dirs), math.inf)
         for i, d in enumerate(dirs):
-            best[0], dark[0] = math.inf, False
+            best[0], dark[0] = float(first[i]), False  # the other robots' bodies count as plain surfaces
             self.query.raycast_all(o, (float(d[0]), float(d[1]), float(d[2])), cfg.max_range, on_hit)
             r = best[0]
             raw[i] = r

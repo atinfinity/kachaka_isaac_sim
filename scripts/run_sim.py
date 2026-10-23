@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--x", type=float, help="spawn x [m] (default: the world's spawn pose, else 0)")
     p.add_argument("--y", type=float, help="spawn y [m]")
     p.add_argument("--yaw", type=float, help="spawn yaw [rad]")
+    p.add_argument("--robot", type=float, nargs=3, action="append", metavar=("X", "Y", "YAW"),
+                   help="a robot at X, Y, YAW (world frame; repeatable, instead of --x/--y/--yaw). The first "
+                        "keeps the single-robot names; robot i >= 1 is /World/kachaka_i in ROS namespace kachaka_i "
+                        "with TF frames kachaka_i/..., kachaka-api on --api-port + i. All share the first robot's "
+                        "map frame. Cameras, shelves and the elevator stay with the first robot")
     p.add_argument("--charger", type=float, nargs=3, metavar=("X", "Y", "YAW"),
                    help="place the charging dock where a docked robot is at X, Y, YAW (world frame). "
                         "Default: on the west wall in 'room', none elsewhere")
@@ -328,7 +333,7 @@ def stack_floors(stage, spec, boxes_root) -> None:
                        platform_z(spec.start))
 
 
-def check_overlaps(objs, spawn) -> list[str]:
+def check_overlaps(objs, spawns) -> list[str]:
     """Warnings for objects whose outline overlaps another collider (PhysX
     overlap query, from 3 cm above the floor). Needs the simulation running."""
     import carb
@@ -339,9 +344,16 @@ def check_overlaps(objs, spawn) -> list[str]:
 
     query = get_physx_scene_query_interface()
     warnings = []
-    # The robot may start docked on the charger or under a shelf.
-    spawn_obj = ("spawn", (ROBOT_PATH, "/World/Charger", "/World/Shelves"), Pose2D(*spawn), 0.2, 0.13, 0.2)
-    for name, own, pose, hx, hy, h in objs + [spawn_obj]:
+    # A robot may start docked on the charger or under a shelf. Robots
+    # (every path starting with ROBOT_PATH) are not reported as colliders.
+    spawn_objs = [("spawn" if i == 0 else f"spawn {i}", (ROBOT_PATH, "/World/Charger", "/World/Shelves"),
+                   Pose2D(*spawn), 0.2, 0.13, 0.2) for i, spawn in enumerate(spawns)]
+    for i, a in enumerate(spawns):
+        for j in range(i):
+            b = spawns[j]
+            if math.hypot(a[0] - b[0], a[1] - b[1]) < 0.5:
+                warnings.append(f"spawn {i} at ({a[0]:.2f}, {a[1]:.2f}) is within 0.5 m of spawn {j}")
+    for name, own, pose, hx, hy, h in objs + spawn_objs:
         hits = set()
         own = (own,) if isinstance(own, str) else own
 
@@ -366,6 +378,11 @@ def main() -> int:
     cfg = load_config(args.config)
     from kachaka_isaac_sim.layout import LayoutError
 
+    if args.robot:
+        if any(v is not None for v in (args.x, args.y, args.yaw)):
+            print("give the spawn pose with either --robot or --x/--y/--yaw", file=sys.stderr)
+            return 1
+        args.x, args.y, args.yaw = args.robot[0]
     try:
         layout = resolve_layout(args, cfg)
     except (LayoutError, OSError) as e:
@@ -386,6 +403,13 @@ def main() -> int:
                   "give one with --x/--y (map frame)", flush=True)
     elif args.map_resolution is not None:
         print("--map-resolution is for a map:<image> world", file=sys.stderr)
+        return 1
+    from kachaka_isaac_sim.drive import Pose2D
+    from kachaka_isaac_sim.fleet import fleet_specs, robot_poses
+
+    fleet = fleet_specs(cfg, robot_poses(args.robot, Pose2D(args.x, args.y, args.yaw)), args.api_port, args.seed)
+    if len(fleet) > 1 and layout and layout.elevator:
+        print("several robots with an elevator are not supported yet", file=sys.stderr)
         return 1
     if not ROBOT_USD.exists() or not ROBOT_URDF.exists():
         print("Robot assets missing: run scripts/fetch_assets.py and scripts/build_usd.py first", file=sys.stderr)
@@ -513,10 +537,12 @@ def main() -> int:
     moving = mover_specs(cfg, layout, people, motions, boxes_root)
     if elevator_spec and elevator_spec.stack == "vertical":
         stack_floors(stage, elevator_spec, boxes_root)
-    world.add_robot(stage, ROBOT_USD, args.x, args.y, args.yaw)
-    world.apply_contact_materials(stage, cfg.drive)
-    world.disable_pin_collision(stage)
-    world.enable_contact_report(stage)
+    for r in fleet:
+        base = world.base_link(r.prim_path)
+        world.add_robot(stage, ROBOT_USD, r.pose.x, r.pose.y, r.pose.yaw, path=r.prim_path)
+        world.apply_contact_materials(stage, cfg.drive, base)
+        world.disable_pin_collision(stage, base)
+        world.enable_contact_report(stage, base)
     from kachaka_isaac_sim.torches import Torches
     from kachaka_isaac_sim.urdf_tools import read_joints
 
@@ -563,7 +589,7 @@ def main() -> int:
     app.update()
     if layout:
         for w in check_overlaps(layout_objects(layout, charger_pose, shelf_specs, people, boxes_root),
-                                (args.x, args.y, args.yaw)):
+                                [(r.pose.x, r.pose.y, r.pose.yaw) for r in fleet]):
             print(f"[kachaka] layout warning: {w}", flush=True)
 
     node = KachakaSimNode(cfg, ROBOT_URDF)
@@ -615,12 +641,16 @@ def main() -> int:
 
         return relative_pose(shifted(spawn, min(floor_of(p.x), len(elevator_spec.floors) - 1)), p)
 
+    def robot_poses_now():
+        """Every robot's ground truth, for doors and movers."""
+        return [robot.gt] + [o[3].gt for o in others]
+
     doors = None
     if door_specs:
         from kachaka_isaac_sim.doors import Doors
 
         # Automatic doors sense the robot and the movers, made further down.
-        doors = Doors(stage, door_specs, cfg.door, world.ROOM_WALL, lambda: robot.gt,
+        doors = Doors(stage, door_specs, cfg.door, world.ROOM_WALL, lambda: robot_poses_now(),
                       lambda: movers.poses() if movers else [])
         node.add_doors(doors, to_map)
     sim_start = SimulationManager.get_simulation_time()
@@ -629,11 +659,35 @@ def main() -> int:
     contacts = ContactSensor(world.BASE_LINK, world.CASTER_SHAPES)
     robot = SimRobot(world.BASE_LINK, world.ROBOT_PATH, ROBOT_URDF, cfg, node, sim_start, args.seed, charger,
                      shelves, spawn, contacts)
+    # The other robots: their own node, kachaka-api, charger state and
+    # sensors; robot 0's map frame. Only robot 0's node publishes /clock.
+    others = []  # (spec, node, api, robot)
+    for r in fleet[1:]:
+        r_cfg = r.config(cfg)
+        r_node = KachakaSimNode(r_cfg, ROBOT_URDF, r.node_name, publish_clock=False)
+        r_charger = None
+        if charger_pose:
+            r_charger = Charger(dock, cfg.charger.tolerance_xy, cfg.charger.tolerance_yaw)
+            r_node.publish_charger_pose(relative_pose(spawn, dock))
+        r_api = None
+        if r.api_port:
+            from kachaka_isaac_sim.api_server import KachakaApiServer
+
+            r_api = KachakaApiServer(r_node, r.api_port)
+        base = world.base_link(r.prim_path)
+        r_robot = SimRobot(base, r.prim_path, ROBOT_URDF, r_cfg, r_node, sim_start, r.seed, r_charger, None, spawn,
+                           ContactSensor(base, world.CASTER_SHAPES), spawn=r.pose)
+        r_node.reset_handler = r_robot.reset  # this robot only; robot 0's sim/reset also resets the world
+        others.append((r, r_node, r_api, r_robot))
+    # Each robot's LiDAR sees the others (fleet.body_ray_hits).
+    fleet_robots = [robot] + [o[3] for o in others]
+    for me in fleet_robots if len(fleet_robots) > 1 else ():
+        me.lidar.others = lambda me=me: [r.gt for r in fleet_robots if r is not me]
     movers = None
     if moving:
         from kachaka_isaac_sim.movers import Movers
 
-        movers = Movers(stage, moving, cfg.movers, lambda: robot.gt)
+        movers = Movers(stage, moving, cfg.movers, robot_poses_now)
         node.add_movers()
         print(f"[kachaka] {len(moving)} moving: {', '.join(m.path.rpartition('/')[2] for m in moving)}", flush=True)
 
@@ -689,6 +743,13 @@ def main() -> int:
         SimulationManager.register_callback(lambda dt, ctx: robot.pre_step(dt), SimulationEvent.PHYSICS_PRE_STEP),
         SimulationManager.register_callback(lambda dt, ctx: robot.post_step(dt), SimulationEvent.PHYSICS_POST_STEP),
     ]
+    for *_, r_robot in others:
+        callbacks += [
+            SimulationManager.register_callback(lambda dt, ctx, r=r_robot: r.pre_step(dt),
+                                                SimulationEvent.PHYSICS_PRE_STEP),
+            SimulationManager.register_callback(lambda dt, ctx, r=r_robot: r.post_step(dt),
+                                                SimulationEvent.PHYSICS_POST_STEP),
+        ]
     if doors:
         callbacks.append(SimulationManager.register_callback(lambda dt, ctx: doors.step(dt),
                                                              SimulationEvent.PHYSICS_PRE_STEP))
@@ -715,12 +776,20 @@ def main() -> int:
     where = f", charger at {charger_pose}" if charger_pose else ""
     if api:
         where += f", kachaka-api on port {args.api_port}"
+    for r, r_node, r_api, _ in others:
+        start = relative_pose(spawn, r.pose)
+        api_note = f", kachaka-api on port {r.api_port}" if r_api else ""
+        print(f"[kachaka] robot {r.index}: ROS namespace '{r_node.ns}', frames '{r.frame_prefix}...', "
+              f"start ({start.x:.3f}, {start.y:.3f}, {start.yaw:.3f}) in the map frame{api_note}", flush=True)
     print(f"[kachaka] running: ROS namespace '{node.ns}', world '{args.world}'{where}", flush=True)
     try:
         while app.is_running():
             t0 = time.perf_counter()
             node.spin_once()
             node.run_pending()
+            for _, r_node, _, _ in others:
+                r_node.spin_once()
+                r_node.run_pending()
             app.update()
             if doors and doors.take_changed():
                 node.publish_doors()
@@ -761,6 +830,10 @@ def main() -> int:
         print(f"[kachaka] recorded {recorder.count} frames to {args.record}", flush=True)
     if api:
         api.stop()
+    for _, r_node, r_api, _ in others:
+        if r_api:
+            r_api.stop()
+        r_node.shutdown()
     node.shutdown()
     # SimulationApp.close() can abort on Isaac Sim 6.1; nothing is left to save.
     os._exit(0)

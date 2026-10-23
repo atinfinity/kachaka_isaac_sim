@@ -40,7 +40,8 @@ DOCKING_JOINT = "docking_joint"
 class SimRobot:
     def __init__(self, articulation_path: str, robot_path: str, urdf_path: Path, cfg: SimpleNamespace,
                  node: KachakaSimNode, start_time: float, seed: int | None = None, charger: Charger | None = None,
-                 shelves=None, map_origin: Pose2D | None = None, contacts: ContactSensor | None = None):
+                 shelves=None, map_origin: Pose2D | None = None, contacts: ContactSensor | None = None,
+                 spawn: Pose2D | None = None):
         self.cfg = cfg
         self.node = node
         self.t = start_time
@@ -69,7 +70,10 @@ class SimRobot:
         self.sensors_off_on_charger = bool(cfg.charger.sensors_off)
         self.shelves = shelves  # shelves.Shelves or None
         self.map_origin = map_origin or Pose2D(0.0, 0.0, 0.0)  # world pose of the map frame
-        self.spawn = Pose2D(self.map_origin.x, self.map_origin.y, self.map_origin.yaw)
+        self.start_origin = Pose2D(self.map_origin.x, self.map_origin.y, self.map_origin.yaw)
+        # The start pose; the map origin too, unless several robots share one map.
+        s = spawn or self.map_origin
+        self.spawn = Pose2D(s.x, s.y, s.yaw)
         self.gt = Pose2D(0.0, 0.0, 0.0)
         self.yaw_rate = 0.0  # rad/s, at the odometry rate (camera motion blur)
         self.start_z = float(self.art.get_world_poses()[0].numpy()[0][2])
@@ -182,7 +186,9 @@ class SimRobot:
             self.set_shelf_docked(False)
         if self.shelves is not None:
             self.shelves.reset()
-        o = self.map_origin = Pose2D(self.spawn.x, self.spawn.y, self.spawn.yaw)
+        m = self.start_origin
+        self.map_origin = Pose2D(m.x, m.y, m.yaw)
+        o = Pose2D(self.spawn.x, self.spawn.y, self.spawn.yaw)
         self.art.set_world_poses([[o.x, o.y, self.start_z]], [list(quat_from_yaw(o.yaw))])
         self.art.set_velocities([[0.0] * 3], [[0.0] * 3])
         self.art.set_dof_velocities([[0.0] * len(self.dof_names)])

@@ -183,3 +183,12 @@ def test_doors_sense_the_robot_and_movers():
 def test_auto_from_config():
     a = load_config().door.auto
     assert a.range > 0 and a.margin >= 0 and a.hold > 0 and isinstance(a.movers, bool)
+
+
+def test_doors_sense_any_of_several_robots():
+    d = bare_doors([auto_spec(movers=False)])
+    d.mover_poses = list
+    d.robot_pose = lambda: [Pose2D(9.0, 9.0, 0.0), None]
+    assert d._sensed() == [False]
+    d.robot_pose = lambda: [Pose2D(9.0, 9.0, 0.0), Pose2D(1.0, 2.5, 0.0)]
+    assert d._sensed() == [True]

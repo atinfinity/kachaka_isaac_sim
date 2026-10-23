@@ -13,6 +13,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true"),
         DeclareLaunchArgument("kachaka_namespace", default_value="kachaka"),
+        DeclareLaunchArgument("base_frame", default_value="base_footprint",
+                              description="the robot's base frame (kachaka_1/base_footprint for robot 1)"),
         Node(
             package="kachaka_sim_bringup",
             executable="nav_bridge",
@@ -39,6 +41,7 @@ def generate_launch_description():
             package="kachaka_sim_bringup",
             executable="footprint_map_filter",
             output="screen",
-            parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
+            parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time"),
+                         "base_frame": LaunchConfiguration("base_frame")}],
         ),
     ])
