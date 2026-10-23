@@ -137,7 +137,7 @@ def resolve_layout(args, cfg):
     return layout
 
 
-def publish_cameras(node, cameras, t: float, tof_off: bool = False, detector=None) -> None:
+def publish_cameras(node, cameras, t: float, tof_off: bool = False, detector=None, yaw_rate: float = 0.0) -> None:
     for cam in cameras:
         if not cam.due(t) or (tof_off and cam.kind == "depth"):
             continue
@@ -145,6 +145,8 @@ def publish_cameras(node, cameras, t: float, tof_off: bool = False, detector=Non
         if data is None:
             continue
         if cam.kind == "rgb":
+            if cam.degradation is not None:
+                data = cam.degradation.apply(data, t, yaw_rate, cam.fx)
             node.publish_image(t, cam.name, cam.cfg.frame_id, data, "rgb8", cam.fx)
             if detector is not None and detector.camera is cam:
                 objects = detector.detect()
@@ -550,7 +552,7 @@ def main() -> int:
     if not args.no_cameras:
         from kachaka_isaac_sim.cameras import create_cameras
 
-        cameras = create_cameras(stage, cfg, world.BASE_LINK, read_joints(ROBOT_URDF))
+        cameras = create_cameras(stage, cfg, world.BASE_LINK, read_joints(ROBOT_URDF), args.seed)
     detector = None
     det_cfg = getattr(cfg, "object_detection", None)
     front = next((c for c in cameras if c.name == "front_camera"), None)
@@ -799,7 +801,8 @@ def main() -> int:
                 if elevator.take_changed():
                     node.publish_elevator()
             t1 = time.perf_counter()
-            publish_cameras(node, cameras, robot.t, tof_off=robot.sensors_paused, detector=detector)
+            publish_cameras(node, cameras, robot.t, tof_off=robot.sensors_paused, detector=detector,
+                            yaw_rate=robot.yaw_rate)
             if recorder:
                 recorder.capture(robot.t - sim_start, (robot.gt.x, robot.gt.y, robot_height()))
             timing[0] += t1 - t0

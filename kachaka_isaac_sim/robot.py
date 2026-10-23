@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from isaacsim.core.experimental.prims import Articulation
 
+from .degradation import imu_degradation, lidar_degradation, odometry_degradation, section
 from .drive import (
     NoisyOdometry,
     Pose2D,
@@ -55,6 +56,9 @@ class SimRobot:
         self.limiter = VelocityCommand(drive_limits(d))
         self.wheel_odom = WheelOdometry(d.wheel_radius, d.wheel_separation)
         self.fused_odom = NoisyOdometry(cfg.odometry.fused_noise_xy, cfg.odometry.fused_noise_yaw, seed)
+        # Slip areas and scale errors (config `degradation.odometry`): the
+        # odometry is fed the pose it believes, not ground truth.
+        self.odom_error = odometry_degradation(section(cfg, "odometry"))
         self.odom_period = 1.0 / cfg.odometry.rate
         self.next_odom = start_time
         self.next_battery = start_time
@@ -71,6 +75,7 @@ class SimRobot:
         s = spawn or self.map_origin
         self.spawn = Pose2D(s.x, s.y, s.yaw)
         self.gt = Pose2D(0.0, 0.0, 0.0)
+        self.yaw_rate = 0.0  # rad/s, at the odometry rate (camera motion blur)
         self.start_z = float(self.art.get_world_poses()[0].numpy()[0][2])
         self.z = self.start_z  # base height, at the ground truth's rate
         self.hold_until = -math.inf  # cmd_vel is ignored until then (after a reset)
@@ -80,7 +85,8 @@ class SimRobot:
             node.publish_shelf_docked("")
 
         joints = read_joints(urdf_path)
-        self.lidar = Lidar(cfg.lidar, *frame_pose(joints, cfg.lidar.frame_id), robot_path, seed)
+        self.lidar = Lidar(cfg.lidar, *frame_pose(joints, cfg.lidar.frame_id), robot_path, seed,
+                           lidar_degradation(section(cfg, "lidar")))
         self.lidar_period = 1.0 / cfg.lidar.rate
         self.next_lidar = start_time
         fs = cfg.front_stop
@@ -101,7 +107,8 @@ class SimRobot:
         self.collisions = CollisionCounter(tuple(col.ignore), float(col.debounce))
         self.collision_stop = bool(col.stop)
         node.publish_errors()
-        self.imu = Imu(cfg.imu, *frame_pose(joints, cfg.imu.frame_id), read_com(urdf_path), seed)
+        self.imu = Imu(cfg.imu, *frame_pose(joints, cfg.imu.frame_id), read_com(urdf_path), seed,
+                       imu_degradation(section(cfg, "imu"), seed))
         self.imu_period = 1.0 / cfg.imu.rate
         self.next_imu = start_time
 
@@ -192,8 +199,10 @@ class SimRobot:
         self.wheel_odom.reset()
         if clear_odometry:
             self.fused_odom.reset(o)  # SLAM starts its new map here, at the spawn pose
+            self.odom_error.reset()
         else:
             self.fused_odom.teleported()
+            self.odom_error.teleported()
         self.gt, self.z = Pose2D(o.x, o.y, o.yaw), self.start_z
         self.on_charger = self.charger is not None and self.charger.docked(self.gt)
         self.battery.reset()
@@ -218,6 +227,7 @@ class SimRobot:
         if self.towing:
             self.shelves.shift([self.shelves.docked], dx, dy)
         self.fused_odom.shift(dx, dy)
+        self.odom_error.shift(dx, dy)
         self.gt = Pose2D(self.gt.x + dx, self.gt.y + dy, self.gt.yaw)
         self.map_origin = Pose2D(self.map_origin.x + dx, self.map_origin.y + dy, self.map_origin.yaw)
 
@@ -227,10 +237,11 @@ class SimRobot:
         node = self.node
         node.publish_clock(t)
         q = self.art.get_dof_positions().numpy()[0]
-        self.wheel_odom.update(float(q[self.i_left]), float(q[self.i_right]), dt)
-
         # Base state every step: the IMU differentiates velocity.
         pos, quat = (a.numpy()[0].astype(float) for a in self.art.get_world_poses())
+        scale = self.odom_error.scale(float(pos[0]), float(pos[1])) if self.odom_error.enabled else (1.0, 1.0)
+        self.wheel_odom.update(float(q[self.i_left]), float(q[self.i_right]), dt, scale)
+
         lin, ang = (a.numpy()[0].astype(float) for a in self.art.get_velocities())  # at the COM, world frame
         rot = quat_to_matrix(*quat)  # quat is (w, x, y, z)
         self.imu.update(rot, lin, ang, dt)
@@ -250,7 +261,8 @@ class SimRobot:
             # projection of the COM velocity is exact.
             v = float(lin[0] * math.cos(yaw) + lin[1] * math.sin(yaw))
             w = float(ang[2])
-            fused = self.fused_odom.update(gt)
+            self.yaw_rate = w
+            fused = self.fused_odom.update(self.odom_error.update(gt) if self.odom_error.enabled else gt)
             wo = self.wheel_odom
             node.publish_odometry(t, fused, wo.pose, gt, v, w, wo.v, wo.w)
             if self.charger is not None:

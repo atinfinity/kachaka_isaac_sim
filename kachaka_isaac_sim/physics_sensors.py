@@ -14,6 +14,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from .degradation import DARK, INVISIBLE, ImuDegradation, LidarDegradation
+
 
 def quat_to_matrix(w: float, x: float, y: float, z: float) -> np.ndarray:
     return np.array([
@@ -42,11 +44,13 @@ def matrix_to_quat(m: np.ndarray) -> tuple[float, float, float, float]:
 class Lidar:
     """2D scan in the laser frame, ignoring the robot's own collision shapes."""
 
-    def __init__(self, cfg: SimpleNamespace, mount_xyz, mount_quat, robot_path: str, seed: int | None = None):
+    def __init__(self, cfg: SimpleNamespace, mount_xyz, mount_quat, robot_path: str, seed: int | None = None,
+                 degradation: LidarDegradation | None = None):
         from omni.physx import get_physx_scene_query_interface
 
         self.query = get_physx_scene_query_interface()
         self.cfg = cfg
+        self.degradation = degradation if degradation is not None and degradation.enabled else None
         self.robot_prefix = robot_path + "/"
         self.ignore: set[str] = set()  # rigid bodies to see through (a towed shelf)
         # The other robots' poses (callable returning Pose2D's), seen through
@@ -82,14 +86,21 @@ class Lidar:
         o = (float(origin[0]), float(origin[1]), float(origin[2]))
         prefix = self.robot_prefix
         ignore = self.ignore
+        deg = self.degradation
+        surfaces = deg.surfaces if deg is not None and deg.surfaces else None
         best = [math.inf]
+        dark = [False]
 
         def on_hit(hit) -> bool:
-            if not hit.rigid_body.startswith(prefix) and hit.rigid_body not in ignore and hit.distance < best[0]:
-                best[0] = hit.distance
+            if hit.rigid_body.startswith(prefix) or hit.rigid_body in ignore or hit.distance >= best[0]:
+                return True
+            kind = surfaces.classify(hit.collision, hit.rigid_body) if surfaces is not None else 0
+            if kind != INVISIBLE:
+                best[0], dark[0] = hit.distance, kind == DARK
             return True  # hits are not sorted, so look at all of them
 
         ranges, raw = self.ranges, self.raw
+        rng, stddev = self.rng, cfg.noise_stddev
         robots = self.others() if self.others else None
         if robots:
             from kachaka_isaac_sim.fleet import body_ray_hits
@@ -98,14 +109,16 @@ class Lidar:
         else:
             first = np.full(len(dirs), math.inf)
         for i, d in enumerate(dirs):
-            best[0] = float(first[i])
+            best[0], dark[0] = float(first[i]), False  # the other robots' bodies count as plain surfaces
             self.query.raycast_all(o, (float(d[0]), float(d[1]), float(d[2])), cfg.max_range, on_hit)
             r = best[0]
             raw[i] = r
-            if r < math.inf:
-                r += self.rng.gauss(0.0, cfg.noise_stddev)
-                if r < cfg.min_range or r > cfg.max_range:
-                    r = math.inf
+            if deg is not None:
+                r = deg.noisy_range(r, dark[0], stddev, rng)
+            elif r < math.inf:
+                r += rng.gauss(0.0, stddev)
+            if r < cfg.min_range or r > cfg.max_range:
+                r = math.inf
             ranges[i] = float(r)
         return ranges
 
@@ -119,8 +132,10 @@ class Imu:
 
     GRAVITY = np.array([0.0, 0.0, 9.81])
 
-    def __init__(self, cfg: SimpleNamespace, mount_xyz, mount_quat, com_local, seed: int | None = None):
+    def __init__(self, cfg: SimpleNamespace, mount_xyz, mount_quat, com_local, seed: int | None = None,
+                 degradation: ImuDegradation | None = None):
         self.cfg = cfg
+        self.degradation = degradation if degradation is not None and degradation.enabled else None
         self.offset = np.array(mount_xyz, dtype=float) - np.array(com_local, dtype=float)
         self.mount_rot = quat_to_matrix(*mount_quat)
         self.rng = random.Random(seed)
@@ -137,7 +152,17 @@ class Imu:
         g, a = self.cfg.gyro_noise, self.cfg.accel_noise
         self.angular_velocity = to_imu @ ang_vel + np.array([self.rng.gauss(0, g) for _ in range(3)])
         self.linear_acceleration = to_imu @ (acc + self.GRAVITY) + np.array([self.rng.gauss(0, a) for _ in range(3)])
-        self.orientation = matrix_to_quat(base_rot @ self.mount_rot)
+        orientation = base_rot @ self.mount_rot
+        if self.degradation is not None:
+            # Biases in the IMU frame; the gyro's turns the orientation away
+            # from the truth about the world's z axis, as integrating it would.
+            gb, ab = self.degradation.step(dt)
+            self.angular_velocity = self.angular_velocity + gb
+            self.linear_acceleration = self.linear_acceleration + ab
+            e = self.degradation.yaw_error
+            orientation = np.array([[math.cos(e), -math.sin(e), 0.0], [math.sin(e), math.cos(e), 0.0],
+                                    [0.0, 0.0, 1.0]]) @ orientation
+        self.orientation = matrix_to_quat(orientation)
 
 
 class CliffSensors:

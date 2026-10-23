@@ -2,6 +2,7 @@
 # Record the README demos: the simulator's view next to RViz.
 #
 #   scripts/record_demo.sh        # Nav2 goals during SLAM -> docs/demo.gif
+#   scripts/record_demo.sh degraded  # the nav demo with config/degraded.yaml -> docs/degraded.gif
 #   scripts/record_demo.sh dock   # RETURN_HOME onto the charger -> docs/dock.gif
 #   scripts/record_demo.sh shelf  # dock, tow, turn and leave a shelf -> docs/shelf.gif
 #   scripts/record_demo.sh shelf_return  # leave a shelf, then RETURN_SHELF around it -> docs/shelf_return.gif
@@ -44,6 +45,12 @@ case "$DEMO" in
     nav)
         GIF=docs/demo.gif
         VIEW=(0.0 -2.4 7.5 0.0 -0.1 0.0)
+        RUN="python3 /tests/ros_nav_check.py" ;;
+    degraded)
+        GIF=docs/degraded.gif
+        VIEW=(0.0 -2.4 7.5 0.0 -0.1 0.0)
+        SIM_ARGS=(--config config/degraded.yaml)
+        LABEL="RViz: SLAM + Nav2, degraded.yaml"
         RUN="python3 /tests/ros_nav_check.py" ;;
     dock)
         GIF=docs/dock.gif
@@ -196,7 +203,7 @@ case "$DEMO" in
         COMPOSE_ARGS=(--height 540)
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_speed_demo.py /build/speed/captions.csv" ;;
-    *) echo "usage: $0 [nav|dock|shelf|shelf_return|door|auto_door|movers|fleet|elevator|elevator_vertical|map_world|scene <world>|api|notebooks [sensors|control|map|detection]|front_stop|cliff|speed]" >&2; exit 2 ;;
+    *) echo "usage: $0 [nav|degraded|dock|shelf|shelf_return|door|auto_door|movers|fleet|elevator|elevator_vertical|map_world|scene <world>|api|notebooks [sensors|control|map|detection]|front_stop|cliff|speed]" >&2; exit 2 ;;
 esac
 OUT=build/$DEMO
 [[ "$DEMO" == notebooks ]] && OUT=build/notebooks_$SET
