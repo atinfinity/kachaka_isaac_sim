@@ -155,7 +155,10 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 3.0
-        threshold_to_consider: 0.5
+        # Not before the goal checker's xy_goal_tolerance: turning to the goal
+        # heading earlier can leave the robot facing away from a goal behind
+        # it, which it cannot reverse to (vx_min 0), until a recovery spin.
+        threshold_to_consider: 0.25
       PreferForwardCritic:
         enabled: true
         cost_power: 1
