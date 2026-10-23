@@ -832,7 +832,9 @@ client.return_home()
 
 Commands and the locations need the ROS 2 side (`slam.launch.py nav:=true`
 or `navigation.launch.py`), since `command_server` runs them. The robot pose
-is in the map frame of slam_toolbox or AMCL.
+is in the map frame of slam_toolbox or AMCL. AMCL starts at the map
+frame's origin, the spawn pose on the saved maps; give it another start
+on `/initialpose` (RViz's 2D Pose Estimate).
 
 Every RPC of the `KachakaApi` service (kachaka-api 3.17.5.0) is implemented.
 The client methods are the RPC names in snake_case

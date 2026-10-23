@@ -222,6 +222,15 @@ def main():
         node.spacing = 0.0
     check("car on 1F with the door open", node.elevator["floor"] == "1F" and node.elevator["state"] == "open"
           and node.elevator["door"] == "open", f"{node.elevator['floor']}, {node.elevator['state']}")
+    # Before any /initialpose: AMCL starts at the map origin (set_initial_pose),
+    # so RViz has map -> base_footprint and draws the robot model from the start.
+    start = None
+    for _ in range(30):
+        start = node.map_pose()
+        if start is not None:
+            break
+    check("map -> base_footprint before any /initialpose", start is not None,
+          "" if start is None else f"({start[0]:+.2f}, {start[1]:+.2f})")
     check("AMCL at the spawn pose on 1F", node.set_pose((0.0, 0.0, 0.0)))
     node.say("1F (1F map): to the elevator")
     ok = check("to the landing", *node.go(LANDING, 0, accept_within=120.0))
