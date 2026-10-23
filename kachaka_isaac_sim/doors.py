@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-from .drive import Pose2D, quat_from_yaw
+from .drive import Pose2D, poses_of, quat_from_yaw
 
 if TYPE_CHECKING:
     from pxr import Usd
@@ -217,14 +217,14 @@ class Doors:
             self.next_motion = self.t + MOTION_PERIOD
 
     def _sensed(self) -> list[bool]:
-        """Whether each automatic door's sensor sees the robot or a mover."""
+        """Whether each automatic door's sensor sees a robot or a mover."""
         if not any(st.automatic for st in self.states):
             return [False] * len(self.states)
-        robot = self.robot_pose()
+        robots = poses_of(self.robot_pose())
         movers = [p for p in self.mover_poses() if p is not None]
         out = []
         for sp, st in zip(self.specs, self.states):
-            points = ([robot] if robot is not None else []) + (movers if st.automatic and sp.auto.movers else [])
+            points = robots + (movers if st.automatic and sp.auto.movers else [])
             out.append(st.automatic and any(sp.senses(p.x, p.y) for p in points))
         return out
 

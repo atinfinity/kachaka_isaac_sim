@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-from .drive import Pose2D, wrap_angle
+from .drive import Pose2D, poses_of, wrap_angle
 
 if TYPE_CHECKING:
     from pxr import Usd
@@ -120,9 +120,14 @@ class MoverState:
             return True
         return (self.t + self.phase) % (a[0] + a[1]) < a[0]
 
-    def in_the_way(self, robot: Pose2D | None) -> bool:
-        """The robot stands ahead, within `gap` of the stretch ahead."""
-        if robot is None or self.target is None:
+    def in_the_way(self, robot) -> bool:
+        """A robot (`robot`: a pose, a list of them or None) stands ahead,
+        within `gap` of the stretch ahead."""
+        robots = poses_of(robot)
+        if len(robots) != 1:
+            return any(self.in_the_way(r) for r in robots)
+        robot = robots[0]
+        if self.target is None:
             return False
         p = self.pose
         tx, ty = self.target
@@ -134,8 +139,9 @@ class MoverState:
         ex, ey = p.x + hx * reach, p.y + hy * reach
         return _segment_distance(robot.x, robot.y, p.x, p.y, ex, ey) < self.spec.radius + ROBOT_RADIUS + self.gap
 
-    def step(self, dt: float, robot: Pose2D | None = None) -> bool:
-        """Advance by `dt`. True if the pose or presence changed."""
+    def step(self, dt: float, robot=None) -> bool:
+        """Advance by `dt` with the robot at `robot` (a pose, a list of them
+        or None). True if the pose or presence changed."""
         self.t += dt
         was = (self.pose.x, self.pose.y, self.pose.yaw, self.present)
         try:
@@ -144,11 +150,12 @@ class MoverState:
             moved = self.present and was[3] and dt > 0
             self.velocity = ((self.pose.x - was[0]) / dt, (self.pose.y - was[1]) / dt) if moved else (0.0, 0.0)
 
-    def _step(self, dt: float, robot: Pose2D | None, was) -> bool:
+    def _step(self, dt: float, robot, was) -> bool:
         present = self._present()
-        # Do not appear on top of the robot: wait until it has gone.
-        if present and not self.present and robot is not None and \
-                math.hypot(robot.x - self.pose.x, robot.y - self.pose.y) < self.spec.radius + ROBOT_RADIUS + self.gap:
+        # Do not appear on top of a robot: wait until it has gone.
+        if present and not self.present and any(
+                math.hypot(r.x - self.pose.x, r.y - self.pose.y) < self.spec.radius + ROBOT_RADIUS + self.gap
+                for r in poses_of(robot)):
             present = False
         self.present = present
         if self.target is None:
@@ -159,7 +166,7 @@ class MoverState:
             self._walk(dt, robot if self.present else None)
         return was != (self.pose.x, self.pose.y, self.pose.yaw, self.present)
 
-    def _walk(self, dt: float, robot: Pose2D | None) -> None:
+    def _walk(self, dt: float, robot) -> None:
         p = self.pose
         tx, ty = self.target
         d = math.hypot(tx - p.x, ty - p.y)
@@ -224,14 +231,15 @@ def _rounded(p: Pose2D) -> list[float]:
     return [round(p.x, 4), round(p.y, 4), round(p.yaw, 4)]
 
 
-def report(t: float, specs: list[MoverSpec], states: list[MoverState], robot: Pose2D | None, to_map) -> dict:
+def report(t: float, specs: list[MoverSpec], states: list[MoverState], robot, to_map) -> dict:
     """The JSON published on sim/movers: per mover its id (the prim's name),
     prim path, kind, whether it is there, pose [x, y, yaw] in the world frame
     (as sim/ground_truth) and in the map frame (`to_map`: world Pose2D to the
     map frame), velocity [vx, vy] in the world frame, footprint radius, size,
     whether it waits for the robot, and the gap between its footprint circle
-    and the robot's body; then the closest mover. A mover that is away has
-    pose, map_pose and gap null."""
+    and the robot's body (the nearest robot's, `robot` being a list); then
+    the closest mover. A mover that is away has pose, map_pose and gap null."""
+    robots = poses_of(robot)
     movers, closest = [], None
     for sp, st in zip(specs, states):
         m = {"id": sp.path.rpartition("/")[2], "path": sp.path, "kind": sp.kind, "present": st.present,
@@ -240,8 +248,8 @@ def report(t: float, specs: list[MoverSpec], states: list[MoverState], robot: Po
              "gap": None}
         if st.present:
             m["pose"], m["map_pose"] = _rounded(st.pose), _rounded(to_map(st.pose))
-            if robot is not None:
-                m["gap"] = round(body_gap(robot, st.pose.x, st.pose.y, sp.radius), 4)
+            if robots:
+                m["gap"] = round(min(body_gap(r, st.pose.x, st.pose.y, sp.radius) for r in robots), 4)
                 if closest is None or m["gap"] < closest["gap"]:
                     closest = {"id": m["id"], "gap": m["gap"]}
         movers.append(m)

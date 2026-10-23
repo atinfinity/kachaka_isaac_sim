@@ -30,6 +30,11 @@ from kachaka_isaac_sim.scenes import (
 
 ROBOT_PATH = "/World/kachaka"
 BASE_LINK = f"{ROBOT_PATH}/Geometry/base_footprint/base_link"
+
+
+def base_link(robot_path: str = ROBOT_PATH) -> str:
+    """The articulation root (base_link) of the robot at `robot_path`."""
+    return f"{robot_path}/Geometry/base_footprint/base_link"
 WHEEL_LINKS = ("base_l_drive_wheel_link", "base_r_drive_wheel_link")
 CASTER_SHAPES = ("caster_front_left", "caster_front_right", "caster_rear")  # spheres on base_link
 MANNEQUIN_PANTS = (0.13, 0.14, 0.2)
@@ -330,12 +335,43 @@ class ShelfJoint:
         self.joint.GetJointEnabledAttr().Set(False)
 
 
-def disable_pin_collision(stage: Usd.Stage) -> None:
+def disable_pin_collision(stage: Usd.Stage, base: str = BASE_LINK) -> None:
     """The docking pin pokes up into the shelf's bottom plate; real shelves
     have a hole there. Without one in the colliders, let the pin pass."""
-    for p in Usd.PrimRange(stage.GetPrimAtPath(f"{BASE_LINK}/docking_link")):
+    for p in Usd.PrimRange(stage.GetPrimAtPath(f"{base}/docking_link")):
         if p.HasAPI(UsdPhysics.CollisionAPI):
             UsdPhysics.CollisionAPI(p).CreateCollisionEnabledAttr(False)
+
+
+# Parts of the body at the LiDAR's height (0.105 m), from a slice of the
+# official body.stl in base_link: the housing around the laser (x 0.116 to
+# 0.208, y +-0.045) and a bump at the back (x -0.024 to 0.029, y +-0.025).
+# The URDF collision box ends at 0.095 m, so without these another robot's
+# LiDAR sees through the body. z spans 0.095 m to the mesh top (0.113 m).
+LIDAR_TARGET_Z = (0.095, 0.113)
+LIDAR_TARGETS = {"lidar_housing": ((0.162, 0.0025), (0.092, 0.091)),
+                 "back_bump": ((0.0025, 0.002), (0.053, 0.050))}  # name: ((x, y), (length, width))
+RAY_ONLY_GROUP = "/World/CollisionGroups/ray_only"
+
+
+def add_lidar_targets(stage: Usd.Stage, base: str = BASE_LINK) -> list[str]:
+    """Colliders on `base` that other robots' LiDAR rays hit but nothing
+    touches (a collision group that collides with no group): the bottom plate
+    of a shelf at 0.107 m overlaps them. Invisible; the mesh shows the body.
+    Returns their paths."""
+    group = UsdPhysics.CollisionGroup.Get(stage, RAY_ONLY_GROUP)
+    if not group:
+        group = UsdPhysics.CollisionGroup.Define(stage, RAY_ONLY_GROUP)
+        group.CreateInvertFilteredGroupsAttr(True)  # collide only with the (no) listed groups
+    z0, z1 = LIDAR_TARGET_Z
+    paths = []
+    for name, ((x, y), (lx, ly)) in LIDAR_TARGETS.items():
+        path = f"{base}/{name}"
+        add_box(stage, path, (x, y, (z0 + z1) / 2), (lx, ly, z1 - z0))
+        UsdGeom.Imageable(stage.GetPrimAtPath(path)).MakeInvisible()
+        group.GetCollidersCollectionAPI().GetIncludesRel().AddTarget(path)
+        paths.append(path)
+    return paths
 
 
 def add_charger(stage: Usd.Stage, path: str, pose, cfg: SimpleNamespace) -> None:
@@ -552,8 +588,9 @@ def add_mannequin(stage: Usd.Stage, path: str, height: float = 1.7) -> None:
     UsdGeom.Xformable(head.GetPrim()).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 1.58 * k))
 
 
-def add_robot(stage: Usd.Stage, usd_path: Path, x: float = 0.0, y: float = 0.0, yaw: float = 0.0) -> Usd.Prim:
-    prim = stage.DefinePrim(ROBOT_PATH, "Xform")
+def add_robot(stage: Usd.Stage, usd_path: Path, x: float = 0.0, y: float = 0.0, yaw: float = 0.0,
+              path: str = ROBOT_PATH) -> Usd.Prim:
+    prim = stage.DefinePrim(path, "Xform")
     xf = UsdGeom.Xformable(prim)
     xf.AddTranslateOp().Set(Gf.Vec3d(x, y, 0.0))
     xf.AddRotateZOp().Set(math.degrees(yaw))
@@ -582,7 +619,7 @@ def _bind_physics_material(prim: Usd.Prim, mat: UsdShade.Material) -> None:
             )
 
 
-def apply_contact_materials(stage: Usd.Stage, drive: SimpleNamespace) -> None:
+def apply_contact_materials(stage: Usd.Stage, drive: SimpleNamespace, base: str = BASE_LINK) -> None:
     """Grippy tyres and near-frictionless casters, whatever the floor material.
 
     PhysX picks the combine mode with the higher priority (average < min <
@@ -591,9 +628,9 @@ def apply_contact_materials(stage: Usd.Stage, drive: SimpleNamespace) -> None:
     tyre = _physics_material(stage, "/World/PhysicsMaterials/tyre", drive.wheel_friction, "max")
     caster = _physics_material(stage, "/World/PhysicsMaterials/caster", drive.caster_friction, "min")
     for name in WHEEL_LINKS:
-        _bind_physics_material(stage.GetPrimAtPath(f"{BASE_LINK}/{name}"), tyre)
+        _bind_physics_material(stage.GetPrimAtPath(f"{base}/{name}"), tyre)
     for name in CASTER_SHAPES:
-        _bind_physics_material(stage.GetPrimAtPath(f"{BASE_LINK}/{name}"), caster)
+        _bind_physics_material(stage.GetPrimAtPath(f"{base}/{name}"), caster)
 
 
 def load_world_usd(stage: Usd.Stage, usd_path: str) -> None:
