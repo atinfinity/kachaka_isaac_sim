@@ -68,6 +68,26 @@ Visualization Manager:
       Color: 255; 64; 64
       Size (m): 0.03
       Style: Flat Squares
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Other Robots
+      Enabled: false
+      Topic:
+        Value: /other_robots
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      # fleet_outlines: intensity 0 is where the robot is (yellow), 1 where
+      # it will be in 0.5 s (blue).
+      Color Transformer: Intensity
+      Channel Name: intensity
+      Use rainbow: false
+      Invert Rainbow: false
+      Autocompute Intensity Bounds: false
+      Min Intensity: 0
+      Max Intensity: 1
+      Min Color: 255; 200; 0
+      Max Color: 30; 120; 255
+      Size (m): 0.03
+      Style: Flat Squares
     - Class: rviz_default_plugins/Path
       Name: Plan
       Enabled: true

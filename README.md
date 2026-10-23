@@ -561,6 +561,60 @@ python3 /tests/ros_nav_check.py --no-collisions   # with SLAM + Nav2: goals, no 
 ros2 topic echo /kachaka/sim/movers   # {"stamp": 12.3, "frame_id": "world", "movers": [...], "closest": {"id": "P01", "gap": 0.41}}
 ```
 
+### Several robots
+
+`--robot X Y YAW`, repeated, puts several robots in one world. Robot 0 keeps
+the single-robot names; robot i gets its own namespace, TF frames,
+kachaka-api port and noise seed:
+
+| | prim | topics | TF frames | kachaka-api |
+|---|---|---|---|---|
+| robot 0 | `/World/kachaka` | `/kachaka/...` | `odom`, `base_footprint`, ... | `--api-port` (26400) |
+| robot i | `/World/kachaka_i` | `/kachaka_i/...` | `kachaka_i/odom`, `kachaka_i/base_footprint`, ... | 26400 + i |
+
+All robots share one `/clock`, `/tf` and map frame (robot 0's spawn pose).
+Each robot sees the others in its LiDAR scan: the official collision box ends
+at 0.095 m, below the LiDAR (0.105 m), so each scan also intersects, in 2D,
+the parts of the other bodies at the LiDAR's height (the LiDAR housing and a
+bump at the back, from a slice of the official body mesh). They have no
+collider, so a shelf's bottom plate (0.107 m) still clears the body. Doors and
+moving people react to any robot. Robots 1 and up have no cameras or shelves,
+and they use robot 0's charger. `sim/reset` of robot i puts robot i back at
+its spawn; robot 0's resets the world as well. Layouts with an elevator take
+one robot only.
+
+`fleet.launch.py` starts Nav2 on a saved map for every robot:
+`navigation.launch.py` for robot 0, and `robot_nav.launch.py` under
+`/kachaka_i` for the others (`/kachaka_i/navigate_to_pose`,
+`/kachaka_i/initialpose`, ...), with `nav2_params.yaml` rewritten for the
+robot's frames and topics. The LiDAR sees only 9 cm of another robot's 24 cm
+width, so nose to nose two robots would touch before either knew where the
+other's corners are. `fleet_outlines` therefore gives every robot the others'
+Nav2 footprints, placed with their AMCL poses, on `{namespace}/other_robots`,
+in its costmaps and collision monitor, like `/parked_shelves` for the shelves.
+The Nav2 stacks don't negotiate with each other, though: two robots meeting
+nose to nose in the open can block each other until their goals abort. Taking
+turns there is a fleet manager's job. `make_maps.py` without a layout draws
+the room's map, with the map frame at robot 0's spawn:
+
+```bash
+python3 scripts/make_maps.py --spawn -1.7 0.2 0     # maps/room.yaml
+scripts/run_sim.sh --no-cameras --no-shelves --robot -1.7 0.2 0 --robot 0.3 -1.8 1.5708
+ros2 launch kachaka_sim_bringup fleet.launch.py map:=/maps/room.yaml robots:=2 initial_poses:=2.0,-2.0,1.5708
+python3 /tests/ros_multi_nav_check.py   # their paths cross at right angles; they pass without touching
+```
+
+![Two robots cross at right angles; RViz shows robot 1's outline, now (yellow) and 0.5 s ahead (blue), in robot 0's local costmap](docs/fleet.gif)
+
+Robot 0's AMCL starts at the map origin (its spawn). `initial_poses` gives
+the others' starts in the same map frame (`x,y,yaw` per robot, in a row:
+robot 1 above is 2 m ahead and 2 m to the right of robot 0, turned left), so
+every robot is localized, and drawn in RViz, from the start. A robot without
+one waits for its own `initialpose` topic. RViz draws every robot's model:
+`fleet.launch.py` adds a RobotModel on `/kachaka_i/robot_description` for
+each. The kachaka_command, charger and shelf servers belong to
+robot 0. Robots 1 and up use Nav2's actions directly.
+
 ### Scenario runner
 
 `scripts/run_scenarios.py` runs scenarios headless and in batches and reports
@@ -673,6 +727,7 @@ machine through DDS discovery.
 | Orange cylinder / brown box | moving person / box (red while waiting for the robot), green arrow for its velocity | `/mover_markers` |
 | Violet / yellow / faint grey panel | door closed / opening or closing / open | `/door_markers` |
 | Faint orange rectangle on the floor | an automatic door's sensor area | `/door_markers` |
+| Yellow / blue outline (`record_demo.sh fleet`) | another robot now / 0.5 s ahead | `{namespace}/other_robots` |
 
 The costmaps (off by default) use RViz's `costmap` scheme.
 
@@ -697,6 +752,7 @@ scripts/run_sim.sh --drop X Y SX SY      # a hole in the floor (repeatable), see
 scripts/run_sim.sh --wall X0 Y0 X1 Y1    # a wall segment (repeatable), see Doors
 scripts/run_sim.sh --door X Y YAW        # a door (repeatable; --door-kind, --door-width, --door-closed, --door-cycle, --door-auto)
 scripts/run_sim.sh --api-port 26400      # kachaka-api gRPC port (default 26400; 0 turns it off)
+scripts/run_sim.sh --robot X Y YAW       # a robot (repeatable; the first is robot 0, instead of --x/--y/--yaw), see Several robots
 scripts/run_sim.sh --help
 ```
 

@@ -49,10 +49,16 @@ def to_time(t: float) -> Time:
 class KachakaSimNode:
     """Owns the rclpy node, publishers and the latest commands from ROS."""
 
-    def __init__(self, cfg: SimpleNamespace, urdf_path: Path):
-        rclpy.init()
+    _live = 0  # nodes not shut down yet; the last one shuts rclpy down
+
+    def __init__(self, cfg: SimpleNamespace, urdf_path: Path, name: str = "kachaka_isaac_sim",
+                 publish_clock: bool = True):
+        """`publish_clock`: own /clock. With several robots only one node does."""
+        if not rclpy.ok():
+            rclpy.init()
+        KachakaSimNode._live += 1
         self.cfg = cfg
-        self.node = Node("kachaka_isaac_sim")
+        self.node = Node(name)
         self.executor = SingleThreadedExecutor()
         self.executor.add_node(self.node)
         ns = "/" + cfg.ros.namespace.strip("/") if cfg.ros.namespace else ""
@@ -85,7 +91,7 @@ class KachakaSimNode:
         # server, which does the returning (it needs Nav2).
 
         # --- outputs --------------------------------------------------------
-        self.clock_pub = n.create_publisher(Clock, "/clock", 10)
+        self.clock_pub = n.create_publisher(Clock, "/clock", 10) if publish_clock else None
         # The real bridge publishes all sensor streams with SensorDataQoS.
         sensor = qos_profile_sensor_data
         self.odom_pub = n.create_publisher(Odometry, f"{ns}/odometry/odometry", sensor)
@@ -370,6 +376,8 @@ class KachakaSimNode:
             self.front_stop_pub.publish(String(data=json.dumps(state)))
 
     def publish_clock(self, t: float) -> None:
+        if self.clock_pub is None:
+            return
         stamp = to_time(t)
         self.clock_pub.publish(Clock(clock=stamp))
         CLOCK.record(stamp.sec * 1_000_000_000 + stamp.nanosec)  # for kachaka-api's wall clock stamps
@@ -655,7 +663,9 @@ class KachakaSimNode:
     def shutdown(self) -> None:
         self.executor.shutdown()
         self.node.destroy_node()
-        rclpy.try_shutdown()
+        KachakaSimNode._live -= 1
+        if KachakaSimNode._live <= 0:
+            rclpy.try_shutdown()
 
 
 def _axis_angle(axis, angle):

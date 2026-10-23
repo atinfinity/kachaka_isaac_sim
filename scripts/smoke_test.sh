@@ -18,6 +18,9 @@
 # (layouts/elevator.yaml), on saved maps per floor, and again with the floors
 # stacked (layouts/elevator_vertical.yaml), and tests/ros_map_world_check.py
 # in a world built from the first floor's map (run_sim.py --world map:...).
+# Both also run tests/ros_multi_check.py with two robots facing each other;
+# with --nav, tests/ros_multi_nav_check.py then sends both across the room on
+# one saved map (fleet.launch.py).
 #
 # Needs the ROS image: docker compose -f docker/compose.yaml build
 set -euo pipefail
@@ -70,7 +73,8 @@ start_nav() {
     # On a saved map Nav2 waits for AMCL's first pose (the check gives it):
     # wait for localization then.
     local manager=lifecycle_manager_navigation
-    [[ "${launch[0]}" == navigation.launch.py ]] && manager=lifecycle_manager_localization
+    [[ "${launch[0]}" == navigation.launch.py || "${launch[0]}" == fleet.launch.py ]] \
+        && manager=lifecycle_manager_localization
     for _ in $(seq 120); do
         grep -q "\[$manager\]: .*Managed nodes are active" "$NAV_LOG" && break
         kill -0 "$NAV_PID" 2>/dev/null || { echo "[smoke] Nav2 exited; see $NAV_LOG"; exit 1; }
@@ -156,6 +160,25 @@ if $NAV; then
     echo "[smoke] running ros_map_world_check"
     ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_map_world_check.py --map /maps/elevator_1F.yaml \
         || FAILED+=(ros_map_world_check)
+    docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
+fi
+
+# Two robots: separate topics, TF and odometry, and each sees the other.
+stop_sim
+LOG=build/smoke_sim_fleet.log
+start_sim --no-cameras --no-shelves --robot -1.0 0.0 0.0 --robot 1.0 0.0 3.1416
+echo "[smoke] running ros_multi_check"
+ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_multi_check.py || FAILED+=(ros_multi_check)
+if $NAV; then
+    # Both navigate at once on one saved map; their paths cross.
+    stop_sim
+    docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$PWD/maps:/repo/maps" \
+        kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py --spawn -1.7 0.2 0 --out /repo/maps
+    LOG=build/smoke_sim_fleet_nav.log
+    start_sim --no-cameras --no-shelves --robot -1.7 0.2 0 --robot 0.3 -1.8 1.5708
+    start_nav fleet.launch.py map:=/maps/room.yaml robots:=2 initial_poses:=2.0,-2.0,1.5708
+    echo "[smoke] running ros_multi_nav_check"
+    ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_multi_nav_check.py || FAILED+=(ros_multi_nav_check)
     docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
 fi
 

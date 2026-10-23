@@ -236,3 +236,25 @@ def test_report():
     assert msg["closest"]["id"] == "P01"
     assert msg["closest"]["gap"] == min(p01["gap"], cart["gap"])
     assert report(0.0, specs, states, None, lambda p: p)["closest"] is None
+
+
+def test_waits_for_any_of_several_robots():
+    st = MoverState(spec())
+    robots = [Pose2D(5.0, 5.0, 0.0), Pose2D(1.0, 0.0, math.pi)]  # the second right ahead
+    run(st, 2.5, robots)
+    assert st.blocked and st.pose.x < 1.0 - 0.3 - ROBOT_RADIUS
+
+
+def test_does_not_appear_on_any_robot():
+    st = MoverState(spec(route=[], appear=(1.0, 1.0)))
+    run(st, 4.0, [Pose2D(3.0, 0.0, 0.0), Pose2D(0.2, 0.0, 0.0)])
+    assert not st.present
+
+
+def test_report_gives_the_gap_to_the_nearest_robot():
+    sp = spec()
+    st = MoverState(sp)
+    one = report(0.0, [sp], [st], Pose2D(1.0, 0.0, 0.0), lambda p: p)
+    two = report(0.0, [sp], [st], [Pose2D(3.0, 0.0, 0.0), Pose2D(1.0, 0.0, 0.0)], lambda p: p)
+    assert two["movers"][0]["gap"] == one["movers"][0]["gap"]
+    assert report(0.0, [sp], [st], [], lambda p: p)["movers"][0]["gap"] is None
