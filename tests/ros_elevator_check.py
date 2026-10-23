@@ -17,7 +17,9 @@ floor's saved map (scripts/smoke_test.sh --nav does this):
    with "pose": command_server -> map_server, then AMCL until it holds the
    pose): each floor's map frame is the spawn pose moved to that floor, so
    the robot's map pose does not change. AMCL must agree with ground truth
-   at once, heading included.
+   at once, heading included. AMCL's map -> odom must not stop for longer
+   than its transform_tolerance (1.0 s) on the way, or RViz2 cannot place the
+   robot model and draws it white (#68).
 4. Nav2 drives out of the car to a goal on 2F, past 2F's own wall and desk.
 
 Each leg must reach its goal and touch nothing (sim/collision). Goals are
@@ -31,6 +33,7 @@ scripts/make_demo_gif.py (scripts/record_demo.sh elevator).
 
 import argparse
 import csv
+import itertools
 import json
 import math
 import sys
@@ -47,6 +50,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.time import Time
 from sim_reset import add_reset_args, reset_sim
 from std_msgs.msg import String
+from tf2_msgs.msg import TFMessage
 from tf2_ros import Buffer, TransformException, TransformListener
 
 FLOOR_SPACING = 10.0  # m along x between floors in the stage (kachaka_isaac_sim/elevator.py)
@@ -55,6 +59,7 @@ LANDING = (1.7, 0.0, 0.0)  # in front of the car door on the east wall
 IN_CAR = (3.25, 0.0, math.pi)  # the car's middle, facing the door
 GOAL_2F = (-1.5, 0.2, math.pi)  # west of 2F's partition wall, below its desk
 TOLERANCE = 0.35  # m
+TF_TOLERANCE = 1.0  # s, AMCL's transform_tolerance (nav2_params.yaml)
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 
@@ -81,6 +86,8 @@ class ElevatorCheck(Node):
         self.elevator = None
         self.loaded = []
         self.collisions = 0
+        self.map_odom = None  # stamps (s) of map -> odom while recording
+        self.create_subscription(TFMessage, "/tf", self.on_tf, 100)
         self.create_subscription(Odometry, "/kachaka/sim/ground_truth", self.on_gt, qos_profile_sensor_data)
         self.create_subscription(PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl, 10)
         self.create_subscription(String, "/kachaka/sim/collision", self.on_collision, 10)
@@ -106,6 +113,13 @@ class ElevatorCheck(Node):
         except TransformException:
             return None
         return (t.translation.x, t.translation.y, 2 * math.atan2(t.rotation.z, t.rotation.w))
+
+    def on_tf(self, msg):
+        if self.map_odom is None:
+            return
+        for t in msg.transforms:
+            if t.header.frame_id == "map" and t.child_frame_id == "odom":
+                self.map_odom.append(t.header.stamp.sec + t.header.stamp.nanosec * 1e-9)
 
     def on_collision(self, msg):
         self.collisions += 1
@@ -208,6 +222,15 @@ def main():
         node.spacing = 0.0
     check("car on 1F with the door open", node.elevator["floor"] == "1F" and node.elevator["state"] == "open"
           and node.elevator["door"] == "open", f"{node.elevator['floor']}, {node.elevator['state']}")
+    # Before any /initialpose: AMCL starts at the map origin (set_initial_pose),
+    # so RViz has map -> base_footprint and draws the robot model from the start.
+    start = None
+    for _ in range(30):
+        start = node.map_pose()
+        if start is not None:
+            break
+    check("map -> base_footprint before any /initialpose", start is not None,
+          "" if start is None else f"({start[0]:+.2f}, {start[1]:+.2f})")
     check("AMCL at the spawn pose on 1F", node.set_pose((0.0, 0.0, 0.0)))
     node.say("1F (1F map): to the elevator")
     ok = check("to the landing", *node.go(LANDING, 0, accept_within=120.0))
@@ -240,9 +263,15 @@ def main():
                   f"({dx:.3f}, {dy:.3f})")
         node.say(f"2F: switching to the {args.maps}_2F map")
         node.loaded.clear()
+        node.map_odom = []
         node.map_load_pub.publish(String(data=json.dumps({"id": 1, "map_id": f"{args.maps}_2F",
                                                           "pose": list(map_pose)})))
         node.spin_until(lambda: node.loaded, 40.0)
+        node.spin_until(lambda: False, 2.0)
+        stamps, node.map_odom = sorted(set(node.map_odom)), None
+        gap = max((b - a for a, b in itertools.pairwise(stamps)), default=math.inf)
+        check("map -> odom does not stop during the switch", gap < TF_TOLERANCE,
+              f"longest gap {gap:.2f} s in {len(stamps)} transforms")
         res = node.loaded[0] if node.loaded else {"success": False, "message": "no answer on sim/map/loaded"}
         if check(f"load {args.maps}_2F with AMCL's pose", res["success"], res.get("message", "")):
             node.spin_until(lambda: False, 1.0)

@@ -49,6 +49,12 @@ amcl:
     z_rand: 0.5
     z_short: 0.05
     scan_topic: /kachaka/lidar/scan
+    # Start at the map frame's origin: the saved maps (make_maps.py, SLAM)
+    # put it at the spawn pose. Without this AMCL sends no map -> odom until
+    # an /initialpose comes, and RViz draws the robot model white. Applied
+    # once, when AMCL starts: a later map load keeps the pose it is given.
+    set_initial_pose: true
+    initial_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}
 
 bt_navigator:
   ros__parameters:
