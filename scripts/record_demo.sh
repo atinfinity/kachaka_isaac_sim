@@ -83,8 +83,10 @@ case "$DEMO" in
         VIEW=(0.0 -3.2 6.0 0.0 -0.2 0.0)  # from the south, like movers
         SIM_ARGS=(--no-shelves --robot -1.7 0.2 0 --robot 0.3 -1.8 1.5708)
         LAUNCH="fleet.launch.py map:=/maps/room.yaml robots:=2"
-        RVIZ_SED="s/^      X: 0$/      X: 1.7/"  # centre on the room (map origin = robot 0's spawn)
-        LABEL="RViz: robot 0's Nav2, robot 1 in its costmap"
+        # Centre on the room (map origin = robot 0's spawn); robot 0's local
+        # costmap and robot 1's outline from fleet_outlines.
+        RVIZ_SED="s/^      X: 0$/      X: 1.7/; /Name: Local Costmap/{n;s/false/true/}; /Name: Other Robots/{n;s/false/true/}"
+        LABEL="RViz: robot 1 in robot 0's costmap"
         docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo:ro" -v "$PWD/maps:/repo/maps" \
             kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py --spawn -1.7 0.2 0 --out /repo/maps
         RUN="python3 /tests/ros_multi_nav_check.py" ;;

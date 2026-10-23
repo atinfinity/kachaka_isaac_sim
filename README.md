@@ -604,6 +604,8 @@ ros2 launch kachaka_sim_bringup fleet.launch.py map:=/maps/room.yaml robots:=2
 python3 /tests/ros_multi_nav_check.py   # their paths cross at right angles; they pass without touching
 ```
 
+![Two robots cross at right angles; RViz shows robot 1's outline, now and 0.5 s ahead, in robot 0's local costmap](docs/fleet.gif)
+
 Each robot's AMCL needs its start pose, in the map frame, on its own
 `initialpose` topic. The kachaka_command, charger and shelf servers belong to
 robot 0. Robots 1 and up use Nav2's actions directly.
