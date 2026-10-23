@@ -736,6 +736,7 @@ The costmaps (off by default) use RViz's `costmap` scheme.
 ```bash
 scripts/run_sim.sh --world office        # Isaac Sim scenes: office, hospital, warehouse, simple_room
 scripts/run_sim.sh --world /path/to.usd  # any USD scene
+scripts/run_sim.sh --world map:maps/site.yaml   # walls from an occupancy map, see World from a map
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
 scripts/run_sim.sh --layout layouts/room.yaml   # a layout file (--layout-seed N), see Layout files
 scripts/run_sim.sh --no-cameras          # faster, when you only need LiDAR and odometry
@@ -800,6 +801,41 @@ SLAM and Nav2. Things to know about the scenes:
   them under the shelves. The test stays in one aisle (x = −13). The hall
   north of the racks (y > 25) is beyond the LiDAR range from the aisle and
   stays off the map until the robot gets closer.
+
+### World from a map
+
+![Nav2 on the elevator layout's first-floor map, in a world built from that map](docs/map_world.gif)
+
+`--world map:<path>` builds walls from an occupancy map, to approximate a
+real site quickly: a Nav2 map pair (`map_saver_cli`'s yaml, with its
+resolution, origin and thresholds), a Kachaka PNG export or any other image
+(dark is occupied, light free; give `--map-resolution`, m per pixel, origin
+at the bottom-left corner).
+
+```bash
+scripts/run_sim.sh --world map:maps/site.yaml
+scripts/run_sim.sh --world map:floor_plan.png --map-resolution 0.05 --x 2 --y 3
+ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/site.yaml
+```
+
+- Occupied cells become walls `map_world.wall_height` high (1 m,
+  `--map-wall-height`), merged into as few boxes as the grid allows and
+  built as one mesh. Free and unknown cells are floor.
+- The world frame is the map frame: spawned at the map origin (the default),
+  `navigation.launch.py` on the same map localizes at once (AMCL starts at
+  the map origin), and goals clicked on the map are world poses. Give
+  `--x`/`--y`/`--yaw` in the map frame elsewhere, and the same pose to AMCL
+  on `/initialpose`; the simulator warns when the spawn pose is on a wall.
+- The charger stands at the yaml's `charger_pose` (as `make_maps.py` and the
+  simulator's map export write it) unless `--charger` or `--no-charger` says
+  otherwise.
+- Everything is as high as the walls: a map has no tables, shelves or
+  thresholds. Add boxes, doors or people with a layout file.
+
+`tests/ros_map_world_check.py` checks a map world: AMCL at the ground truth
+pose from the start, the LiDAR's points on the map's walls, the charger at `charger_pose`
+and a Nav2 goal reached without touching anything (`smoke_test.sh --nav`
+runs it on the elevator layout's first-floor map).
 
 ## ROS 2 interface
 
@@ -888,7 +924,9 @@ client.return_home()
 
 Commands and the locations need the ROS 2 side (`slam.launch.py nav:=true`
 or `navigation.launch.py`), since `command_server` runs them. The robot pose
-is in the map frame of slam_toolbox or AMCL.
+is in the map frame of slam_toolbox or AMCL. AMCL starts at the map
+frame's origin, the spawn pose on the saved maps; give it another start
+on `/initialpose` (RViz's 2D Pose Estimate).
 
 Every RPC of the `KachakaApi` service (kachaka-api 3.17.5.0) is implemented.
 The client methods are the RPC names in snake_case

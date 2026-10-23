@@ -16,7 +16,8 @@
 # moving across the way (layouts/room_movers.yaml), and
 # tests/ros_elevator_check.py in a sixth with two floors and an elevator
 # (layouts/elevator.yaml), on saved maps per floor, and again with the floors
-# stacked (layouts/elevator_vertical.yaml).
+# stacked (layouts/elevator_vertical.yaml), and tests/ros_map_world_check.py
+# in a world built from the first floor's map (run_sim.py --world map:...).
 # Both also run tests/ros_multi_check.py with two robots facing each other;
 # with --nav, tests/ros_multi_nav_check.py then sends both across the room on
 # one saved map (fleet.launch.py).
@@ -149,6 +150,16 @@ if $NAV; then
     start_nav navigation.launch.py map:=/maps/elevator_1F.yaml
     echo "[smoke] running ros_elevator_check (stacked floors)"
     ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_elevator_check.py || FAILED+=(ros_elevator_check_vertical)
+    docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
+
+    # A world built from the first floor's map: walls where the map has them.
+    stop_sim
+    LOG=build/smoke_sim_map_world.log
+    start_sim --world map:maps/elevator_1F.yaml
+    start_nav navigation.launch.py map:=/maps/elevator_1F.yaml
+    echo "[smoke] running ros_map_world_check"
+    ros kachaka-isaac-sim-ros:jazzy python3 /tests/ros_map_world_check.py --map /maps/elevator_1F.yaml \
+        || FAILED+=(ros_map_world_check)
     docker rm -f "$NAV_CONTAINER" >/dev/null 2>&1 || true
 fi
 
