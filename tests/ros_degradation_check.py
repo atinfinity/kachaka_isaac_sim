@@ -126,10 +126,12 @@ def main():
     check("LiDAR dropout", abs(lost - args.dropout) < 0.08, f"{lost:.0%} of {r.size} rays lost, asked "
           f"{args.dropout:.0%}")
 
-    # Rays towards the person (in the laser frame; the laser faces forward).
+    # Rays towards the person. The laser frame is turned on the base (URDF),
+    # and the scan is centred on the robot's forward direction.
     px, py = args.person[0] - g1[0], args.person[1] - g1[1]
-    bearing = math.atan2(py, px) - g1[2]
     angles = s.angle_min + np.arange(r.shape[1]) * s.angle_increment
+    forward = (angles[0] + angles[-1]) / 2
+    bearing = math.atan2(py, px) - g1[2] + forward
     near = np.abs(np.angle(np.exp(1j * (angles - bearing)))) < math.radians(4)
     to_person = r[:, near]
     reach = float(np.nanmedian(np.where(np.isfinite(to_person), to_person, np.nan)))
