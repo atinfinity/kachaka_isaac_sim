@@ -34,7 +34,10 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 ROBOTS = (("/kachaka", ""), ("/kachaka_1", "kachaka_1/"))  # namespace, TF frame prefix
-RADIUS = (0.10, 0.25)  # m, how far short of the other's centre a ray may end (its housing, robots face each other)
+# m, how far short of the other's centre a ray may end: its housing faces the
+# viewer 0.12 to 0.21 m in front of its centre, and the shortest of several
+# rays is 1 to 2 noise stddevs (lidar.noise_stddev 0.03 m) short.
+RADIUS = (0.10, 0.30)
 
 
 def yaw_of(q) -> float:

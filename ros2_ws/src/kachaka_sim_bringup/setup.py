@@ -29,5 +29,6 @@ setup(
         f"door_markers = {package_name}.door_markers:main",
         f"fake_robot = {package_name}.fake_robot:main",
         f"object_detection_relay = {package_name}.object_detection_relay:main",
+        f"fleet_outlines = {package_name}.fleet_outlines:main",
     ]},
 )

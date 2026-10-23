@@ -225,7 +225,7 @@ local_costmap:
         z_voxels: 16
         max_obstacle_height: 2.0
         mark_threshold: 0
-        observation_sources: scan parked_shelves
+        observation_sources: scan parked_shelves other_robots
         scan:
           topic: /kachaka/lidar/scan
           max_obstacle_height: 2.0
@@ -240,6 +240,17 @@ local_costmap:
           # command_server's outlines of the shelves standing in the room (the
           # LiDAR sees only their legs). Range is from the map origin.
           topic: /parked_shelves
+          data_type: "PointCloud2"
+          marking: True
+          clearing: False
+          min_obstacle_height: 0.0
+          max_obstacle_height: 2.0
+          obstacle_max_range: 50.0
+        other_robots:
+          # fleet_outlines' footprints of the other robots (fleet.launch.py
+          # only; the LiDAR sees only their laser housings). The LiDAR clears
+          # where they were. Range is from the map origin.
+          topic: /other_robots
           data_type: "PointCloud2"
           marking: True
           clearing: False
@@ -265,7 +276,7 @@ global_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
-        observation_sources: scan parked_shelves
+        observation_sources: scan parked_shelves other_robots
         scan:
           topic: /kachaka/lidar/scan
           max_obstacle_height: 2.0
@@ -280,6 +291,17 @@ global_costmap:
           # command_server's outlines of the shelves standing in the room (the
           # LiDAR sees only their legs). Range is from the map origin.
           topic: /parked_shelves
+          data_type: "PointCloud2"
+          marking: True
+          clearing: False
+          min_obstacle_height: 0.0
+          max_obstacle_height: 2.0
+          obstacle_max_range: 50.0
+        other_robots:
+          # fleet_outlines' footprints of the other robots (fleet.launch.py
+          # only; the LiDAR sees only their laser housings). The LiDAR clears
+          # where they were. Range is from the map origin.
+          topic: /other_robots
           data_type: "PointCloud2"
           marking: True
           clearing: False
@@ -429,12 +451,21 @@ collision_monitor:
       min_points: 6
       visualize: False
       enabled: True
-    observation_sources: ["scan"]
+    observation_sources: ["scan", "other_robots"]
     scan:
       type: "scan"
       topic: "/kachaka/lidar/scan"
       min_height: 0.05
       max_height: 2.0
+      enabled: True
+    other_robots:
+      # fleet_outlines (fleet.launch.py only). Timeout 0: without it running
+      # the source is ignored instead of stopping the robot.
+      type: "pointcloud"
+      topic: "/other_robots"
+      min_height: 0.05
+      max_height: 2.0
+      source_timeout: 0.0
       enabled: True
 
 docking_server:

@@ -215,6 +215,19 @@ def test_floor_map_has_the_doorway_open_and_the_car_closed(k):
     assert cell(m, 0.5, 0.0) == (OCCUPIED if k == 0 else FREE)  # 1F's wall
 
 
+
+def test_room_map_without_floors():
+    """make_maps.py without floors: the room alone, its frame at the spawn."""
+    lay = parse_layout({}, world="room")
+    spawn = Pose2D(-1.5, -0.8, 0.0)
+    m = floor_map(lay, 0, None, spawn)
+    assert m.name == "room" and m.charger_pose is None
+    (sx, sy), t = ROOM_SIZE, ROOM_WALL
+    assert cell(m, 1.5, 0.8) == FREE  # the room's centre
+    assert cell(m, sx / 2 + t / 2 + 1.5, 0.8) == OCCUPIED  # east wall, no doorway
+    assert cell(m, 1.5, sy / 2 + t / 2 + 0.8) == OCCUPIED  # north wall
+
+
 # --- odometry -----------------------------------------------------------------
 def test_noisy_odometry_does_not_see_a_shift():
     odom = NoisyOdometry(0.0, 0.0, seed=1)
