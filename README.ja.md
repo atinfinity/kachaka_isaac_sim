@@ -633,6 +633,8 @@ scripts/run_sim.sh --help
 
 ### センサーの劣化
 
+![config/degraded.yaml でのナビゲーション：LiDAR は人をすり抜け、光線の 5 分の 1 が欠ける](docs/degraded.gif)
+
 既定ではセンサーはほぼ理想的です。`config/robot.yaml` の `degradation` で
 センサーを悪くして、SLAM・AMCL・Nav2 がどこまで耐えるかを試せます。既定ではすべて
 無効で、値は試験用のつまみであり、実機の測定値ではありません。

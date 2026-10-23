@@ -707,6 +707,8 @@ and give only the keys it changes (as `config/degraded.yaml` does).
 
 ### Sensor degradation
 
+![The navigation demo with config/degraded.yaml: the LiDAR sees through the people and drops a fifth of its rays](docs/degraded.gif)
+
 The sensors are close to ideal by default. The `degradation` section of
 `config/robot.yaml` makes them worse, to see how SLAM, AMCL and Nav2 cope; all
 of it is off by default, and the values are test knobs, not measurements of
