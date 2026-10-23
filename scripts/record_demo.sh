@@ -48,7 +48,7 @@ case "$DEMO" in
         GIF=docs/degraded.gif
         VIEW=(0.0 -2.4 7.5 0.0 -0.1 0.0)
         SIM_ARGS=(--config config/degraded.yaml)
-        LABEL="RViz: slam_toolbox + Nav2, config/degraded.yaml"
+        LABEL="RViz: SLAM + Nav2, degraded.yaml"
         RUN="python3 /tests/ros_nav_check.py" ;;
     dock)
         GIF=docs/dock.gif
