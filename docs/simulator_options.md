@@ -3,7 +3,7 @@
 [日本語](ja/simulator_options.md) · [README](../README.md)
 
 ```bash
-scripts/run_sim.sh --world office        # Isaac Sim scenes: office, hospital, warehouse, simple_room
+scripts/run_sim.sh --world office        # Isaac Sim scenes: office, hospital, warehouse, simple_room, kitchen_*
 scripts/run_sim.sh --world /path/to.usd  # any USD scene
 scripts/run_sim.sh --world map:maps/site.yaml   # walls from an occupancy map, see World from a map
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
@@ -72,6 +72,11 @@ The SLAM map frame starts at the spawn pose.
 | `hospital` | 0, 0, 0 (lobby south of the wards) | 7 min | 21 s | 1.3 / 2.0 |
 | `warehouse` | −13, 11, 1.5708 (in an aisle between racks) | — | 40 s | 1.2 / 1.9 |
 | `simple_room` | −2.5, 0, 0 (beside the table) | seconds | 15 s | 1.4 / 2.0 |
+| `kitchen_l_shape` | 0.1, −0.4, 1.5708 (mid-room, facing the north counters) | 1 min | 23 s | 1.0 / 1.6 |
+| `kitchen_u_shape` | 0, −0.3, 1.5708 (inside the U, facing its base) | 1 min | 26 s | 1.0 / 1.6 |
+| `kitchen_g_shape` | −1.2, 0.7, 0 (north of the peninsula) | 1.5 min | 27 s | 1.0 / 1.6 |
+| `kitchen_l_island` | 1.4, −1.1, 1.5708 (south-east of the island) | 1 min | 24 s | 1.0 / 1.5 |
+| `kitchen_peninsula` | −1.9, 0.5, 0 (west of the peninsula) | 1 min | 26 s | 1.0 / 1.6 |
 
 First load fetches the scene from the Isaac Sim asset server. Start is from
 launch to `[kachaka] running` once the assets are cached. RTF is simulated
@@ -100,6 +105,17 @@ SLAM and Nav2. Things to know about the scenes:
   them under the shelves. The test stays in one aisle (x = −13). The hall
   north of the racks (y > 25) is beyond the LiDAR range from the aisle and
   stays off the map until the robot gets closer.
+- **Kitchens** (`kitchen_*`, Isaac Sim's replicator kitchens) are closed
+  rooms of 4.7–5.9 × 4.2–5.2 m with base cabinets, a fridge and a range along the
+  walls, and an island or a peninsula in some. The LiDAR plane falls on the
+  cabinets' 18 mm bottom panel (10–11.8 cm) just above the toe kick, so the
+  counters show up as walls. Their doors, drawers and appliances are rigid
+  bodies on joints; the simulator makes them kinematic, so nothing opens or
+  moves when the robot bumps into it (left dynamic, the fridge in
+  `kitchen_l_island` slows the simulation to a third of real time). The
+  scenes' own physics scene is turned off.
+
+![kitchen_l_shape: tests/ros_nav_check.py drives a loop around the room with SLAM and Nav2](images/kitchen.gif)
 
 ## World from a map
 

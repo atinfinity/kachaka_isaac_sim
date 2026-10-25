@@ -3,7 +3,7 @@
 [English](../simulator_options.md) · [README](../../README.ja.md)
 
 ```bash
-scripts/run_sim.sh --world office        # Isaac Sim のシーン: office, hospital, warehouse, simple_room
+scripts/run_sim.sh --world office        # Isaac Sim のシーン: office, hospital, warehouse, simple_room, kitchen_*
 scripts/run_sim.sh --world /path/to.usd  # 任意の USD シーン
 scripts/run_sim.sh --world map:maps/site.yaml   # 占有格子地図から壁を作る（「地図からワールドを作る」を参照）
 scripts/run_sim.sh --x 1.0 --y 0.5 --yaw 1.57
@@ -69,6 +69,11 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 | `hospital` | 0, 0, 0（病棟の南のロビー） | 7 分 | 21 秒 | 1.3 / 2.0 |
 | `warehouse` | −13, 11, 1.5708（ラックの間の通路） | — | 40 秒 | 1.2 / 1.9 |
 | `simple_room` | −2.5, 0, 0（テーブルの横） | 数秒 | 15 秒 | 1.4 / 2.0 |
+| `kitchen_l_shape` | 0.1, −0.4, 1.5708（部屋の中央、北のカウンター向き） | 1 分 | 23 秒 | 1.0 / 1.6 |
+| `kitchen_u_shape` | 0, −0.3, 1.5708（U 字の内側、奥向き） | 1 分 | 26 秒 | 1.0 / 1.6 |
+| `kitchen_g_shape` | −1.2, 0.7, 0（ペニンシュラの北） | 1.5 分 | 27 秒 | 1.0 / 1.6 |
+| `kitchen_l_island` | 1.4, −1.1, 1.5708（アイランドの南東） | 1 分 | 24 秒 | 1.0 / 1.5 |
+| `kitchen_peninsula` | −1.9, 0.5, 0（ペニンシュラの西） | 1 分 | 26 秒 | 1.0 / 1.6 |
 
 初回読み込みでは Isaac Sim のアセットサーバーからシーンを取得します。起動時間は、アセットがキャッシュされた状態で起動してから `[kachaka] running` が出るまでです。実時間比はシミュレーション時間 / 実時間で、`--realtime 0`、ロボット静止、RTX 2080 Ti での値です。デフォルトの `--realtime 1` では 1 で頭打ちになります。
 
@@ -86,6 +91,13 @@ Isaac Sim のシーンは NVIDIA のアセットサーバーから読み込み�
 - **warehouse のラック**は LiDAR の高さでは脚しか映らないため、コストマップ上は壁ではなく柱の列になり、
   Nav2 が棚の下の脚の間を通ろうとすることがあります。テストは 1 本の通路（x = −13）の中だけを走ります。
   ラックの北のホール（y > 25）は通路から LiDAR が届かず、近づくまで地図に載りません。
+- **キッチン**（`kitchen_*`、Isaac Sim の replicator キッチン）は 4.7〜5.9 × 4.2〜5.2 m の閉じた部屋で、壁沿いにキャビネット・冷蔵庫・コンロがあり、
+  アイランドやペニンシュラのあるものもあります。LiDAR の平面はキャビネットの台輪のすぐ上、厚さ 18 mm の底板（10〜11.8 cm）に当たるので、
+  カウンターは壁として映ります。扉・引き出し・家電はジョイント付きの剛体ですが、シミュレータが kinematic にするので、
+  ロボットがぶつかっても開いたり動いたりしません（動くままだと `kitchen_l_island` の冷蔵庫だけで実時間の 3 分の 1 まで遅くなります）。
+  シーン自身の physics scene は無効にします。
+
+![kitchen_l_shape: tests/ros_nav_check.py が SLAM と Nav2 で部屋を一周する](../images/kitchen.gif)
 
 ## 地図からワールドを作る
 

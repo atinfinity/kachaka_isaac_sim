@@ -37,7 +37,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", default=str(DEFAULT_CONFIG), help="robot parameters (YAML)")
     p.add_argument("--headless", action="store_true", help="run without a window")
     p.add_argument("--world",
-                   help="'room', 'empty', an Isaac scene (office, hospital, warehouse, simple_room), a USD path/URL "
+                   help="'room', 'empty', an Isaac scene (office, hospital, warehouse, simple_room, "
+                        "kitchen_{l_shape,u_shape,g_shape,l_island,peninsula}), a USD path/URL "
                         "or map:<Nav2 map yaml or image> (walls from an occupancy map, kachaka_isaac_sim/map_world.py) "
                         "(default: the layout's world, else 'room')")
     p.add_argument("--map-resolution", type=float, metavar="M",
@@ -504,7 +505,9 @@ def main() -> int:
         print(f"[kachaka] map world {args.world.removeprefix('map:')}: {w} x {h} cells at "
               f"{args.map_file.resolution} m, {n} wall boxes {height} m high", flush=True)
     elif not builtin:
-        world.load_world_usd(stage, world.resolve_world(args.world))
+        from kachaka_isaac_sim.scenes import FROZEN_WORLDS
+
+        world.load_world_usd(stage, world.resolve_world(args.world), freeze=args.world in FROZEN_WORLDS)
     walls = (layout.walls if layout else []) + [tuple(w) for w in args.wall or []]
     for i, (x0, y0, x1, y1) in enumerate(walls):
         world.add_wall(stage, f"/World/Walls/W{i + 1:02d}", (x0, y0), (x1, y1))

@@ -631,7 +631,17 @@ def apply_contact_materials(stage: Usd.Stage, drive: SimpleNamespace, base: str 
         _bind_physics_material(stage.GetPrimAtPath(f"{base}/{name}"), caster)
 
 
-def load_world_usd(stage: Usd.Stage, usd_path: str) -> None:
+def load_world_usd(stage: Usd.Stage, usd_path: str, freeze: bool = False) -> None:
+    """Reference a scene under /World/Environment. `freeze` makes its rigid
+    bodies kinematic: they stay where the scene puts them and the robot meets
+    them as fixed obstacles."""
     prim = stage.DefinePrim("/World/Environment", "Xform")
     prim.GetReferences().AddReference(usd_path)
+    for p in Usd.PrimRange(prim):
+        # A scene saved with its own physics scene (a replicator kitchen) would
+        # add a second one beside /World/PhysicsScene: keep only ours.
+        if p.IsA(UsdPhysics.Scene):
+            p.SetActive(False)
+        elif freeze and p.HasAPI(UsdPhysics.RigidBodyAPI):
+            UsdPhysics.RigidBodyAPI(p).CreateKinematicEnabledAttr(True)
 
