@@ -52,7 +52,7 @@ from kachaka_isaac_sim.flat_world import (
     transform,
 )
 from kachaka_isaac_sim.physics_sensors import matrix_to_quat, quat_to_matrix
-from kachaka_isaac_sim.power import Battery, Charger
+from kachaka_isaac_sim.power import Charger, EnergyMeter, battery_from_config, drive_power_from_config
 from kachaka_isaac_sim.safety import FrontStop, FrontStopZone, front_clearance
 from kachaka_isaac_sim.scenes import SHELF_SIZE, SPAWN
 from kachaka_isaac_sim.shelves import ShelfSpec
@@ -156,8 +156,9 @@ class FakeRobot:
         self.wheel_odom = WheelOdometry(d.wheel_radius, d.wheel_separation)
         self.fused_odom = NoisyOdometry(cfg.odometry.fused_noise_xy, cfg.odometry.fused_noise_yaw, seed)
         self.odom_period = 1.0 / cfg.odometry.rate
-        b = cfg.battery
-        self.battery = Battery(float(b.initial_percentage), float(b.drain_per_hour), float(b.charge_per_hour))
+        self.battery = battery_from_config(cfg.battery)
+        self.drive_power = drive_power_from_config(cfg.battery)
+        self.energy = EnergyMeter()
         self.charger = charger
         self.on_charger = charger is not None and charger.docked(self.gt)
         self.sensors_off_on_charger = bool(cfg.charger.sensors_off)
@@ -225,6 +226,7 @@ class FakeRobot:
             self.fused_odom.teleported()
         self.on_charger = self.charger is not None and self.charger.docked(self.gt)
         self.battery.reset()
+        self.energy = EnergyMeter()
         self.front_stop.enabled = bool(self.cfg.front_stop.enabled)
         self.front_stop.muted = False
         self.front_stop.blocked = False
@@ -289,6 +291,8 @@ class FakeRobot:
         t = self.t
         node.publish_clock(t)
         self.wheel_odom.update(self.wheel_angles[0], self.wheel_angles[1], dt)
+        # No wheel torques in the flat model: idle and speed losses only.
+        self.energy.add(self.drive_power(self.wheel_rates, (0.0, 0.0), d.wheel_radius, self.towing), dt)
 
         if self._due("imu", self.imu_period):
             self.imu.update(self.gt.yaw, v, w, accel)
@@ -332,8 +336,9 @@ class FakeRobot:
                   f"{' BLOCKED' if self.front_blocked else ''}{' towing' if self.towing else ''}", flush=True)
 
         if self._due("battery", 1.0):
-            level = self.battery.update(1.0, self.on_charger)
-            node.publish_battery(t, level, self.on_charger)
+            power = self.energy.take()
+            self.battery.update(1.0, self.on_charger, self.drive_power.idle if power is None else power)
+            node.publish_battery(t, self.battery, self.on_charger, bool(cfg.battery.bridge_fields_only))
 
 
 def parse_args() -> argparse.Namespace:

@@ -54,7 +54,7 @@ generic names (`/cmd_vel`, `/scan`, `/odom`).
 | `odometry/odometry` | Odometry | ground truth + configurable noise; drives TF odom→base_footprint |
 | `wheel_odometry/wheel_odometry` | Odometry | integrated from wheel joints (slip shows) |
 | `sim/ground_truth` | Odometry | sim-only |
-| `robot_info/battery_state` | BatteryState | SensorDataQoS, 1 Hz, voltage −1, CHARGING or DISCHARGING, like the real bridge |
+| `robot_info/battery_state` | BatteryState | SensorDataQoS, 1 Hz, CHARGING or DISCHARGING; voltage, current, charge, capacity, temperature (the real bridge: voltage −1 only, `battery.bridge_fields_only`) |
 | `robot_info/version` | stub | |
 | `manual_control/set_enabled` | SetBool | stub, always succeeds |
 | `sim/charger_pose`, `sim/charger_detection` | PoseStamped | sim-only, see Charger below |
@@ -229,8 +229,16 @@ Isaac Sim bundled indoor assets plus Kachaka Shelf models from
   support pages: a back panel (collider) with a green LED, a thin floor plate
   and two contacts (visual only). Sizes are estimates (`config/robot.yaml`).
 - **Charging** is decided from ground truth: the robot charges when its
-  `base_footprint` is within 4 cm and 0.15 rad of the docked pose. The battery
-  is linear: 0.5/h drain, 1.0/h charge *(est.)*, updated each second.
+  `base_footprint` is within 4 cm and 0.15 rad of the docked pose.
+- **Battery** (`power.py`), updated each second from the mean power since the
+  last update. Off the charger: idle power + losses proportional to the wheel
+  rim speed (×`towing_factor` with a shelf) + the wheels' mechanical power
+  over the motor efficiency. The torque is the velocity drive's own,
+  `damping × (target − speed)` capped at `wheel_max_torque`, computed rather
+  than read back from PhysX. `fake_sim.py` has no torques, only the first two
+  parts. On the charger: constant current up to `cv_level` (0.8), then a rate
+  proportional to what is left, with a floor so it reaches 1.0. Voltage from a
+  level-to-voltage table; current = power / voltage. All values *(est.)*.
 - **Backward docking**, the one exception to "never reverse": the real robot
   backs onto its charger and drives forward to leave. Nav2's docking server
   (`opennav_docking`, `dock_backwards: true`) drives to a staging pose 0.9 m in

@@ -27,7 +27,7 @@ from .drive import (
 )
 from .hazards import Cliff, CollisionCounter
 from .physics_sensors import CliffSensors, ContactSensor, Imu, Lidar, quat_to_matrix
-from .power import Battery, Charger
+from .power import Charger, EnergyMeter, battery_from_config, drive_power_from_config, wheel_torque
 from .ros_node import KachakaSimNode
 from .safety import FrontStop, FrontStopZone, front_clearance
 from .urdf_tools import frame_pose, read_com, read_joints
@@ -62,8 +62,10 @@ class SimRobot:
         self.odom_period = 1.0 / cfg.odometry.rate
         self.next_odom = start_time
         self.next_battery = start_time
-        b = cfg.battery
-        self.battery = Battery(float(b.initial_percentage), float(b.drain_per_hour), float(b.charge_per_hour))
+        self.battery = battery_from_config(cfg.battery)
+        self.drive_power = drive_power_from_config(cfg.battery)
+        self.energy = EnergyMeter()
+        self.wheel_targets = (0.0, 0.0)  # rad/s, set in pre_step
         self.charger = charger
         self.on_charger = False
         # The real robot turns its LiDAR and ToF off on the charger.
@@ -146,6 +148,7 @@ class SimRobot:
         wl, wr = wheel_speeds(v, w, d.wheel_radius, d.wheel_separation)
         targets = [[0.0] * len(self.dof_names)]
         targets[0][self.i_left], targets[0][self.i_right] = wl, wr
+        self.wheel_targets = (wl, wr)
         self.art.set_dof_velocity_targets(targets)
         if self.i_pin is not None:
             pin = [[0.0] * len(self.dof_names)]
@@ -206,6 +209,7 @@ class SimRobot:
         self.gt, self.z = Pose2D(o.x, o.y, o.yaw), self.start_z
         self.on_charger = self.charger is not None and self.charger.docked(self.gt)
         self.battery.reset()
+        self.energy = EnergyMeter()
         self.cliff.reset()
         self.collisions.reset()
         if self.contacts is not None:
@@ -291,10 +295,22 @@ class SimRobot:
                     lidar.raw, lidar.local_dirs, lidar.offset, lidar.mount_rot, fs.front_x, fs.half_width)
         node.publish_front_stop(self.front_blocked)
 
+        self._meter_power(dt)
         if t + 1e-9 >= self.next_battery:
             self.next_battery += 1.0
-            level = self.battery.update(1.0, self.on_charger)
-            node.publish_battery(t, level, self.on_charger)
+            power = self.energy.take()
+            self.battery.update(1.0, self.on_charger, self.drive_power.idle if power is None else power)
+            node.publish_battery(t, self.battery, self.on_charger, bool(self.cfg.battery.bridge_fields_only))
+
+    def _meter_power(self, dt: float) -> None:
+        """Power drawn this step, from the wheel speeds and the torques the
+        velocity drives apply (damping times the speed error, capped)."""
+        d = self.cfg.drive
+        qd = self.art.get_dof_velocities().numpy()[0]
+        speeds = (float(qd[self.i_left]), float(qd[self.i_right]))
+        torques = [wheel_torque(tgt, w, d.wheel_damping, d.wheel_max_torque)
+                   for tgt, w in zip(self.wheel_targets, speeds)]
+        self.energy.add(self.drive_power(speeds, torques, d.wheel_radius, self.towing), dt)
 
     def _hazards(self, t: float, pos, rot) -> None:
         """Step sensors every step; contact events since the last step."""
