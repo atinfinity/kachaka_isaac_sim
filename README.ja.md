@@ -102,6 +102,9 @@ docker compose -f docker/compose.yaml up navigation
 
 ## ドキュメント
 
+プロジェクトサイト <https://atinfinity.github.io/kachaka_isaac_sim/ja/> でも読めます。これらのページから
+[Zensical](https://zensical.org/) で作っています（`python3 scripts/build_site.py`）。
+
 - [ロボットの機能](docs/ja/robot.md): コマンド、前方障害物での停止、トーチライト、リセット、充電器とバッテリー、シェルフ、速度上限、物体検出、段差と衝突
 - [ワールドとレイアウト](docs/ja/worlds.md): ドア、エレベーター、レイアウトファイル、動く人と箱
 - [シナリオランナー](docs/ja/scenario_runner.md): Nav2 と kachaka-api のシナリオを指標付きでまとめて実行
