@@ -105,7 +105,8 @@ The costmaps (off by default) use RViz's `costmap` scheme.
 ## Documentation
 
 - [Robot features](docs/robot.md): commands, front obstacle stop, torch lights, reset, charger and battery, shelves, speed limits, object detection, steps and collisions
-- [Worlds and layouts](docs/worlds.md): doors, elevator, layout files, moving people and boxes, several robots
+- [Worlds and layouts](docs/worlds.md): doors, elevator, layout files, moving people and boxes
+- [Several robots](docs/multi_robot.md): several Kachakas in one world, Nav2 for each on a shared map
 - [Scenario runner](docs/scenario_runner.md): batches of Nav2 and kachaka-api runs with metrics
 - [Simulator options](docs/simulator_options.md): command-line options, sensor degradation, Isaac Sim scenes, worlds from a map
 - [ROS 2 interface](docs/ros2_interface.md): topics, services and actions
