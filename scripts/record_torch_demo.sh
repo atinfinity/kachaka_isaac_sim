@@ -2,7 +2,7 @@
 # Record the torch light demo: the simulator's view of a dark room next to
 # the front and back camera images -> build/torch.gif (or the path given).
 #
-#   scripts/record_torch_demo.sh [docs/torch.gif]
+#   scripts/record_torch_demo.sh [docs/images/torch.gif]
 #
 # Needs uv and ffmpeg on the host; no ROS container.
 set -euo pipefail

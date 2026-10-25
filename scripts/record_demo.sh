@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# Record the README demos: the simulator's view next to RViz.
+# Record the demo GIFs (docs/images/): the simulator's view next to RViz.
 #
-#   scripts/record_demo.sh        # Nav2 goals during SLAM -> docs/demo.gif
-#   scripts/record_demo.sh degraded  # the nav demo with config/degraded.yaml -> docs/degraded.gif
-#   scripts/record_demo.sh dock   # RETURN_HOME onto the charger -> docs/dock.gif
-#   scripts/record_demo.sh shelf  # dock, tow, turn and leave a shelf -> docs/shelf.gif
-#   scripts/record_demo.sh shelf_return  # leave a shelf, then RETURN_SHELF around it -> docs/shelf_return.gif
-#   scripts/record_demo.sh door   # Nav2 replans when a door closes and opens -> docs/door.gif
-#   scripts/record_demo.sh auto_door  # Nav2 through an automatic door -> docs/auto_door.gif
-#   scripts/record_demo.sh movers # Nav2 goals among people and a cart on the move -> docs/movers.gif
-#   scripts/record_demo.sh fleet  # two robots on one map, their paths crossing -> docs/fleet.gif
-#   scripts/record_demo.sh elevator  # Nav2 into the elevator on 1F, ride, out on 2F -> docs/elevator.gif
-#   scripts/record_demo.sh map_world  # Nav2 in a world built from a saved map -> docs/map_world.gif
-#   scripts/record_demo.sh elevator_vertical  # the same with the floors stacked -> docs/elevator_vertical.gif
+#   scripts/record_demo.sh        # Nav2 goals during SLAM -> docs/images/demo.gif
+#   scripts/record_demo.sh degraded  # the nav demo with config/degraded.yaml -> docs/images/degraded.gif
+#   scripts/record_demo.sh dock   # RETURN_HOME onto the charger -> docs/images/dock.gif
+#   scripts/record_demo.sh shelf  # dock, tow, turn and leave a shelf -> docs/images/shelf.gif
+#   scripts/record_demo.sh shelf_return  # leave a shelf, then RETURN_SHELF around it -> docs/images/shelf_return.gif
+#   scripts/record_demo.sh door   # Nav2 replans when a door closes and opens -> docs/images/door.gif
+#   scripts/record_demo.sh auto_door  # Nav2 through an automatic door -> docs/images/auto_door.gif
+#   scripts/record_demo.sh movers # Nav2 goals among people and a cart on the move -> docs/images/movers.gif
+#   scripts/record_demo.sh fleet  # two robots on one map, their paths crossing -> docs/images/fleet.gif
+#   scripts/record_demo.sh elevator  # Nav2 into the elevator on 1F, ride, out on 2F -> docs/images/elevator.gif
+#   scripts/record_demo.sh map_world  # Nav2 in a world built from a saved map -> docs/images/map_world.gif
+#   scripts/record_demo.sh elevator_vertical  # the same with the floors stacked -> docs/images/elevator_vertical.gif
 #   scripts/record_demo.sh scene office  # Nav2 route in an Isaac Sim scene -> build/scene_office.mp4
 #                                        # (both views follow the robot)
 #   scripts/record_demo.sh api    # kachaka-api calls from the host -> build/api.mp4
 #   scripts/record_demo.sh notebooks sensors  # kachaka-api demo notebooks in JupyterLab
-#   scripts/record_demo.sh notebooks control  #   -> docs/notebooks_<set>.gif (the browser instead of
+#   scripts/record_demo.sh notebooks control  #   -> docs/images/notebooks_<set>.gif (the browser instead of
 #   scripts/record_demo.sh notebooks map      #   RViz, or next to RViz for map; needs chromium on the host)
 #   scripts/record_demo.sh front_stop  # front obstacle stop on/off at a wall -> build/front_stop.mp4
-#   scripts/record_demo.sh cliff  # step sensors at a drop, power button, a collision -> docs/cliff.gif
-#   scripts/record_demo.sh speed  # manual vs autonomous top speed, towing and alone -> docs/speed.gif
+#   scripts/record_demo.sh cliff  # step sensors at a drop, power button, a collision -> docs/images/cliff.gif
+#   scripts/record_demo.sh speed  # manual vs autonomous top speed, towing and alone -> docs/images/speed.gif
 #
 # Needs the ROS image (docker compose -f docker/compose.yaml build) and
 # ffmpeg on the host. Runs headless: RViz draws into Xvfb inside the container.
@@ -43,51 +43,51 @@ HOST_RUN=""  # or on the host
 LAUNCH="slam.launch.py nav:=true"
 case "$DEMO" in
     nav)
-        GIF=docs/demo.gif
+        GIF=docs/images/demo.gif
         VIEW=(0.0 -2.4 7.5 0.0 -0.1 0.0)
         RUN="python3 /tests/ros_nav_check.py" ;;
     degraded)
-        GIF=docs/degraded.gif
+        GIF=docs/images/degraded.gif
         VIEW=(0.0 -2.4 7.5 0.0 -0.1 0.0)
         SIM_ARGS=(--config config/degraded.yaml)
         LABEL="RViz: SLAM + Nav2, degraded.yaml"
         RUN="python3 /tests/ros_nav_check.py" ;;
     dock)
-        GIF=docs/dock.gif
+        GIF=docs/images/dock.gif
         VIEW=(-2.1 -1.7 2.0 -1.7 0.0 0.0)  # from the south like RViz (+x right), over box_b
         RUN="python3 /tests/ros_dock_check.py --demo" ;;
     shelf)
-        GIF=docs/shelf.gif
+        GIF=docs/images/shelf.gif
         VIEW=(0.9 -1.6 5.8 0.9 0.3 0.0)  # inside the south wall, looking down (+x right like RViz)
         RUN="python3 /tests/ros_shelf_check.py --demo" ;;
     shelf_return)
-        GIF=docs/shelf_return.gif
+        GIF=docs/images/shelf_return.gif
         VIEW=(0.9 -1.6 5.8 0.9 0.3 0.0)
         SPEED=${SPEED:-6}
         RUN="python3 /tests/ros_shelf_check.py --demo --return" ;;
     door)
-        GIF=docs/door.gif
+        GIF=docs/images/door.gif
         VIEW=(0.3 -2.0 5.5 0.3 0.0 0.0)  # from the south (+x right like RViz), along the partition
         SIM_ARGS=(--layout layouts/room_door.yaml)
         LABEL="RViz: Nav2 and a door"
         SPEED=${SPEED:-4}
         RUN="python3 /tests/ros_door_check.py" ;;
     auto_door)
-        GIF=docs/auto_door.gif
+        GIF=docs/images/auto_door.gif
         VIEW=(0.3 -2.0 5.5 0.3 0.0 0.0)  # from the south (+x right like RViz), along the partition
         SIM_ARGS=(--layout layouts/room_auto_door.yaml)
         LABEL="RViz: Nav2 and an automatic door"
         SPEED=${SPEED:-4}
         RUN="python3 /tests/ros_auto_door_check.py" ;;
     movers)
-        GIF=docs/movers.gif
+        GIF=docs/images/movers.gif
         VIEW=(0.0 -3.2 6.0 0.0 -0.2 0.0)  # from the south, a little slanted to show the people walking
         SIM_ARGS=(--layout layouts/room_movers.yaml)
         LABEL="RViz: Nav2 among moving people"
         SPEED=${SPEED:-4}
         RUN="python3 /tests/ros_nav_check.py --no-collisions" ;;
     fleet)
-        GIF=docs/fleet.gif
+        GIF=docs/images/fleet.gif
         VIEW=(0.0 -3.2 6.0 0.0 -0.2 0.0)  # from the south, like movers
         SIM_ARGS=(--no-shelves --robot -1.7 0.2 0 --robot 0.3 -1.8 1.5708)
         LAUNCH="fleet.launch.py map:=/maps/room.yaml robots:=2 initial_poses:=2.0,-2.0,1.5708"
@@ -99,7 +99,7 @@ case "$DEMO" in
             kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py --spawn -1.7 0.2 0 --out /repo/maps
         RUN="python3 /tests/ros_multi_nav_check.py" ;;
     elevator)
-        GIF=docs/elevator.gif
+        GIF=docs/images/elevator.gif
         VIEW=(0.0 -3.0 6.0 0.4 0.0 0.0)  # follows the robot (the floors are 10 m apart), from the south
         SIM_ARGS=(--layout layouts/elevator.yaml --record-follow)
         LAUNCH="navigation.launch.py map:=/maps/elevator_1F.yaml"
@@ -110,7 +110,7 @@ case "$DEMO" in
             kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py /repo/layouts/elevator.yaml --out /repo/maps
         RUN="python3 /tests/ros_elevator_check.py --captions /build/elevator/captions.csv" ;;
     map_world)
-        GIF=docs/map_world.gif
+        GIF=docs/images/map_world.gif
         # The world built from the elevator layout's first-floor map (7.2 x 4.75 m
         # from x -2.875), from the south (+x right like RViz).
         VIEW=(0.7 -3.0 8.5 0.7 -0.1 0.0)
@@ -122,7 +122,7 @@ case "$DEMO" in
             kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py /repo/layouts/elevator.yaml --out /repo/maps
         RUN="python3 /tests/ros_map_world_check.py --map /maps/elevator_1F.yaml" ;;
     elevator_vertical)
-        GIF=docs/elevator_vertical.gif
+        GIF=docs/images/elevator_vertical.gif
         # Follows the robot up too; from above, near clip at 4.4 m: what is
         # higher than 2.6 m over the robot's floor (the floor above) is cut.
         VIEW=(0.0 -1.2 7.0 0.3 0.0 0.0)
@@ -159,7 +159,7 @@ case "$DEMO" in
         HOST_RUN="uv run --no-project --with kachaka-api==3.17.5.0 python scripts/api_demo.py $PWD/build/api/captions.csv" ;;
     notebooks)
         SET=${2:-control}
-        GIF=docs/notebooks_$SET.gif
+        GIF=docs/images/notebooks_$SET.gif
         VIEW=(0.0 -2.4 7.5 0.0 -0.1 0.0)
         LABEL="JupyterLab: kachaka-api demo notebooks"
         RVIZ_CROP="0 0 960 720"
@@ -187,7 +187,7 @@ case "$DEMO" in
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_front_stop_demo.py /build/front_stop/captions.csv" ;;
     cliff)
-        GIF=docs/cliff.gif
+        GIF=docs/images/cliff.gif
         VIEW=(0.6 -1.8 2.2 0.6 0.6 0.0)  # from the south (+x right like RViz), over the drop and the north wall
         SIM_ARGS=(--drop 1.0 0.0 0.4 0.8)
         LABEL="RViz: step sensors and collisions"
@@ -195,7 +195,7 @@ case "$DEMO" in
         EXEC_ARGS=(-u "$(id -u):$(id -g)" -e HOME=/tmp -e ROS_LOG_DIR=/tmp/ros_log)
         RUN="python3 /tests/ros_cliff_demo.py /build/cliff/captions.csv" ;;
     speed)
-        GIF=docs/speed.gif
+        GIF=docs/images/speed.gif
         VIEW=(-0.1 -1.9 4.5 -0.1 0.4 0.0)  # from the south (+x right like RViz), over the whole runway
         SIM_ARGS=(--x -1.8 --shelf -1.8 0 0 --no-charger --no-people)
         LABEL="RViz: speed limits with and without a shelf"
