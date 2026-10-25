@@ -229,10 +229,29 @@ api:
         - speak_command: {text: Hello}
         - rotate_in_place_command: {angle_radian: 6.2832}
 
+# Battery. All values are estimates until measured on a real robot (#4).
+# Off the charger the robot draws idle + per_speed * wheel rim speed (times
+# towing_factor with a shelf) + the wheels' mechanical power / efficiency;
+# about 0.2/h standing, 0.4/h at 0.3 m/s, 0.6/h with a shelf.
 battery:
   initial_percentage: 1.0
-  drain_per_hour: 0.5       # fraction per hour of sim time, off the charger (est.)
-  charge_per_hour: 1.0      # fraction per hour of sim time, on the charger (est.)
+  capacity_wh: 40.0         # Wh (est.)
+  idle_power: 8.0           # W, electronics, sensors, computer (est.)
+  motion_power_per_speed: 30.0  # W per m/s of mean wheel rim speed (est.)
+  towing_factor: 1.7        # times the motion part with a shelf (est.)
+  motor_efficiency: 0.7     # for the wheels' mechanical power (est.)
+  # Charging: constant current up to cv_level, then constant voltage, the
+  # rate falling with what is left, down to cv_min_fraction of it (est.).
+  charge_per_hour: 1.0      # fraction per hour of sim time (est.)
+  cv_level: 0.8
+  cv_min_fraction: 0.05
+  # Open circuit voltage against level, linear in between (est., 3S Li-ion).
+  voltage_curve: [[0.0, 9.6], [0.1, 10.8], [0.5, 11.3], [0.9, 12.0], [1.0, 12.5]]
+  temperature: 25.0         # deg C, constant (stub)
+  # The real bridge publishes only percentage and charging/discharging
+  # (voltage -1). true does the same; false also fills voltage, current,
+  # charge, capacity and temperature.
+  bridge_fields_only: false
 
 # Charging dock. The pose is given per world (scripts/run_sim.py --charger);
 # it is the base_footprint pose of a docked robot, which faces away from the

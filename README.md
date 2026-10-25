@@ -17,7 +17,8 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Differential drive with torque-limited wheels and casters; manual cmd_vel at the real bridge's 0.3 m/s, autonomous motion faster (see [Speed limits](#speed-limits)).
 - Sensors: 2D LiDAR, front/back RGB cameras, ToF depth camera, IMU.
 - Odometry (fused and wheel), TF, `joint_states`, `robot_description`, version stub.
-- Charging dock and battery: the battery drains while driving and charges on the dock.
+- Charging dock and battery: it drains a little standing and more while driving, more again
+  with a shelf, and charges on the dock, fast up to 80 % and slower to full ([Battery](#battery)).
 - Front obstacle stop, as on the real robot: forward motion brakes in front of an obstacle,
   from any source (teleop, Nav2, kachaka-api). It can be switched off, like in the smartphone app.
 - Front and back torch lights, set through kachaka-api like on the real robot.
@@ -166,7 +167,23 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 
 This needs the ROS 2 stack with Nav2 (`NAV=true ... up slam`, or `up navigation`),
 which runs `command_server`. The robot leaves the charger with any Nav2 goal.
-Battery rates and the charger's size are estimates (`config/robot.yaml`).
+The charger's size is an estimate (`config/robot.yaml`).
+
+### Battery
+
+The battery level follows the power the robot draws (`battery` in `config/robot.yaml`):
+
+- **Off the charger**: an idle part (electronics, sensors, computer) all the time, plus a motion
+  part from the wheel speeds and the torques of the wheel drives, larger with a shelf. With the
+  defaults about 20 %/h standing, 40 %/h at 0.3 m/s and 60 %/h at 0.3 m/s with a shelf (sim time).
+- **On the charger**: constant current at 100 %/h up to 80 %, then constant voltage, the rate
+  falling with what is left (about 50 minutes from 80 % to full).
+- **`robot_info/battery_state`** also carries voltage (from a level-to-voltage curve), current
+  (negative while discharging), charge, capacity and a constant temperature.
+  The real bridge fills only the level and the charging state (voltage −1);
+  `battery.bridge_fields_only: true` does the same.
+
+All the numbers are estimates until measured on a real robot (#4).
 
 ### Carrying a shelf
 
@@ -883,7 +900,7 @@ Namespace `/kachaka`, as on the real robot.
 | `tof_camera/image_raw` | `sensor_msgs/Image` (16UC1, mm) + `camera_info` | 10 Hz |
 | `object_detection/result` | `kachaka_interfaces/ObjectDetectionListStamped`, see [Object detection](#object-detection) (`object_detection_relay`) | 10 Hz |
 | `joint_states`, `robot_description` | | |
-| `robot_info/battery_state` | `sensor_msgs/BatteryState` (charging or discharging) | 1 Hz |
+| `robot_info/battery_state` | `sensor_msgs/BatteryState` (level, charging or discharging, voltage, current; see [Battery](#battery)) | 1 Hz |
 | `robot_info/version` | stub | |
 | `sim/ground_truth` | `nav_msgs/Odometry` (simulator only) | 20 Hz |
 | `sim/charger_pose` | `geometry_msgs/PoseStamped` (simulator only, latched) | |

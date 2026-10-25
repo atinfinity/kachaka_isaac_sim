@@ -17,7 +17,8 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 - 車輪トルク制限とキャスター付きの差動二輪。手動の cmd_vel は実機ブリッジと同じ 0.3 m/s、自律走行はそれより速い（[速度上限](#速度上限)）
 - センサー: 2D LiDAR、前後の RGB カメラ、ToF 深度カメラ、IMU
 - オドメトリ（統合・車輪）、TF、`joint_states`、`robot_description`、バージョンのスタブ
-- 充電器とバッテリー: 走行中は減り、充電器の上で充電されます
+- 充電器とバッテリー: 停止中も少しずつ、走行中はより速く、シェルフ運搬中はさらに速く減り、
+  充電器の上では 80 % までは速く、そこから満充電まではゆっくり充電されます（[バッテリー](#バッテリー)）
 - 実機と同じ前方障害物での自動停止。teleop・Nav2・kachaka-api のどこからの指令でも、障害物の手前で
   前進を止めます。スマホアプリと同じく OFF にできます
 - 前後のトーチライト。実機と同じく kachaka-api で点灯します
@@ -153,7 +154,22 @@ ros2 action send_goal /kachaka/kachaka_command/execute kachaka_interfaces/action
 
 Nav2 を含む ROS 2 スタック（`NAV=true ... up slam` または `up navigation`）が必要です。
 `command_server` もその中で起動します。充電器から離れるには Nav2 のゴールを送るだけです。
-バッテリーの増減速度と充電器の寸法は推定値です（`config/robot.yaml`）。
+充電器の寸法は推定値です（`config/robot.yaml`）。
+
+### バッテリー
+
+バッテリー残量はロボットの消費電力から計算します（`config/robot.yaml` の `battery`）。
+
+- **充電器の外**: 常にかかる待機分（電子回路・センサー・コンピューター）と、車輪の回転速度と
+  駆動トルクから求める走行分の和。シェルフ運搬中は走行分が増えます。既定値では停止中が約 20 %/h、
+  0.3 m/s で約 40 %/h、シェルフを運びながら 0.3 m/s で約 60 %/h です（シミュレーション時間）。
+- **充電器の上**: 80 % までは 100 %/h の定電流、その後は定電圧で、残りに比例して遅くなります
+  （80 % から満充電まで約 50 分）。
+- **`robot_info/battery_state`** には電圧（残量と電圧の対応表から）、電流（放電中は負）、
+  充電量、容量、一定の温度も入ります。実機のブリッジは残量と充電状態だけ（電圧は −1）で、
+  `battery.bridge_fields_only: true` で同じになります。
+
+数値はすべて実機で測るまでの推定値です（#4）。
 
 ### シェルフの運搬
 
@@ -732,7 +748,7 @@ ros2 launch kachaka_sim_bringup navigation.launch.py map:=/maps/site.yaml
 | `tof_camera/image_raw` | `sensor_msgs/Image`（16UC1、mm）+ `camera_info` | 10 Hz |
 | `object_detection/result` | `kachaka_interfaces/ObjectDetectionListStamped`、[物体検出](#物体検出)を参照（`object_detection_relay`） | 10 Hz |
 | `joint_states`、`robot_description` | | |
-| `robot_info/battery_state` | `sensor_msgs/BatteryState`（充電中または放電中） | 1 Hz |
+| `robot_info/battery_state` | `sensor_msgs/BatteryState`（残量、充電中または放電中、電圧、電流。[バッテリー](#バッテリー)を参照） | 1 Hz |
 | `robot_info/version` | スタブ | |
 | `sim/ground_truth` | `nav_msgs/Odometry`（シミュレータのみ） | 20 Hz |
 | `sim/charger_pose` | `geometry_msgs/PoseStamped`（シミュレータのみ、latched） | |

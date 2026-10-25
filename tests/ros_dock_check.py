@@ -125,8 +125,11 @@ def main():
     check("charger location", len(chargers) == 1,
           f"({chargers[0].pose.x:.2f}, {chargers[0].pose.y:.2f}, {chargers[0].pose.theta:.2f})" if chargers else "")
     b = n.battery
-    check("battery discharging", b is not None and b.power_supply_status == DISCHARGING and b.voltage == -1.0,
-          f"({b.percentage:.3f})" if b else "")
+    # voltage -1 with battery.bridge_fields_only (like the real bridge), else
+    # a voltage and a negative current.
+    check("battery discharging", b is not None and b.power_supply_status == DISCHARGING
+          and (b.voltage == -1.0 or (b.voltage > 0.0 and b.current < 0.0)),
+          f"({b.percentage:.3f}, {b.voltage:.2f} V, {b.current:.2f} A)" if b else "")
     if not chargers:
         return 1
     home = chargers[0].pose
@@ -148,7 +151,9 @@ def main():
     ok = res is not None and res.result.success
     check("RETURN_HOME succeeds", ok, f"in {time.monotonic() - t0:.0f} s" + (f" {res.result.message}" if res else ""))
     n.wait_for(lambda: n.battery.power_supply_status == CHARGING, 3.0)
-    check("charging", n.battery.power_supply_status == CHARGING)
+    check("charging", n.battery.power_supply_status == CHARGING
+          and (n.battery.voltage == -1.0 or n.battery.current > 0.0 or n.battery.percentage >= 1.0),
+          f"({n.battery.current:.2f} A)")
     p = n.odom
     yaw = 2 * math.atan2(p.orientation.z, p.orientation.w)
     err = math.hypot(p.position.x - home.x, p.position.y - home.y)

@@ -509,14 +509,25 @@ class KachakaSimNode:
         info_pub2.publish(info)
         self.tap(name, img, info)
 
-    def publish_battery(self, t: float, percentage: float, charging: bool) -> None:
-        # Fields as the real bridge fills them: no voltage, only charging or
-        # discharging.
+    def publish_battery(self, t: float, battery, charging: bool, bridge_fields_only: bool = False) -> None:
+        """battery: power.Battery. With bridge_fields_only, the fields as the
+        real bridge fills them: no voltage, only charging or discharging."""
         msg = BatteryState()
         msg.header.stamp = to_time(t)
-        msg.voltage = -1.0
-        msg.percentage = float(percentage)
+        msg.percentage = float(battery.level)
         msg.present = True
+        nan = float("nan")
+        if bridge_fields_only:
+            msg.voltage = -1.0
+            msg.temperature = msg.current = msg.charge = msg.capacity = msg.design_capacity = nan
+        else:
+            msg.voltage = float(battery.voltage)
+            msg.temperature = float(battery.temperature)
+            msg.current = float(battery.current)
+            msg.charge = float(battery.level * battery.capacity_ah)
+            msg.capacity = msg.design_capacity = float(battery.capacity_ah)
+            msg.power_supply_health = BatteryState.POWER_SUPPLY_HEALTH_GOOD
+            msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LION
         msg.power_supply_status = (BatteryState.POWER_SUPPLY_STATUS_CHARGING if charging
                                    else BatteryState.POWER_SUPPLY_STATUS_DISCHARGING)
         self.battery_pub.publish(msg)
