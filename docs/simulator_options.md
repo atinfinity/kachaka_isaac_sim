@@ -22,7 +22,7 @@ scripts/run_sim.sh --wall X0 Y0 X1 Y1    # a wall segment (repeatable), see Door
 scripts/run_sim.sh --door X Y YAW        # a door (repeatable; --door-kind, --door-width, --door-closed, --door-cycle, --door-auto)
 scripts/run_sim.sh --api-port 26400      # kachaka-api gRPC port (default 26400; 0 turns it off)
 scripts/run_sim.sh --config config/degraded.yaml   # degraded sensors, see Sensor degradation
-scripts/run_sim.sh --robot X Y YAW       # a robot (repeatable; the first is robot 0, instead of --x/--y/--yaw), see Several robots
+scripts/run_sim.sh --robot X Y YAW       # a robot (repeatable; the first is robot 0, instead of --x/--y/--yaw), see multi_robot.md
 scripts/run_sim.sh --help
 ```
 

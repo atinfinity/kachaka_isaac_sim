@@ -22,6 +22,7 @@ scripts/run_sim.sh --wall X0 Y0 X1 Y1    # 壁（複数可。「ドア」を参�
 scripts/run_sim.sh --door X Y YAW        # ドア（複数可。--door-kind、--door-width、--door-closed、--door-cycle、--door-auto）
 scripts/run_sim.sh --api-port 26400      # kachaka-api の gRPC ポート（既定 26400。0 で無効）
 scripts/run_sim.sh --config config/degraded.yaml   # センサーを劣化させる（「センサーの劣化」を参照）
+scripts/run_sim.sh --robot X Y YAW       # ロボット（複数可。最初がロボット 0。--x/--y/--yaw の代わり）。multi_robot.md を参照
 scripts/run_sim.sh --help
 ```
 

@@ -107,6 +107,7 @@ docker compose -f docker/compose.yaml up navigation
 - [はじめに](docs/ja/getting_started.md): インストール、最初の地図、Nav2 のゴール、kachaka-api、うまくいかないとき
 - [ロボットの機能](docs/ja/robot.md): コマンド、前方障害物での停止、トーチライト、リセット、充電器とバッテリー、シェルフ、速度上限、物体検出、段差と衝突
 - [ワールドとレイアウト](docs/ja/worlds.md): ドア、エレベーター、レイアウトファイル、動く人と箱
+- [複数ロボット](docs/ja/multi_robot.md): 1 つのワールドに複数台のカチャカ、共通の地図で各台の Nav2
 - [シナリオランナー](docs/ja/scenario_runner.md): Nav2 と kachaka-api のシナリオを指標付きでまとめて実行
 - [シミュレータのオプション](docs/ja/simulator_options.md): コマンドラインオプション、センサーの劣化、Isaac Sim のシーン、地図からワールドを作る
 - [ROS 2 インターフェース](docs/ja/ros2_interface.md): トピック、サービス、アクション
