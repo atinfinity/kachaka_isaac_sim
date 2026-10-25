@@ -26,7 +26,7 @@ for a real Kachaka (topics under `/kachaka`) runs against the simulator unchange
 - Step sensors: the robot stops and pauses at a drop (errors 21051/21052, as on the real robot);
   collisions of the body are counted and published. `--drop` cuts a hole in the floor.
 - Same topic names, message types and QoS as the real bridge.
-- Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse).
+- Worlds: a walled room with a Kachaka Shelf, or Isaac Sim scenes (office, hospital, warehouse, five kitchens).
   Layout files place the charger, shelves, locations, people, boxes, walls and doors, optionally at random;
   people and boxes can walk routes, wander and come and go.
 - A scenario runner: batches of Nav2 and kachaka-api scenarios, headless, with success, time,

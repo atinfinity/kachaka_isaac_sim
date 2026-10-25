@@ -48,6 +48,17 @@ WORLDS = {
                                           (-13.0, 11.0, math.pi / 2)]),
     "simple_room": ((-2.5, 0.0, 0.0), [(-2.5, 2.5, 0.0), (2.5, 2.5, -math.pi / 2), (2.5, -2.5, math.pi),
                                        (-2.5, -2.5, math.pi / 2), (-2.5, 0.0, 0.0)]),
+    # Kitchens: a loop around the free floor, clear of the counters.
+    "kitchen_l_shape": ((0.1, -0.4, 1.5708), [(1.6, 0.8, 0.0), (-1.0, 0.8, math.pi), (-1.0, -1.5, -math.pi / 2),
+                                              (1.6, -1.5, 0.0), (0.1, -0.4, math.pi / 2)]),
+    "kitchen_u_shape": ((0.0, -0.3, 1.5708), [(1.2, 0.8, 0.0), (-1.2, 0.8, math.pi), (-1.2, -1.5, -math.pi / 2),
+                                              (1.2, -1.5, 0.0), (0.0, -0.3, math.pi / 2)]),
+    "kitchen_g_shape": ((-1.2, 0.7, 0.0), [(1.5, 0.7, -math.pi / 2), (1.5, -1.8, math.pi),
+                                           (-1.5, -1.8, math.pi / 2), (-1.2, 0.7, 0.0)]),
+    "kitchen_l_island": ((1.4, -1.1, 1.5708), [(1.6, 1.5, math.pi), (-1.6, 1.5, -math.pi / 2),
+                                               (-1.6, -1.0, 0.0), (1.4, -1.1, math.pi / 2)]),
+    "kitchen_peninsula": ((-1.9, 0.5, 0.0), [(1.9, 0.9, -math.pi / 2), (1.9, -1.6, math.pi),
+                                             (-1.9, -1.6, math.pi / 2), (-1.9, 0.5, 0.0)]),
 }
 TOLERANCE = 0.35  # m, Nav2 goal checker 0.25 plus SLAM drift
 

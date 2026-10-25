@@ -7,7 +7,14 @@ ISAAC_WORLDS = {
     "hospital": "Isaac/Environments/Hospital/hospital.usd",
     "warehouse": "Isaac/Environments/Simple_Warehouse/full_warehouse.usd",
     "simple_room": "Isaac/Environments/Simple_Room/simple_room.usd",
+    # Replicator kitchens: one closed room each, counters along the walls.
+    **{f"kitchen_{k}": f"Isaac/Environments/replicator_kitchen/kitchen_{k}.usda"
+       for k in ("l_shape", "u_shape", "g_shape", "l_island", "peninsula")},
 }
+# Scenes whose rigid bodies are made kinematic. The kitchens' cabinet doors,
+# drawers and appliances are loose bodies on joints; left dynamic, the fridge in
+# kitchen_l_island alone slows the simulation to a third of real time.
+FROZEN_WORLDS = frozenset(k for k in ISAAC_WORLDS if k.startswith("kitchen_"))
 # Default spawn pose (x, y, yaw) per world: on the floor, in free space, with
 # room to turn. Checked with SLAM and Nav2 (tests/ros_nav_check.py --world).
 SPAWN = {
@@ -15,6 +22,11 @@ SPAWN = {
     "hospital": (0.0, 0.0, 0.0),  # lobby south of the ward blocks
     "warehouse": (-13.0, 11.0, 1.5708),  # in an aisle, rack legs on both sides
     "simple_room": (-2.5, 0.0, 0.0),  # beside the table, not under it
+    "kitchen_l_shape": (0.1, -0.4, 1.5708),  # middle of the room, facing the north counters
+    "kitchen_u_shape": (0.0, -0.3, 1.5708),  # between the arms of the U, facing its base
+    "kitchen_g_shape": (-1.2, 0.7, 0.0),  # north of the peninsula, facing east
+    "kitchen_l_island": (1.4, -1.1, 1.5708),  # south-east of the island, facing north
+    "kitchen_peninsula": (-1.9, 0.5, 0.0),  # west of the peninsula, facing east
 }
 
 # The built-in 'room' world (world.add_simple_room; scripts/fake_sim.py draws

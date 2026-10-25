@@ -135,18 +135,29 @@ case "$DEMO" in
             kachaka-isaac-sim-ros:jazzy python3 /repo/scripts/make_maps.py /repo/layouts/elevator.yaml --out /repo/maps
         RUN="python3 /tests/ros_elevator_check.py --captions /build/elevator_vertical/captions.csv" ;;
     scene)
-        WORLD=${2:?usage: $0 scene <office|hospital|warehouse|simple_room>}
+        WORLD=${2:?usage: $0 scene <office|hospital|warehouse|simple_room|kitchen_...>}
         DEMO=scene_$WORLD
         GIF=build/$DEMO.mp4
         # Straight down from 7.5 m, near clip at 5.8 m: walls and racks are cut
         # at 1.7 m, ceilings vanish. Turned so the spawn heading points right,
         # like the SLAM map frame in RViz.
+        # The look-at offset sets which way is up: (-0.01, 0) for a spawn yaw
+        # of 90 degrees, (0, 0.01) for 0.
         case "$WORLD" in
-            office|warehouse) VIEW=(0.0 0.0 7.5 -0.01 0.0 0.0) ;;
-            *) VIEW=(0.0 0.0 7.5 0.0 0.01 0.0) ;;
+            office|warehouse|kitchen_l_shape|kitchen_u_shape|kitchen_l_island) UP=(-0.01 0.0) ;;
+            *) UP=(0.0 0.01) ;;
         esac
+        VIEW=(0.0 0.0 7.5 "${UP[@]}" 0.0)
         SIM_ARGS=(--world "$WORLD" --record-follow --record-near 5.8)
-        RVIZ_SED="s/Scale: 165/Scale: 45/; /Name: Current View/a\\      Target Frame: base_footprint"
+        SCALE=45
+        if [[ $WORLD == kitchen_* ]]; then
+            # Small, dim rooms: from 5 m, cut at 1.5 m (under the wall cabinets),
+            # more ambient light so the dark robot shows on the dark floor.
+            VIEW=(0.0 0.0 5.0 "${UP[@]}" 0.0)
+            SIM_ARGS=(--world "$WORLD" --record-follow --record-near 3.5 --dome-light 3000)
+            SCALE=110
+        fi
+        RVIZ_SED="s/Scale: 165/Scale: $SCALE/; /Name: Current View/a\\      Target Frame: base_footprint"
         LABEL="RViz: slam_toolbox + Nav2 ($WORLD)"
         RVIZ_CROP=${RVIZ_CROP:-576 106 720 720}  # square around the robot
         COMPOSE_ARGS=(--height 540 --mark-robot 45)
