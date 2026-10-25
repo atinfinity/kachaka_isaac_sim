@@ -141,16 +141,19 @@ case "$DEMO" in
         # Straight down from 7.5 m, near clip at 5.8 m: walls and racks are cut
         # at 1.7 m, ceilings vanish. Turned so the spawn heading points right,
         # like the SLAM map frame in RViz.
+        # The look-at offset sets which way is up: (-0.01, 0) for a spawn yaw
+        # of 90 degrees, (0, 0.01) for 0.
         case "$WORLD" in
-            office|warehouse) VIEW=(0.0 0.0 7.5 -0.01 0.0 0.0) ;;
-            *) VIEW=(0.0 0.0 7.5 0.0 0.01 0.0) ;;
+            office|warehouse|kitchen_l_shape|kitchen_u_shape|kitchen_l_island) UP=(-0.01 0.0) ;;
+            *) UP=(0.0 0.01) ;;
         esac
+        VIEW=(0.0 0.0 7.5 "${UP[@]}" 0.0)
         SIM_ARGS=(--world "$WORLD" --record-follow --record-near 5.8)
         SCALE=45
         if [[ $WORLD == kitchen_* ]]; then
             # Small, dim rooms: from 5 m, cut at 1.5 m (under the wall cabinets),
             # more ambient light so the dark robot shows on the dark floor.
-            VIEW=(0.0 0.0 5.0 0.0 0.01 0.0)
+            VIEW=(0.0 0.0 5.0 "${UP[@]}" 0.0)
             SIM_ARGS=(--world "$WORLD" --record-follow --record-near 3.5 --dome-light 3000)
             SCALE=110
         fi
