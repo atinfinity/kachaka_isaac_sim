@@ -106,6 +106,9 @@ The costmaps (off by default) use RViz's `costmap` scheme.
 
 ## Documentation
 
+Also on the project site, <https://atinfinity.github.io/kachaka_isaac_sim/>, built from these pages with
+[Zensical](https://zensical.org/) (`python3 scripts/build_site.py`).
+
 - [Getting started](docs/getting_started.md): install, first map, Nav2 goals, kachaka-api, troubleshooting
 - [Robot features](docs/robot.md): commands, front obstacle stop, torch lights, reset, charger and battery, shelves, speed limits, object detection, steps and collisions
 - [Worlds and layouts](docs/worlds.md): doors, elevator, layout files, moving people and boxes
