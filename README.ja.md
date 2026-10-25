@@ -50,6 +50,8 @@ NVIDIA Isaac Sim 6.1 上で動き、公式 [kachaka-api](https://github.com/pf-r
 
 ## クイックスタート
 
+手順だけを短くまとめたものです。各手順の説明、うまくいったときに見えるもの、うまくいかないときの対処は[はじめに](docs/ja/getting_started.md)にあります。
+
 ```bash
 # 1. Isaac Sim 6.1 を .venv にインストール（ダウンロードが大きい）
 uv sync
@@ -105,6 +107,7 @@ docker compose -f docker/compose.yaml up navigation
 プロジェクトサイト <https://atinfinity.github.io/kachaka_isaac_sim/ja/> でも読めます。これらのページから
 [Zensical](https://zensical.org/) で作っています（`python3 scripts/build_site.py`）。
 
+- [はじめに](docs/ja/getting_started.md): インストール、最初の地図、Nav2 のゴール、kachaka-api、うまくいかないとき
 - [ロボットの機能](docs/ja/robot.md): コマンド、前方障害物での停止、トーチライト、リセット、充電器とバッテリー、シェルフ、速度上限、物体検出、段差と衝突
 - [ワールドとレイアウト](docs/ja/worlds.md): ドア、エレベーター、レイアウトファイル、動く人と箱
 - [シナリオランナー](docs/ja/scenario_runner.md): Nav2 と kachaka-api のシナリオを指標付きでまとめて実行
