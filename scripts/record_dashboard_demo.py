@@ -4,9 +4,9 @@ on its own buttons) and take screenshots through the DevTools protocol.
 Needs the simulator, the ROS 2 side with Nav2 and scripts/dashboard.py
 running, and chromium on the host:
 
-    uv run --no-project --with websockets --with pillow python scripts/record_dashboard_demo.py docs/dashboard.gif
+    uv run --no-project --with websockets --with pillow python scripts/record_dashboard_demo.py docs/images/dashboard.gif
 
-`--scenario reset` records sim/reset instead (docs/sim_reset.gif): the robot
+`--scenario reset` records sim/reset instead (docs/images/sim_reset.gif): the robot
 tows a shelf away, then the reset puts both back. It runs tests/sim_reset.py
 in the ROS 2 container for that.
 """

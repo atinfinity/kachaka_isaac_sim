@@ -619,7 +619,7 @@ Issue #48. `kachaka_isaac_sim/elevator.py`, `floor_maps.py`,
   without colliders, so the PhysX-raycast LiDAR and step sensors miss them.
 - **ROS**: `sim/elevator/go` (String) and latched `sim/elevator` (JSON).
   kachaka-api has no elevator calls; on the real robot the building's system
-  drives the ride (sources in the README).
+  drives the ride (sources in [worlds.md](worlds.md#elevator)).
 - **Not done**: RViz markers for the car; people riding; more than one car.
 
 ## Layout files

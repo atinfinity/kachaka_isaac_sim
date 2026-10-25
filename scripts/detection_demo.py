@@ -5,7 +5,7 @@ Run on the host against the simulator (scripts/run_sim.sh); needs only the
 pip package, not ROS:
 
     uv run --no-project --with kachaka-api==3.17.5.0 --with pillow python scripts/detection_demo.py
-    python scripts/detection_demo.py --out docs/object_detection.gif --turns 1 --rate 0.6
+    python scripts/detection_demo.py --out docs/images/object_detection.gif --turns 1 --rate 0.6
 """
 
 import argparse

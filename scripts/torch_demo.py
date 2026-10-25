@@ -4,7 +4,7 @@ walls, while saving both camera images.
 
     uv run --no-project --with kachaka-api==3.17.5.0 --with numpy --with pillow \
         python scripts/torch_demo.py build/torch
-    .venv/bin/python scripts/torch_demo.py build/torch --compose docs/torch.gif
+    .venv/bin/python scripts/torch_demo.py build/torch --compose docs/images/torch.gif
 
 Run writes OUT/cams/ (camera frames + frames.csv) and OUT/captions.csv;
 --compose puts the simulator's view (OUT/sim) next to the two cameras.

@@ -7,7 +7,7 @@ browser on the right), starting at <name>_start.txt.
 If the demo folder has captions.csv (wall_time,text), the latest caption is
 shown along the bottom.
 
-    .venv/bin/python scripts/make_demo_gif.py build/demo docs/demo.gif [--speed 2]
+    .venv/bin/python scripts/make_demo_gif.py build/demo docs/images/demo.gif [--speed 2]
     .venv/bin/python scripts/make_demo_gif.py build/scene_office build/scene_office.mp4 --height 540
 """
 
